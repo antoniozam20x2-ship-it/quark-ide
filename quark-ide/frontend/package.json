@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "vite preview --port ${PORT:-4173} --host 0.0.0.0"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
