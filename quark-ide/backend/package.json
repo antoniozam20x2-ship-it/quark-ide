@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@google/genai": "^0.7.0",
+    "@octokit/rest": "^22.0.1",
     "@types/pg": "^8.20.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

@@ -8,6 +8,7 @@ import memoryRouter from './routes/memory.js';
 import { getCosts } from './services/costTracker.js';
 import { initDb } from './services/db.js';
 import { seedOnce } from './services/rufloMemory.js';
+import { getFileTree, getFileContent, createOrUpdateFile, deleteFile } from './services/github.js';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3001);
@@ -33,6 +34,52 @@ app.use('/api/memory', memoryRouter);
 
 app.get('/api/costs', (_req, res) => {
   res.json(getCosts());
+});
+
+app.get('/github/tree', async (_req, res) => {
+  try {
+    const tree = await getFileTree();
+    res.json(tree);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
+  }
+});
+
+app.get('/github/file', async (req, res) => {
+  const path = String(req.query.path ?? '');
+  if (!path) { res.status(400).json({ error: 'path is required' }); return; }
+  try {
+    const content = await getFileContent(path);
+    res.json({ path, content });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
+  }
+});
+
+app.put('/github/file', async (req, res) => {
+  const { path, content, message } = req.body as { path: string; content: string; message: string };
+  if (!path || content === undefined || !message) {
+    res.status(400).json({ error: 'path, content, and message are required' }); return;
+  }
+  try {
+    await createOrUpdateFile(path, content, message);
+    res.json({ ok: true, path });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
+  }
+});
+
+app.delete('/github/file', async (req, res) => {
+  const { path, message } = req.body as { path: string; message: string };
+  if (!path || !message) {
+    res.status(400).json({ error: 'path and message are required' }); return;
+  }
+  try {
+    await deleteFile(path, message);
+    res.json({ ok: true, path });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
+  }
 });
 
 
