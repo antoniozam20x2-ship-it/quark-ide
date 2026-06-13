@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["nodejs_20"]
+
+[phases.install]
+cmds = ["cd quark-ide && npm install"]
+
+[phases.build]
+cmds = ["cd quark-ide && npm run build"]
+
+[start]
+cmd = "cd quark-ide && npm run start"
