@@ -15,7 +15,7 @@ export default function App() {
       style={{ background: '#08080f', height: '100dvh', maxHeight: '100dvh' }}
     >
       <Sidebar activePage={page} onNavigate={setPage} />
-      <div className="flex-1 overflow-hidden" style={{ minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div className="flex-1" style={{ minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'clip' }}>
         {page === 'editor' ? <EditorPage /> : <WarRoomPage />}
       </div>
     </div>

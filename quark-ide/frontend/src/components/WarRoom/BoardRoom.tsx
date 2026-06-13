@@ -285,7 +285,7 @@ export default function BoardRoom() {
             flexDirection: 'column',
             gap: 12,
             overflowY: 'auto',
-            maxHeight: 'calc(100vh - 400px)',
+            maxHeight: 'calc(100vh - 350px)',
             paddingBottom: 80,
             WebkitOverflowScrolling: 'touch' as any,
           }}>
