@@ -28,11 +28,13 @@ app.get('/api/costs', (_req, res) => {
   res.json(getCosts());
 });
 
-const distPath = path.resolve(__dirname, '../../frontend/dist');
-app.use(express.static(distPath));
-app.get('*', (_req, res) => {
-  res.sendFile(path.join(distPath, 'index.html'));
-});
+if (process.env.NODE_ENV === 'production') {
+  const distPath = path.join(__dirname, '../../frontend/dist');
+  app.use(express.static(distPath));
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+}
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`⚛ QUARK backend running on port ${PORT}`);
