@@ -1,10 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.resolve(__dirname, '../../data');
-const MEMORY_FILE = path.join(DATA_DIR, 'quark-memory.json');
+import pool from './db.js';
 
 interface MemoryEntry {
   key: string;
@@ -13,54 +7,39 @@ interface MemoryEntry {
   timestamp: string;
 }
 
-interface MemoryStore {
-  entries: MemoryEntry[];
-}
-
-function ensureDataDir(): void {
-  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-}
-
-function loadStore(): MemoryStore {
-  ensureDataDir();
-  if (!existsSync(MEMORY_FILE)) return { entries: [] };
-  try {
-    return JSON.parse(readFileSync(MEMORY_FILE, 'utf-8')) as MemoryStore;
-  } catch {
-    return { entries: [] };
-  }
-}
-
-function persistStore(store: MemoryStore): void {
-  ensureDataDir();
-  writeFileSync(MEMORY_FILE, JSON.stringify(store, null, 2), 'utf-8');
-}
-
 export async function saveToMemory(
   key: string,
   content: string,
   namespace: string = 'quark-ide'
 ): Promise<void> {
-  const store = loadStore();
-  const idx = store.entries.findIndex((e) => e.key === key && e.namespace === namespace);
-  const entry: MemoryEntry = { key, content, namespace, timestamp: new Date().toISOString() };
-  if (idx >= 0) store.entries[idx] = entry;
-  else store.entries.push(entry);
-  persistStore(store);
+  await pool.query(
+    `INSERT INTO memory_entries (key, content, namespace, timestamp)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (key, namespace)
+     DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
+    [key, content, namespace]
+  );
 }
 
 export async function searchMemory(
   query: string,
   namespace: string = 'quark-ide'
 ): Promise<string[]> {
-  const store = loadStore();
   const words = query
     .toLowerCase()
     .split(/\s+/)
     .filter((w) => w.length > 2);
 
-  const scored = store.entries
-    .filter((e) => !namespace || e.namespace === namespace)
+  if (words.length === 0) return [];
+
+  const { rows } = await pool.query<MemoryEntry>(
+    `SELECT key, content, namespace, timestamp
+     FROM memory_entries
+     WHERE namespace = $1`,
+    [namespace]
+  );
+
+  const scored = rows
     .map((e) => {
       const text = `${e.key} ${e.content}`.toLowerCase();
       const hits = words.filter((w) => text.includes(w)).length;
@@ -83,10 +62,12 @@ export async function saveProject(
 }
 
 export async function listMemory(): Promise<{ namespaces: string[]; count: number; keys: string[] }> {
-  const store = loadStore();
-  const namespaces = [...new Set(store.entries.map((e) => e.namespace))];
-  const keys = store.entries.map((e) => `${e.namespace}/${e.key}`);
-  return { namespaces, count: store.entries.length, keys };
+  const { rows } = await pool.query<MemoryEntry>(
+    `SELECT key, namespace FROM memory_entries ORDER BY namespace, key`
+  );
+  const namespaces = [...new Set(rows.map((e) => e.namespace))];
+  const keys = rows.map((e) => `${e.namespace}/${e.key}`);
+  return { namespaces, count: rows.length, keys };
 }
 
 const JEFFERSON_PROJECTS: Record<string, Record<string, unknown>> = {
@@ -118,14 +99,15 @@ const JEFFERSON_PROJECTS: Record<string, Record<string, unknown>> = {
   },
 };
 
-async function seedOnce(): Promise<void> {
-  const store = loadStore();
-  if (store.entries.some((e) => e.key === '__seeded__' && e.namespace === 'quark-ide')) return;
+export async function seedOnce(): Promise<void> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM memory_entries WHERE key = '__seeded__' AND namespace = 'quark-ide' LIMIT 1`
+  );
+  if (rows.length > 0) return;
+
   for (const [name, data] of Object.entries(JEFFERSON_PROJECTS)) {
     await saveToMemory(name, JSON.stringify(data, null, 2), 'jefferson-projects');
   }
   await saveToMemory('__seeded__', new Date().toISOString(), 'quark-ide');
   console.log('⚛ QUARK Memory: seeded Jefferson project context');
 }
-
-seedOnce().catch(() => {});

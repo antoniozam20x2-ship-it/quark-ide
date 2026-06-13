@@ -8,6 +8,8 @@ import warroomRouter from './routes/warroom.js';
 import searchRouter from './routes/search.js';
 import memoryRouter from './routes/memory.js';
 import { getCosts } from './services/costTracker.js';
+import { initDb } from './services/db.js';
+import { seedOnce } from './services/rufloMemory.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -34,6 +36,12 @@ if (process.env.NODE_ENV === 'production') {
   app.get('*', (_req, res) => {
     res.sendFile(path.join(distPath, 'index.html'));
   });
+}
+
+if (process.env.DATABASE_URL) {
+  initDb()
+    .then(() => seedOnce())
+    .catch((err) => console.error('⚠ DB init failed:', err));
 }
 
 app.listen(PORT, '0.0.0.0', () => {

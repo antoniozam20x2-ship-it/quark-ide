@@ -1,0 +1,74 @@
+TAREA: Migrar la persistencia de memoria/chat de QUARK IDE de JSON local a PostgreSQL (Railway).
+
+CONTEXTO:
+- Backend Node.js/Express en server.mjs
+- Ya existe la variable de entorno DATABASE_URL (conectada a un servicio Postgres en Railway vía referencia ${{Postgres.DATABASE_URL}})
+- Actualmente la memoria/historial se guarda en un archivo JSON local que se borra en cada deploy
+- Necesitamos persistencia real con Postgres
+
+PASOS:
+
+1. Instalar dependencia:
+   npm install pg
+
+2. Crear archivo `db.mjs` en la raíz del backend con este contenido:
+
+import pg from 'pg';
+const { Pool } = pg;
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
+
+export async function initDb() {
+  const schema = `
+    CREATE TABLE IF NOT EXISTS conversations (
+      id SERIAL PRIMARY KEY,
+      title TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS messages (
+      id SERIAL PRIMARY KEY,
+      conversation_id INTEGER REFERENCES conversations(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS projects (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT,
+      context JSONB DEFAULT '{}',
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS board_items (
+      id SERIAL PRIMARY KEY,
+      column_name TEXT NOT NULL,
+      content TEXT NOT NULL,
+      position INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
+  `;
+  await pool.query(schema);
+  console.log('✅ Database schema ready');
+}
+
+export default pool;
+
+3. En `server.mjs`:
+   - Importar `initDb` desde `./db.mjs` y `pool` como default
+   - Llamar a `await initDb()` al arrancar el servidor, antes de levantar `app.listen`
+   - Buscar TODO el código actual que lee/escribe el archivo JSON local de memoria/historial (probablemente algo como `fs.readFileSync`/`fs.writeFileSync` sobre un archivo .json)
+   - Reemplazar esa lógica por queries a Postgres usando `pool`, manteniendo la misma forma/estructura de datos que el frontend espera (NO cambiar los endpoints/contratos de API existentes, solo cambiar el storage interno)
+   - Para el endpoint que guarda mensajes de chat: INSERT en `messages` (creando una `conversation` si no existe)
+   - Para el endpoint que devuelve historial: SELECT desde `messages` ordenado por `created_at`
+   - Para el contexto de proyectos (Signal OS, Snipe OS, CORE AI, NEXUS Capital): usar la tabla `projects` con la columna `context` JSONB
+
+4. IMPORTANTE: No borrar el archivo JSON existente todavía (déjalo como fallback/backup), solo dejar de escribir/leer de él activamente.
+
+5. Después de los cambios, hacer commit y deploy. Confirmar en los logs de Railway que aparece "✅ Database schema ready" sin errores de conexión.
+
+PREGUNTAS PARA EL AGENTE: Si encuentras múltiples archivos manejando memoria/historial, o el formato del JSON no es obvio, pega aquí el contenido relevante de server.mjs y del archivo JSON antes de hacer cambios, para confirmar la estructura antes de migrar.
