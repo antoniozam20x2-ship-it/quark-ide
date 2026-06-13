@@ -281,14 +281,10 @@ export default function BoardRoom() {
         {/* Responses */}
         {responses.length > 0 && (
           <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 12,
-            overflowY: 'scroll',
-            height: 'auto',
-            maxHeight: '70vh',
-            paddingBottom: 80,
+            flex: 1,
+            overflowY: 'auto',
             WebkitOverflowScrolling: 'touch' as any,
+            paddingBottom: '80px',
           }}>
             {MEMBERS.map((m) => {
               const r = memberMap[m.key];
