@@ -1,5 +1,6 @@
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
+import GitHubApplyButton from './GitHubApplyButton';
 
 interface QuarkMarkdownProps {
   children: string;
@@ -48,39 +49,44 @@ export default function QuarkMarkdown({
             borderRadius: 6,
             overflow: 'hidden',
           }}>
-            {/* Header: lang label + action button */}
+            {/* Header: lang label + action buttons */}
             <div style={{
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
-              padding: '4px 12px',
+              padding: '4px 8px 4px 12px',
               background: '#111127',
               borderBottom: '1px solid #1e1e3f',
+              gap: 6,
+              minWidth: 0,
             }}>
-              <span style={{ fontSize: 11, color: '#6b7280' }}>{lang}</span>
-              {onApplyCode ? (
-                allowApply ? (
+              <span style={{ fontSize: 11, color: '#6b7280', flexShrink: 0 }}>{lang}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                {onApplyCode ? (
+                  allowApply ? (
+                    <button
+                      className="quark-btn"
+                      style={{ fontSize: 10, padding: '2px 8px' }}
+                      onClick={() => onApplyCode(codeStr)}
+                    >
+                      ✦ Apply to editor
+                    </button>
+                  ) : (
+                    <span style={{ fontSize: 10, color: '#3a3a5c', fontFamily: 'JetBrains Mono, monospace' }}>
+                      streaming…
+                    </span>
+                  )
+                ) : (
                   <button
                     className="quark-btn"
                     style={{ fontSize: 10, padding: '2px 8px' }}
-                    onClick={() => onApplyCode(codeStr)}
+                    onClick={() => navigator.clipboard?.writeText(codeStr)}
                   >
-                    ✦ Apply to editor
+                    copy
                   </button>
-                ) : (
-                  <span style={{ fontSize: 10, color: '#3a3a5c', fontFamily: 'JetBrains Mono, monospace' }}>
-                    streaming…
-                  </span>
-                )
-              ) : (
-                <button
-                  className="quark-btn"
-                  style={{ fontSize: 10, padding: '2px 8px' }}
-                  onClick={() => navigator.clipboard?.writeText(codeStr)}
-                >
-                  copy
-                </button>
-              )}
+                )}
+                {allowApply && <GitHubApplyButton code={codeStr} />}
+              </div>
             </div>
 
             {/* Code body */}
