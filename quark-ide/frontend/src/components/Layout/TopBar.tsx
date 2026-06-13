@@ -8,6 +8,8 @@ interface Props {
   language: string;
   onLanguageChange: (lang: string) => void;
   onRun: () => void;
+  onPreview: () => void;
+  previewOpen: boolean;
 }
 
 interface CostSummary {
@@ -33,7 +35,7 @@ interface CostData {
   history: APICall[];
 }
 
-export default function TopBar({ fileName, language, onLanguageChange, onRun }: Props) {
+export default function TopBar({ fileName, language, onLanguageChange, onRun, onPreview, previewOpen }: Props) {
   const [costData, setCostData] = useState<CostData | null>(null);
   const [showCostModal, setShowCostModal] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -130,6 +132,26 @@ export default function TopBar({ fileName, language, onLanguageChange, onRun }: 
           <option key={l} value={l}>{l}</option>
         ))}
       </select>
+
+      {/* Preview Button */}
+      <button
+        onClick={onPreview}
+        style={{
+          background: previewOpen ? 'rgba(0,255,136,0.12)' : 'rgba(0,255,136,0.07)',
+          border: `1px solid ${previewOpen ? '#00ff88' : '#1e3f2a'}`,
+          borderRadius: 4,
+          color: '#00ff88',
+          fontFamily: 'JetBrains Mono, monospace',
+          fontSize: 11,
+          fontWeight: 700,
+          padding: '3px 10px',
+          cursor: 'pointer',
+          letterSpacing: '0.04em',
+          transition: 'all 0.15s',
+        }}
+      >
+        {previewOpen ? '✕ Preview' : '▶ Preview'}
+      </button>
 
       {/* Run Button */}
       <button className="quark-btn-primary" onClick={onRun} style={{ fontSize: 11 }}>

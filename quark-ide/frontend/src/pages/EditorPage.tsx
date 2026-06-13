@@ -4,6 +4,7 @@ import TopBar from '../components/Layout/TopBar';
 import CodeEditor from '../components/Editor/CodeEditor';
 import ClaudeChat from '../components/Editor/ClaudeChat';
 import GitHubFileTree from '../components/FileTree/FileTree';
+import SandpackPreview from '../components/Preview/SandpackPreview';
 
 interface FileEntry {
   name: string;
@@ -137,8 +138,9 @@ export default function EditorPage() {
   const isMobile = useIsMobile();
   const [files, setFiles] = useState<FileEntry[]>(INITIAL_FILES);
   const [activeFile, setActiveFile] = useState<FileEntry>(INITIAL_FILES[0]);
-  const [mobileTab, setMobileTab] = useState<'editor' | 'chat'>('editor');
+  const [mobileTab, setMobileTab] = useState<'editor' | 'chat' | 'preview'>('editor');
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
 
@@ -255,8 +257,9 @@ export default function EditorPage() {
           {/* Tabs */}
           <div style={{ display: 'flex', gap: 0, flexShrink: 0, paddingRight: 8 }}>
             {([
-              { key: 'editor', label: '</> EDITOR' },
-              { key: 'chat', label: '⚛ CHAT' },
+              { key: 'editor', label: '</>' },
+              { key: 'preview', label: '▶' },
+              { key: 'chat', label: '⚛' },
             ] as const).map((t) => (
               <button
                 key={t.key}
@@ -267,13 +270,14 @@ export default function EditorPage() {
                   borderColor: mobileTab === t.key ? '#00ff88' : '#1e1e3f',
                   color: mobileTab === t.key ? '#00ff88' : '#6b7280',
                   fontFamily: 'JetBrains Mono, monospace',
-                  fontSize: 11,
+                  fontSize: 13,
                   fontWeight: mobileTab === t.key ? 700 : 400,
                   padding: '4px 10px',
                   borderRadius: 4,
                   cursor: 'pointer',
                   marginLeft: 4,
                   transition: 'all 0.15s',
+                  minWidth: 36,
                 }}
               >
                 {t.label}
@@ -320,7 +324,7 @@ export default function EditorPage() {
 
         {/* Tab content */}
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          {mobileTab === 'editor' ? (
+          {mobileTab === 'editor' && (
             <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
               {/* Language selector strip */}
               <div style={{
@@ -362,7 +366,13 @@ export default function EditorPage() {
                 />
               </div>
             </div>
-          ) : (
+          )}
+          {mobileTab === 'preview' && (
+            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', background: '#08080f' }}>
+              <SandpackPreview code={activeFile.content} language={activeFile.language} />
+            </div>
+          )}
+          {mobileTab === 'chat' && (
             <ClaudeChat
               fileContent={activeFile.content}
               fileName={activeFile.name}
@@ -386,9 +396,12 @@ export default function EditorPage() {
         language={activeFile.language}
         onLanguageChange={setLanguage}
         onRun={() => alert('Run: ' + activeFile.name)}
+        onPreview={() => setShowPreview((v) => !v)}
+        previewOpen={showPreview}
       />
 
       {/* 3-column body */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
 
         {/* Col 1: File tree */}
@@ -427,6 +440,60 @@ export default function EditorPage() {
           onApplyToEditor={updateFile}
           layout="panel"
         />
+      </div>
+
+      {/* Preview panel — bottom drawer */}
+      {showPreview && (
+        <div style={{
+          height: 300,
+          flexShrink: 0,
+          borderTop: '2px solid #00ff88',
+          background: '#08080f',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}>
+          {/* Preview header */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '4px 12px',
+            background: '#0d0d1a',
+            borderBottom: '1px solid #1e1e3f',
+            flexShrink: 0,
+          }}>
+            <span style={{
+              color: '#00ff88',
+              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+            }}>
+              ▶ PREVIEW — {activeFile.name}
+            </span>
+            <button
+              onClick={() => setShowPreview(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#6b7280',
+                cursor: 'pointer',
+                fontSize: 14,
+                lineHeight: 1,
+                padding: '2px 4px',
+              }}
+              title="Close preview"
+            >
+              ✕
+            </button>
+          </div>
+          {/* Preview content */}
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            <SandpackPreview code={activeFile.content} language={activeFile.language} />
+          </div>
+        </div>
+      )}
       </div>
     </div>
   );
