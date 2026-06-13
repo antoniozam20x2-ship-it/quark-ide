@@ -3,6 +3,7 @@ import type { editor } from 'monaco-editor';
 import TopBar from '../components/Layout/TopBar';
 import CodeEditor from '../components/Editor/CodeEditor';
 import ClaudeChat from '../components/Editor/ClaudeChat';
+import GitHubFileTree from '../components/FileTree/FileTree';
 
 interface FileEntry {
   name: string;
@@ -183,6 +184,25 @@ export default function EditorPage() {
     setDrawerOpen(false);
   }
 
+  function handleGithubFileSelect(path: string, content: string) {
+    const existing = files.find((f) => f.name === path);
+    const ext = path.split('.').pop() ?? '';
+    const langMap: Record<string, string> = {
+      ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+      py: 'python', html: 'html', css: 'css', json: 'json', md: 'markdown',
+    };
+    const language = langMap[ext] ?? 'plaintext';
+    if (existing) {
+      setFiles((prev) => prev.map((f) => f.name === path ? { ...f, content } : f));
+      setActiveFile({ name: path, content, language: existing.language });
+    } else {
+      const entry: FileEntry = { name: path, content, language };
+      setFiles((prev) => [...prev, entry]);
+      setActiveFile(entry);
+    }
+    setDrawerOpen(false);
+  }
+
   // ── MOBILE LAYOUT ──────────────────────────────────────────────────
   if (isMobile) {
     return (
@@ -284,6 +304,7 @@ export default function EditorPage() {
                 zIndex: 50,
                 display: 'flex',
                 flexDirection: 'column',
+                overflowY: 'auto',
               }}
             >
               <FileTree
@@ -292,6 +313,7 @@ export default function EditorPage() {
                 onSelect={selectFile}
                 onNewFile={newFile}
               />
+              <GitHubFileTree onFileSelect={handleGithubFileSelect} />
             </div>
           </>
         )}
@@ -371,11 +393,13 @@ export default function EditorPage() {
 
         {/* Col 1: File tree */}
         <div style={{
-          width: 200,
+          width: 220,
           flexShrink: 0,
           background: '#0d0d1a',
           borderRight: '1px solid #1e1e3f',
           overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
         }}>
           <FileTree
             files={files}
@@ -383,6 +407,7 @@ export default function EditorPage() {
             onSelect={selectFile}
             onNewFile={newFile}
           />
+          <GitHubFileTree onFileSelect={handleGithubFileSelect} />
         </div>
 
         {/* Col 2: Monaco editor */}
