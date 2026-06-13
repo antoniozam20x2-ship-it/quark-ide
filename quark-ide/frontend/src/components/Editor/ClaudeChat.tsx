@@ -14,7 +14,7 @@ interface Props {
   layout?: 'panel' | 'fullscreen';
 }
 
-const API_BASE = import.meta.env.VITE_API_URL ?? '';
+const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
 
 const JEFFERSON_PROJECTS = [
   { label: 'Signal OS', prompt: 'Tell me about Signal OS — what areas of the trading bot logic can we improve next?' },

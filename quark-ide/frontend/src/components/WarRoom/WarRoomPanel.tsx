@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import QuarkMarkdown from '../shared/QuarkMarkdown';
 
-const API_BASE = import.meta.env.VITE_API_URL ?? '';
+const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
 
 type Mode = 'Quick Analysis' | 'Full Architecture' | 'MVP Plan';
 const MODES: Mode[] = ['Quick Analysis', 'Full Architecture', 'MVP Plan'];

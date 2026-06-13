@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 
 const LANGUAGES = ['typescript', 'javascript', 'python', 'html', 'css', 'json', 'markdown'];
-const API_BASE = import.meta.env.VITE_API_URL ?? '';
+const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
 
 interface Props {
   fileName: string;
