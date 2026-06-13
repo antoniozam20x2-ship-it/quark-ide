@@ -284,8 +284,9 @@ export default function BoardRoom() {
             display: 'flex',
             flexDirection: 'column',
             gap: 12,
-            overflowY: 'auto',
-            maxHeight: 'calc(100vh - 350px)',
+            overflowY: 'scroll',
+            height: 'auto',
+            maxHeight: '70vh',
             paddingBottom: 80,
             WebkitOverflowScrolling: 'touch' as any,
           }}>

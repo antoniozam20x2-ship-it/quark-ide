@@ -15,7 +15,7 @@ export default function WarRoomPage() {
   const [tab, setTab] = useState<Tab>('think');
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#08080f', overflowY: 'auto', WebkitOverflowScrolling: 'touch' as any }}>
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%', background: '#08080f' }}>
       {/* Header */}
       <div
         style={{
