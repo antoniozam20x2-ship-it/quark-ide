@@ -1,0 +1,198 @@
+Integrate Ruflo into QUARK IDE. 
+Install: npm install ruflo@latest
+
+INTEGRATION 1 — Persistent Memory (ruflo-rag-memory)
+Create backend/src/services/rufloMemory.ts:
+
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+
+Use ruflo's memory system to persist context.
+If direct import fails, use child_process to spawn:
+npx ruflo@latest mcp start
+and communicate via stdio JSON-RPC.
+
+Implement these functions in rufloMemory.ts:
+
+export async function saveToMemory(
+  key: string, 
+  content: string, 
+  namespace: string = 'quark-ide'
+): Promise<void>
+→ Saves content with key to persistent storage
+→ Falls back to local JSON file at ./data/memory.json 
+  if ruflo unavailable
+
+export async function searchMemory(
+  query: string,
+  namespace: string = 'quark-ide'
+): Promise<string[]>
+→ Returns relevant stored content
+→ Falls back to simple keyword search on memory.json
+
+export async function saveProject(
+  projectName: string,
+  files: {name: string, content: string}[]
+): Promise<void>
+→ Saves entire project to memory namespace
+
+Pre-populate memory with Jefferson's projects on startup:
+const JEFFERSON_PROJECTS = {
+  'signal-os': {
+    description: 'Autonomous trading bot Bitget USDT-M Futures',
+    stack: 'Node.js TypeScript Railway PostgreSQL React',
+    keyFiles: ['bias-engine', 'trailing-stop', 'signal-logic', 
+                'bitget-api', 'position-manager'],
+    riskParams: '1.5% risk, 10x leverage, max 4 positions, 
+                 -10% circuit breaker, 1.5% trailing callback',
+    signals: 'ADX-confirmed S3, EMA 10/20/34/55, RSI 14, 
+              Supertrend, RVOL, 7-phase market system'
+  },
+  'snipe-os': {
+    description: 'Signal intelligence PWA Railway',
+    stack: 'React TypeScript Railway PWA'
+  },
+  'nexus-capital': {
+    description: 'OKX Spot with Snipe Radar + Smart Concept',
+    stack: 'React TypeScript'
+  },
+  'core-ai': {
+    description: '6-agent trading council with Oracle verdict',
+    agents: 'ATLAS, CIPHER, VEGA, Oracle + 2 more',
+    feature: 'Price projection + confidence % + timeframe'
+  },
+  'quark-ide': {
+    description: 'Personal AI development superapp',
+    stack: 'React TypeScript Monaco Railway Ruflo'
+  }
+}
+
+INTEGRATION 2 — Memory API Routes
+In backend/src/routes/memory.ts (new file):
+
+POST /api/memory/save
+Body: { key, content, namespace? }
+→ Saves to ruflo memory
+→ Returns: { saved: true, key }
+
+GET /api/memory/search?q=query&ns=namespace
+→ Searches memory
+→ Returns: { results: string[], count: number }
+
+POST /api/memory/project
+Body: { projectName, files: [{name, content}] }
+→ Saves full project
+→ Returns: { saved: true, filesCount: number }
+
+GET /api/memory/list
+→ Lists all saved namespaces and keys
+→ Returns: { namespaces: string[], count: number }
+
+Register routes in backend/src/index.ts:
+import memoryRoutes from './routes/memory';
+app.use('/api/memory', memoryRoutes);
+
+INTEGRATION 3 — Smart Context in Chat
+In backend/src/routes/chat.ts:
+Before every AI call, search memory for relevant context:
+
+const memoryContext = await searchMemory(
+  lastUserMessage, 'quark-ide'
+);
+
+If results found, prepend to system prompt:
+"RELEVANT CONTEXT FROM MEMORY:\n" + memoryContext.join('\n')
+
+This makes QUARK smarter with every conversation.
+
+INTEGRATION 4 — Memory Panel in Frontend
+In frontend/src/components/Editor/ClaudeChat.tsx:
+Add a memory toolbar above the chat input:
+
+[💾 Save File] [🔍 Search Memory] [📚 Projects]
+
+💾 Save File button:
+→ POST /api/memory/save with current editor content
+→ Shows toast: "⚛ Saved to QUARK Memory"
+
+🔍 Search Memory button:
+→ Opens small overlay panel
+→ Input field to search past code/conversations
+→ Results appear as clickable cards
+→ Clicking a result inserts it into chat input
+
+📚 Projects button:
+→ Shows dropdown of Jefferson's known projects
+→ Clicking one loads its context into chat:
+  "Tell me about [Signal OS / Snipe OS / CORE AI...]"
+
+INTEGRATION 5 — Ruflo Swarm for War Room BOARD
+In backend/src/routes/warroom.ts:
+Add POST /api/warroom/swarm endpoint:
+
+Body: { challenge: string }
+
+This endpoint calls all 4 board members in PARALLEL
+using Promise.all() instead of sequential calls:
+
+const [ceo, cto, designer, qa] = await Promise.all([
+  callBoardMember('CEO', challenge),
+  callBoardMember('CTO', challenge),  
+  callBoardMember('Designer', challenge),
+  callBoardMember('QA', challenge)
+]);
+
+Then generates consensus from all 4 responses:
+const consensus = await generateConsensus(
+  challenge, { ceo, cto, designer, qa }
+);
+
+Return: { ceo, cto, designer, qa, consensus, 
+          processingTime: ms }
+
+Update frontend BoardRoom to use /api/warroom/swarm
+Show "⚡ Parallel Mode" badge when using swarm.
+
+INTEGRATION 6 — Cost Tracker
+Create backend/src/services/costTracker.ts:
+
+Track every API call:
+interface APICall {
+  timestamp: Date
+  model: string
+  tokensIn: number
+  tokensOut: number
+  costUSD: number
+  endpoint: string
+}
+
+Pricing (claude-sonnet-4-6):
+- Input: $3 per 1M tokens = $0.000003 per token
+- Output: $15 per 1M tokens = $0.000015 per token
+
+Wrap every anthropic.messages.create() call to 
+intercept usage from response.usage and log it.
+
+Expose GET /api/costs:
+{
+  today: { calls, tokensIn, tokensOut, costUSD },
+  total: { calls, tokensIn, tokensOut, costUSD },
+  history: APICall[] (last 50)
+}
+
+In frontend TopBar, add cost indicator:
+"⚛ $0.024" — small, right side of topbar
+Clicking opens a modal with full breakdown table.
+
+IMPORTANT NOTES:
+- If ruflo npm package has peer dependency conflicts,
+  implement memory as a local JSON database at 
+  ./data/quark-memory.json — same API surface,
+  no external dependency. Ruflo architecture, 
+  local implementation.
+- All features are additive — don't break existing functionality
+- Use async/await throughout, never block the event loop  
+- Add try/catch on every ruflo/memory call with graceful fallback
+- Test each endpoint with a simple health check before finishing
+- The swarm parallel mode is the most important feature —
+  make sure Promise.all works correctly for BOARD

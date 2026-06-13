@@ -1,0 +1,503 @@
+# ⚛️ QUARK IDE — Replit Agent Master Prompt
+
+---
+
+## INSTRUCCIONES PARA REPLIT AGENT
+
+Copia y pega TODO este texto en Replit Agent. No modifiques nada — está diseñado para que el agente lo construya en una sola pasada.
+
+---
+
+## PROMPT MASTER
+
+```
+Build a full-stack web application called QUARK IDE.
+QUARK is an AI-powered development environment — a superapp 
+that combines a code editor with an AI War Room for designing 
+and building projects from scratch.
+
+---
+
+## TECH STACK
+
+Frontend:
+- React 18 + TypeScript + Vite
+- Monaco Editor (@monaco-editor/react) for the code editor
+- Tailwind CSS for styling
+- PWA enabled (vite-plugin-pwa) — must be installable on mobile
+
+Backend:
+- Node.js + Express + TypeScript
+- Anthropic SDK (@anthropic-ai/sdk)
+- CORS enabled for frontend communication
+- dotenv for environment variables
+
+Monorepo structure:
+- /frontend  → React PWA
+- /backend   → Express API
+- /package.json → root with workspaces
+
+---
+
+## PROJECT STRUCTURE
+
+quark-ide/
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── Layout/
+│   │   │   │   ├── Sidebar.tsx
+│   │   │   │   └── TopBar.tsx
+│   │   │   ├── Editor/
+│   │   │   │   ├── CodeEditor.tsx
+│   │   │   │   └── ClaudeChat.tsx
+│   │   │   └── WarRoom/
+│   │   │       ├── WarRoomPanel.tsx
+│   │   │       ├── DeepSearch.tsx
+│   │   │       └── BoardRoom.tsx
+│   │   ├── pages/
+│   │   │   ├── EditorPage.tsx
+│   │   │   └── WarRoomPage.tsx
+│   │   ├── App.tsx
+│   │   ├── main.tsx
+│   │   └── index.css
+│   ├── public/
+│   │   ├── manifest.json
+│   │   └── icons/ (PWA icons)
+│   ├── index.html
+│   ├── vite.config.ts
+│   ├── tailwind.config.ts
+│   └── package.json
+│
+├── backend/
+│   ├── src/
+│   │   ├── routes/
+│   │   │   ├── chat.ts
+│   │   │   ├── warroom.ts
+│   │   │   └── search.ts
+│   │   ├── services/
+│   │   │   └── anthropic.ts
+│   │   └── index.ts
+│   ├── .env.example
+│   └── package.json
+│
+├── package.json (root monorepo)
+└── README.md
+
+---
+
+## DESIGN SYSTEM — CYBERPUNK QUANTUM
+
+Colors (use these exact hex values everywhere):
+- Background deep:    #08080f
+- Background card:    #0d0d1a
+- Background panel:   #111127
+- Border:             #1e1e3f
+- Primary neon:       #00ff88  ← main accent, use sparingly
+- Secondary violet:   #7c3aed  ← for War Room section
+- Text primary:       #e2e8f0
+- Text muted:         #6b7280
+- Error:              #ff4560
+- Warning:            #ffa500
+- Success:            #00ff88
+
+Typography:
+- Font: JetBrains Mono (import from Google Fonts)
+- Use for everything — code and UI
+- Display size: 24px bold
+- Body: 14px regular
+- Code: 13px
+
+UI Rules:
+- Border radius: 6px max — sharp, technical feel
+- Borders: 1px solid #1e1e3f on all cards/panels
+- Glow effects on hover: box-shadow 0 0 12px rgba(0,255,136,0.15)
+- NO rounded buttons — use sharp or 4px radius max
+- Scrollbars: thin, dark, neon green thumb
+- All backgrounds use the dark palette above — no whites or grays
+
+Logo: Display "⚛ QUARK" in the top left, JetBrains Mono bold,
+      #00ff88 color, with a subtle glow
+
+Tagline under logo: "Build at the speed of thought" in #6b7280
+
+---
+
+## LAYOUT
+
+The app has TWO main sections accessible from the sidebar:
+
+### 1. SIDEBAR (left, 56px wide, collapsed)
+Icons only:
+- ⚛ Logo (top)
+- 💻 Editor mode
+- 🧠 War Room mode  
+- ⚙ Settings (bottom)
+
+Active section has neon green left border indicator.
+
+### 2. EDITOR PAGE (default view)
+
+Split layout:
+┌─────────────────────────────────────────────────┐
+│ TOPBAR: filename | language selector | run btn  │
+├─────────────────┬───────────────────────────────┤
+│                 │                               │
+│  FILE TREE      │      MONACO EDITOR            │
+│  (200px)        │      (center, flex-grow)      │
+│                 │                               │
+│  Shows:         │  Dark theme matching          │
+│  - project name │  the app palette              │
+│  - file list    │  Font: JetBrains Mono 13px    │
+│  - + new file   │                               │
+│                 ├───────────────────────────────┤
+│                 │   CLAUDE CHAT PANEL (300px)   │
+│                 │   Bottom panel, collapsible   │
+│                 │                               │
+│                 │   [Ask Claude about this      │
+│                 │    code...]         [Send]    │
+└─────────────────┴───────────────────────────────┘
+
+Claude Chat Panel behavior:
+- Shows conversation history with Claude
+- Each message shows role (YOU / CLAUDE) with timestamp
+- Claude responses can contain code blocks with syntax highlight
+- "Apply to editor" button appears on code responses
+  → clicking it replaces the editor content with the suggested code
+- Chat has context of the CURRENT file in the editor
+- Resizable height (drag handle at top of panel)
+
+File Tree behavior:
+- Hard-coded initial project: "my-project"
+- Files: index.ts, README.md, .env.example
+- Click file → loads into editor
+- "+ New file" button → prompt for filename → creates empty file
+- Files stored in React state (in-memory for MVP)
+
+Language selector (TopBar):
+- Dropdown: TypeScript, JavaScript, Python, HTML, CSS, JSON, Markdown
+- Changes Monaco editor language mode
+
+---
+
+### 3. WAR ROOM PAGE
+
+Full page layout with 3 sub-sections accessible via tabs:
+
+┌─────────────────────────────────────────────────┐
+│  🧠 WAR ROOM          [THINK] [SEARCH] [BOARD]  │
+├─────────────────────────────────────────────────┤
+│                                                 │
+│         [Tab content area]                      │
+│                                                 │
+└─────────────────────────────────────────────────┘
+
+#### Tab 1: THINK 🧐 (Deep Thinking)
+
+A focused space for project ideation:
+
+Top area — Project Brief input:
+┌─────────────────────────────────────────────────┐
+│  Describe your project idea...                  │
+│                                                 │
+│  (large textarea, min 120px height)             │
+│                              [DEEP THINK ⚛]    │
+└─────────────────────────────────────────────────┘
+
+Options row below textarea:
+- [ ] Include tech stack recommendations
+- [ ] Include database design
+- [ ] Include UI/UX recommendations
+- Mode: [Quick Analysis] [Full Architecture] [MVP Plan]
+
+Output area (appears after submit):
+- Shows Claude's structured response
+- Sections auto-detected and shown with headers:
+  📋 Project Overview
+  🏗 Recommended Architecture  
+  🗄 Database Design
+  🎨 UI/UX Recommendations
+  📅 Development Phases
+  ⚠ Potential Challenges
+- Each section is collapsible
+- "Send to Editor" button → opens editor with a generated
+  project scaffold based on the analysis
+
+Loading state: animated particle effect (CSS only)
+showing "⚛ QUARK is thinking..." with pulsing dots
+
+#### Tab 2: SEARCH 🔦 (Deep Search)
+
+Research assistant with web search capabilities:
+
+┌─────────────────────────────────────────────────┐
+│  🔦  Search anything...              [SEARCH]   │
+├─────────────────────────────────────────────────┤
+│  Recent searches:                               │
+│  · Railway deployment TypeScript               │
+│  · Bitget API rate limits                      │
+└─────────────────────────────────────────────────┘
+
+Search results area:
+- Shows structured results with source indicators
+- Code snippets highlighted when present
+- "Use in Editor" button on code blocks
+- Results persist in session history (left sidebar within tab)
+
+#### Tab 3: BOARD 🎯 (Boardroom — Junta Directiva)
+
+Multi-agent discussion panel:
+
+Header:
+"Present your challenge to the board. Each member 
+ will analyze it from their perspective."
+
+Input area:
+┌─────────────────────────────────────────────────┐
+│  What challenge should the board discuss?       │
+│                                                 │
+│  (textarea)                          [CONVENE ⚛]│
+└─────────────────────────────────────────────────┘
+
+Board members row (4 cards, horizontal):
+┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
+│    CEO   │ │   CTO    │ │DESIGNER  │ │    QA    │
+│ Business │ │  Tech    │ │   UX     │ │  Risk    │
+│ Strategy │ │  Arch.   │ │ & Brand  │ │  & Test  │
+└──────────┘ └──────────┘ └──────────┘ └──────────┘
+
+Each card has:
+- Role icon and title
+- Status indicator (idle / thinking / done)
+- Neon green border when that agent is "speaking"
+
+Discussion output:
+- Each board member's response appears as a separate card
+- Cards appear sequentially with a short delay between them
+  to simulate a real discussion feel
+- After all 4 respond, a "CONSENSUS" section appears
+  synthesizing all perspectives into action items
+- Action items have a "→ Add to Editor" button
+
+Board member system prompts (send to backend, one call per member):
+- CEO: "You are a business strategist. Analyze this from 
+        a product-market fit and ROI perspective. Be concise,
+        decisive, and focus on what delivers value fastest."
+- CTO: "You are a senior software architect. Analyze this from
+        a technical feasibility perspective. Identify stack 
+        choices, scalability concerns, and implementation risks."
+- Designer: "You are a UX/UI designer. Analyze this from a user
+             experience perspective. Focus on user flows, 
+             interface design, and what makes it intuitive."
+- QA: "You are a QA engineer and risk analyst. Identify what
+       could go wrong, edge cases, testing requirements, and 
+       security considerations."
+
+---
+
+## BACKEND API ROUTES
+
+### POST /api/chat
+Request:
+{
+  "messages": [{ "role": "user", "content": "..." }],
+  "fileContent": "current editor content as string",
+  "fileName": "index.ts"
+}
+
+Behavior:
+- Prepends system message: "You are QUARK, an expert AI coding 
+  assistant. You have access to the current file the user is 
+  editing. File: {fileName}\n\nContent:\n{fileContent}\n\n
+  When suggesting code changes, always provide the complete 
+  modified file content in a code block."
+- Calls Anthropic API claude-sonnet-4-6
+- Streams response back to frontend
+- max_tokens: 4096
+
+Response: streaming text/event-stream
+
+### POST /api/warroom/think
+Request:
+{
+  "idea": "project description",
+  "options": {
+    "includeTechStack": true,
+    "includeDatabase": false,
+    "includeUX": true,
+    "mode": "MVP Plan"
+  }
+}
+
+Behavior:
+- System: "You are a senior software architect and product 
+  strategist. Analyze the project idea and provide a structured
+  plan. Format your response with clear sections using these 
+  exact headers: ## Project Overview, ## Recommended Architecture,
+  ## Database Design, ## UI/UX Recommendations, 
+  ## Development Phases, ## Potential Challenges.
+  Be specific, technical, and actionable."
+- model: claude-sonnet-4-6
+- max_tokens: 4096
+
+### POST /api/warroom/board
+Request:
+{
+  "challenge": "what to build or problem to solve",
+  "member": "CEO" | "CTO" | "Designer" | "QA"
+}
+
+Behavior:
+- Uses the role-specific system prompt defined above
+- Each member called separately from frontend
+- model: claude-sonnet-4-6
+- max_tokens: 1024
+
+Response: { "role": "CEO", "response": "..." }
+
+### POST /api/warroom/search
+Request:
+{
+  "query": "search query"
+}
+
+Behavior:
+- System: "You are a technical research assistant. The user is 
+  searching for development-related information. Provide a 
+  comprehensive, well-structured answer with code examples where
+  relevant. Cite best practices and include practical 
+  implementation tips."
+- model: claude-sonnet-4-6
+- max_tokens: 2048
+
+---
+
+## ENVIRONMENT VARIABLES
+
+Backend .env.example:
+```
+ANTHROPIC_API_KEY=your_key_here
+PORT=3001
+FRONTEND_URL=http://localhost:5173
+```
+
+Frontend .env.example:
+```
+VITE_API_URL=http://localhost:3001
+```
+
+IMPORTANT: 
+- NEVER hardcode API keys in any file
+- Backend reads from process.env only
+- Frontend only knows the backend URL
+
+---
+
+## PWA CONFIGURATION
+
+manifest.json:
+{
+  "name": "QUARK IDE",
+  "short_name": "QUARK",
+  "description": "Build at the speed of thought",
+  "theme_color": "#08080f",
+  "background_color": "#08080f",
+  "display": "standalone",
+  "orientation": "landscape",
+  "start_url": "/",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
+
+Service worker: cache shell assets for offline use.
+Generate simple placeholder icons (dark bg + ⚛ symbol).
+
+---
+
+## ROOT PACKAGE.JSON (monorepo)
+
+{
+  "name": "quark-ide",
+  "private": true,
+  "workspaces": ["frontend", "backend"],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace=backend\" \"npm run dev --workspace=frontend\"",
+    "build": "npm run build --workspace=frontend && npm run build --workspace=backend",
+    "start": "npm run start --workspace=backend"
+  }
+}
+
+---
+
+## RAILWAY DEPLOYMENT
+
+Create railway.json in root:
+{
+  "build": { "builder": "NIXPACKS" },
+  "deploy": { "startCommand": "npm run start" }
+}
+
+The backend serves the built frontend as static files in production:
+- backend/src/index.ts must serve frontend/dist as static
+- All unknown routes return frontend/dist/index.html (SPA routing)
+- This means ONE Railway service serves both frontend and backend
+
+Production flow:
+1. Railway builds: npm run build (builds both)
+2. Railway starts: npm run start (backend serves everything)
+3. Single URL for the whole app
+
+---
+
+## FINAL NOTES FOR THE AGENT
+
+1. Start with the backend — get the API routes working first
+2. Then build the frontend components
+3. Monaco Editor dark theme must match the app palette exactly
+4. The Claude Chat "Apply to editor" feature is the most 
+   important interaction — make sure it works perfectly
+5. BoardRoom should call the 4 board members sequentially
+   with visible loading states per member
+6. All API calls from frontend go to VITE_API_URL env variable
+7. No API keys anywhere in frontend code — ever
+8. Test that the monorepo builds correctly before finishing
+9. The app must be fully responsive — it will be used as a PWA
+   on mobile devices too
+
+Build this completely. Do not stop until all routes work,
+all UI is implemented, and the app runs without errors.
+```
+
+---
+
+## VARIABLES DE RAILWAY (configurar después del deploy)
+
+En Railway → tu proyecto → Variables, agregar:
+
+| Variable | Valor |
+|---|---|
+| `ANTHROPIC_API_KEY` | tu key de Anthropic |
+| `NODE_ENV` | `production` |
+| `FRONTEND_URL` | URL que Railway te asigne |
+
+---
+
+## CHECKLIST POST-BUILD
+
+Verificar en Replit antes de hacer push a Railway:
+
+- [ ] `npm run dev` en root levanta frontend y backend
+- [ ] Monaco Editor carga y acepta código
+- [ ] Chat con Claude responde y muestra código
+- [ ] "Apply to editor" reemplaza el contenido del editor
+- [ ] War Room → THINK retorna análisis estructurado
+- [ ] War Room → BOARD muestra las 4 respuestas
+- [ ] No hay API keys en ningún archivo del frontend
+- [ ] PWA manifest está configurado
+- [ ] Build de producción no tiene errores
+
+---
+
+*QUARK IDE — Build at the speed of thought ⚛*

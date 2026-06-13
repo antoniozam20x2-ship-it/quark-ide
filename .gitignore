@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-cjs/
+build/
+out/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# QUARK memory & cost data
+quark-ide/backend/data/
+
+# Ruflo / AgentDB / Claude-flow (not part of QUARK IDE)
+ruflo/
+agentdb*
+*.rvf
+*.rvf.lock
+.claude-flow/
+.agentic-flow/
+.hive-mind/
+.swarm/
+.ruv-swarm/
+.agents/
+.local/
+.roo/
+.roomodes
+memory/
+coordination/
+
+# Logs
+*.log
+logs/
+tmp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# TypeScript
+*.tsbuildinfo
+
+# Misc
+*.db
+*.sqlite
