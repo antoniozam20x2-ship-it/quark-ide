@@ -1,8 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import chatRouter from './routes/chat.js';
 import warroomRouter from './routes/warroom.js';
 import searchRouter from './routes/search.js';
@@ -11,7 +9,6 @@ import { getCosts } from './services/costTracker.js';
 import { initDb } from './services/db.js';
 import { seedOnce } from './services/rufloMemory.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = Number(process.env.PORT ?? 3001);
 
@@ -30,13 +27,6 @@ app.get('/api/costs', (_req, res) => {
   res.json(getCosts());
 });
 
-if (process.env.NODE_ENV === 'production') {
-  const distPath = path.join(__dirname, '../../frontend/dist');
-  app.use(express.static(distPath));
-  app.get('*', (_req, res) => {
-    res.sendFile(path.join(distPath, 'index.html'));
-  });
-}
 
 if (process.env.DATABASE_URL) {
   initDb()
