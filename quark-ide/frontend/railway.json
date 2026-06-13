@@ -1,7 +1,7 @@
 {
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "cd .. && npm install && npm run build --workspace=frontend"
+    "buildCommand": "npm install && npm run build"
   },
   "deploy": {
     "startCommand": "npm run start",
