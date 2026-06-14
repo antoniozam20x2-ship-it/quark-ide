@@ -71,6 +71,9 @@ INSTRUCCIONES CRÍTICAS:
 
     const raw = (response.text ?? '').trim();
 
+    console.log('[Agent] Raw length:', raw.length);
+    console.log('[Agent] Raw preview:', raw.slice(0, 300));
+
     let parsed: { files: { path: string; content: string }[]; commitMessage: string; mainComponent: string };
     try {
       parsed = JSON.parse(raw);
@@ -79,6 +82,9 @@ INSTRUCCIONES CRÍTICAS:
       if (!match) throw new Error('Gemini no devolvió JSON válido');
       parsed = JSON.parse(match[0]);
     }
+
+    console.log('[Agent] Parsed files count:', parsed?.files?.length);
+    console.log('[Agent] Main content length:', parsed?.files?.[0]?.content?.length);
 
     const { files, commitMessage, mainComponent } = parsed;
 
