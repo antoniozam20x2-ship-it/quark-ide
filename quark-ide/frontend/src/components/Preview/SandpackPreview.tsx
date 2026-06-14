@@ -1,3 +1,5 @@
+const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
+
 interface Props {
   code: string;
   language: string;
@@ -47,77 +49,8 @@ function resolveLanguage(
   }
 
   if (raw === 'javascript') return { lang: 'jsx' };
-
   if (SUPPORTED.has(raw)) return { lang: raw };
-
   return { lang: raw };
-}
-
-function hasDefaultExport(code: string): boolean {
-  return /export\s+default\s/m.test(code);
-}
-
-function findFirstComponentName(code: string): string | null {
-  const patterns = [
-    /^(?:export\s+(?:default\s+)?)?function\s+([A-Z][a-zA-Z0-9]*)\s*[(<]/m,
-    /^(?:export\s+)?const\s+([A-Z][a-zA-Z0-9]*)\s*(?::\s*React\.(?:FC|VFC|ComponentType|ReactNode)[^=]*)?=\s*(?:\(|React\.memo|React\.forwardRef)/m,
-    /^(?:export\s+)?const\s+([A-Z][a-zA-Z0-9]*)\s*:/m,
-    /^(?:export\s+)?class\s+([A-Z][a-zA-Z0-9]*)\s/m,
-  ];
-  for (const p of patterns) {
-    const m = p.exec(code);
-    if (m) return m[1];
-  }
-  return null;
-}
-
-function injectDefaultExport(code: string): string {
-  if (hasDefaultExport(code)) return code;
-  const name = findFirstComponentName(code);
-  if (name) return `${code}\nexport default ${name};`;
-  return code;
-}
-
-function buildSrcdoc(code: string): string {
-  const processedCode = injectDefaultExport(code);
-  const componentName = findFirstComponentName(code) || 'App';
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { height: 100%; }
-    body { background: #0a0a0a; }
-    #error { color: red; padding: 1rem; font-family: monospace; white-space: pre-wrap; }
-  </style>
-</head>
-<body>
-  <div id="root"></div>
-  <div id="error"></div>
-  <script type="text/babel" data-presets="react,typescript">
-    ${processedCode}
-    try {
-      const C = typeof ${componentName} !== 'undefined'
-        ? ${componentName} : null;
-      if (C) {
-        ReactDOM.createRoot(document.getElementById('root'))
-          .render(React.createElement(C));
-      } else {
-        document.getElementById('error').textContent =
-          'Componente no encontrado: ${componentName}';
-      }
-    } catch(e) {
-      document.getElementById('error').textContent = 'Error: ' + e.message;
-    }
-  </script>
-</body>
-</html>`;
 }
 
 export default function SandpackPreview({ code, language, filename }: Props) {
@@ -161,12 +94,23 @@ export default function SandpackPreview({ code, language, filename }: Props) {
     );
   }
 
-  const srcdoc = buildSrcdoc(code);
+  async function openPreview() {
+    // Open the window synchronously inside the click handler — Safari requires
+    // window.open() to be called before any async operation or it gets blocked.
+    const win = window.open('about:blank', '_blank');
+    if (!win) return;
 
-  function openPreview() {
-    const win = window.open('', '_blank');
-    win?.document.write(srcdoc);
-    win?.document.close();
+    try {
+      const res = await fetch(`${API_BASE}/api/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, language }),
+      });
+      const { id } = await res.json() as { id: string };
+      win.location.href = `${API_BASE}/api/preview/${id}`;
+    } catch {
+      win.close();
+    }
   }
 
   return (
@@ -202,7 +146,7 @@ export default function SandpackPreview({ code, language, filename }: Props) {
         fontSize: 11,
         textAlign: 'center',
       }}>
-        Preview se abre en nueva pestaña por<br />compatibilidad con Safari iOS
+        Se abre en nueva pestaña — compatible con Safari iOS
       </span>
     </div>
   );

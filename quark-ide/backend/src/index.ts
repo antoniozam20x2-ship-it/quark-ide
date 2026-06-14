@@ -10,6 +10,7 @@ import { initDb } from './services/db.js';
 import { seedOnce } from './services/rufloMemory.js';
 import { getFileTree, getFileContent, createOrUpdateFile, deleteFile } from './services/github.js';
 import { runDebugger } from './services/debugger.js';
+import previewRouter from './routes/preview.js';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3001);
@@ -30,6 +31,7 @@ app.get('/health', (_req, res) => {
 
 app.use('/api/chat', chatRouter);
 app.use('/api/warroom', warroomRouter);
+app.use('/api/preview', previewRouter);
 app.use('/api/warroom/search', searchRouter);
 app.use('/api/memory', memoryRouter);
 
