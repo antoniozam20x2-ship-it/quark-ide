@@ -1,0 +1,5 @@
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "serve -s dist -l $PORT"
