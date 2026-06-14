@@ -1,3 +1,5 @@
+import { useState, useEffect } from 'react';
+
 interface Props {
   code: string;
   language: string;
@@ -129,6 +131,19 @@ function buildSrcdoc(code: string): string {
 export default function SandpackPreview({ code, language, filename }: Props) {
   const { lang, unsupported } = resolveLanguage(language, code, filename);
 
+  const canPreview = !unsupported && SUPPORTED.has(lang) && !!code && code.trim() !== '';
+  const srcdoc = canPreview ? buildSrcdoc(code) : '';
+
+  const [blobUrl, setBlobUrl] = useState<string>('');
+
+  useEffect(() => {
+    if (!srcdoc) return;
+    const blob = new Blob([srcdoc], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    setBlobUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [srcdoc]);
+
   if (unsupported || !SUPPORTED.has(lang)) {
     return (
       <div style={{
@@ -164,8 +179,6 @@ export default function SandpackPreview({ code, language, filename }: Props) {
     );
   }
 
-  const srcdoc = buildSrcdoc(code);
-
   console.log('PREVIEW rendering:', {
     codeLength: code?.length,
     language,
@@ -193,9 +206,8 @@ export default function SandpackPreview({ code, language, filename }: Props) {
         ✅ code.length: {code.length} | lang: {lang} | filename: {filename}
       </div>
       <iframe
-        key={srcdoc}
-        srcDoc={srcdoc}
-
+        key={blobUrl}
+        src={blobUrl}
         style={{
           flex: 1,
           width: '100%',
