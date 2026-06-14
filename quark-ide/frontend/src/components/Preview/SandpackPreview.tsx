@@ -125,45 +125,37 @@ try {
 </html>`;
 }
 
-function buildSrcdoc(code: string, lang: string): string {
-  // template="react-ts"  →  App.tsx
-  if (lang === 'ts' || lang === 'tsx' || lang === 'typescript') {
-    return buildReactTemplate(code, 'react,typescript');
-  }
-
-  // template="react"  →  App.jsx
-  if (lang === 'js' || lang === 'jsx' || lang === 'javascript') {
-    return buildReactTemplate(code, 'react');
-  }
-
-  // template="vanilla"  →  index.html
-  if (lang === 'html') {
-    return code;
-  }
-
-  if (lang === 'css') {
-    return `<!DOCTYPE html>
+function buildSrcdoc(code: string): string {
+  return `<!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8"/>
-<style>
-*, *::before, *::after { box-sizing: border-box; }
-body { background: #1a1a2e; color: #e2e8f0; font-family: sans-serif; padding: 24px; margin: 0; }
-${code}
-</style>
+  <meta charset="UTF-8">
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>* { margin: 0; padding: 0; box-sizing: border-box; }</style>
 </head>
 <body>
-<div class="preview-content">
-  <h1>CSS Preview</h1>
-  <p>Your styles are applied to this document.</p>
-  <button class="btn">Button</button>
-  <input class="input" placeholder="Input field" />
-</div>
+  <div id="root"></div>
+  <script type="text/babel" data-type="module">
+    ${code}
+    
+    const __Component = typeof CryptoDashboard !== 'undefined' ? CryptoDashboard
+      : typeof App !== 'undefined' ? App
+      : typeof Default !== 'undefined' ? Default
+      : null;
+    
+    if (__Component) {
+      ReactDOM.createRoot(document.getElementById('root')).render(
+        React.createElement(__Component)
+      );
+    } else {
+      document.getElementById('root').innerHTML = 
+        '<p style="color:red">No se encontró componente exportado</p>';
+    }
+  </script>
 </body>
 </html>`;
-  }
-
-  return '';
 }
 
 export default function SandpackPreview({ code, language, filename }: Props) {
@@ -190,7 +182,7 @@ export default function SandpackPreview({ code, language, filename }: Props) {
     );
   }
 
-  const srcdoc = buildSrcdoc(code, lang);
+  const srcdoc = buildSrcdoc(code);
 
   return (
     <iframe
