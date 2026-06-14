@@ -139,9 +139,10 @@ function FileTree({
 interface EditorPageProps {
   activeProject: Project;
   onProjectChange: (p: Project) => void;
+  onSendToBoard: (brief: string) => void;
 }
 
-export default function EditorPage({ activeProject, onProjectChange }: EditorPageProps) {
+export default function EditorPage({ activeProject, onProjectChange, onSendToBoard }: EditorPageProps) {
   const isMobile = useIsMobile();
   const [files, setFiles] = useState<FileEntry[]>(INITIAL_FILES);
   const [activeFile, setActiveFile] = useState<FileEntry>(INITIAL_FILES[0]);
@@ -395,6 +396,7 @@ export default function EditorPage({ activeProject, onProjectChange }: EditorPag
                 updateFile(code);
                 setMobileTab('editor');
               }}
+              onSendToBoard={onSendToBoard}
               layout="fullscreen"
             />
           )}
@@ -454,6 +456,7 @@ export default function EditorPage({ activeProject, onProjectChange }: EditorPag
           fileContent={activeFile.content}
           fileName={activeFile.name}
           onApplyToEditor={updateFile}
+          onSendToBoard={onSendToBoard}
           layout="panel"
         />
       </div>

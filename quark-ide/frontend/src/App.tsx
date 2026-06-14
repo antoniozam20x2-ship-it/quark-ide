@@ -25,6 +25,7 @@ export const PROJECTS: Project[] = [
 export default function App() {
   const [page, setPage]                   = useState<Page>('editor');
   const [activeProject, setActiveProject] = useState<Project>(PROJECTS[0]);
+  const [boardBrief, setBoardBrief]       = useState<string>('');
 
   return (
     <div
@@ -33,9 +34,25 @@ export default function App() {
     >
       <Sidebar activePage={page} onNavigate={setPage} />
       <div className="flex-1" style={{ minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'clip' }}>
-        {page === 'editor'   && <EditorPage   activeProject={activeProject} onProjectChange={setActiveProject} />}
-        {page === 'warroom'  && <WarRoomPage />}
-        {page === 'debugger' && <DebuggerPage railwayProjectId={activeProject.railwayProjectId} projectName={activeProject.name} />}
+        {page === 'editor' && (
+          <EditorPage
+            activeProject={activeProject}
+            onProjectChange={setActiveProject}
+            onSendToBoard={(brief) => { setBoardBrief(brief); setPage('warroom'); }}
+          />
+        )}
+        {page === 'warroom' && (
+          <WarRoomPage
+            initialBrief={boardBrief}
+            onBriefConsumed={() => setBoardBrief('')}
+          />
+        )}
+        {page === 'debugger' && (
+          <DebuggerPage
+            railwayProjectId={activeProject.railwayProjectId}
+            projectName={activeProject.name}
+          />
+        )}
       </div>
     </div>
   );

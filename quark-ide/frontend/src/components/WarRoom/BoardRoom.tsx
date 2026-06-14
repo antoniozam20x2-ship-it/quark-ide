@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import QuarkMarkdown from '../shared/QuarkMarkdown';
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
@@ -18,7 +18,12 @@ interface MemberResponse {
   response: string;
 }
 
-export default function BoardRoom() {
+interface Props {
+  initialBrief?: string;
+  onBriefConsumed?: () => void;
+}
+
+export default function BoardRoom({ initialBrief, onBriefConsumed }: Props) {
   const [challenge, setChallenge] = useState('');
   const [statuses, setStatuses] = useState<Record<MemberKey, MemberStatus>>({
     CEO: 'idle', CTO: 'idle', Designer: 'idle', QA: 'idle',
@@ -32,6 +37,14 @@ export default function BoardRoom() {
   const [swarmMode, setSwarmMode] = useState(true);
   const [processingTime, setProcessingTime] = useState<number | null>(null);
 
+  useEffect(() => {
+    if (!initialBrief) return;
+    setChallenge(initialBrief);
+    onBriefConsumed?.();
+    conveneSwarm(initialBrief);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialBrief]);
+
   function setStatus(key: MemberKey, s: MemberStatus) {
     setStatuses((prev) => ({ ...prev, [key]: s }));
   }
@@ -40,7 +53,9 @@ export default function BoardRoom() {
     setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
-  async function conveneSwarm() {
+  async function conveneSwarm(briefOverride?: string) {
+    const text = (briefOverride ?? challenge).trim();
+    if (!text) return;
     setRunning(true);
     setResponses([]);
     setConsensus('');
@@ -52,7 +67,7 @@ export default function BoardRoom() {
       const res = await fetch(`${API_BASE}/api/warroom/swarm`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ challenge: challenge.trim() }),
+        body: JSON.stringify({ challenge: text }),
       });
       const data = await res.json();
 
@@ -77,7 +92,9 @@ export default function BoardRoom() {
     }
   }
 
-  async function conveneSequential() {
+  async function conveneSequential(briefOverride?: string) {
+    const text = (briefOverride ?? challenge).trim();
+    if (!text) return;
     setRunning(true);
     setResponses([]);
     setConsensus('');
@@ -93,7 +110,7 @@ export default function BoardRoom() {
         const res = await fetch(`${API_BASE}/api/warroom/board`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ challenge: challenge.trim(), member: member.key }),
+          body: JSON.stringify({ challenge: text, member: member.key }),
         });
         const data = await res.json();
         const mr: MemberResponse = { role: member.key, response: data.response ?? data.error ?? '' };
@@ -114,7 +131,7 @@ export default function BoardRoom() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          challenge: `Original challenge: ${challenge}\n\nBoard responses:\n${collected.map((r) => `${r.role}: ${r.response}`).join('\n\n')}\n\nSynthesize all perspectives into 3-5 clear, actionable consensus items.`,
+          challenge: `Original challenge: ${text}\n\nBoard responses:\n${collected.map((r) => `${r.role}: ${r.response}`).join('\n\n')}\n\nSynthesize all perspectives into 3-5 clear, actionable consensus items.`,
           member: 'CEO',
         }),
       });

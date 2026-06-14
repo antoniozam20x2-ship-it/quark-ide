@@ -11,6 +11,7 @@ interface Props {
   fileContent: string;
   fileName: string;
   onApplyToEditor: (code: string) => void;
+  onSendToBoard?: (brief: string) => void;
   layout?: 'panel' | 'fullscreen';
 }
 
@@ -28,6 +29,7 @@ export default function ClaudeChat({
   fileContent,
   fileName,
   onApplyToEditor,
+  onSendToBoard,
   layout = 'panel',
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -252,6 +254,7 @@ export default function ClaudeChat({
 
         {messages.map((msg, i) => {
           const isStreamingThis = loading && i === messages.length - 1 && msg.role === 'assistant';
+          const isLastAssistant = !loading && i === messages.length - 1 && msg.role === 'assistant';
           return (
             <div key={i} style={{ width: '100%', minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -277,6 +280,29 @@ export default function ClaudeChat({
                   </span>
                 )}
               </div>
+              {isLastAssistant && onSendToBoard && msg.content && (
+                <button
+                  onClick={() => onSendToBoard(msg.content)}
+                  style={{
+                    marginTop: 8,
+                    background: 'rgba(124,58,237,0.12)',
+                    border: '1px solid #4c1d95',
+                    borderRadius: 4,
+                    color: '#a78bfa',
+                    fontFamily: 'JetBrains Mono, monospace',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    padding: '4px 10px',
+                    cursor: 'pointer',
+                    letterSpacing: '0.04em',
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(124,58,237,0.22)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(124,58,237,0.12)')}
+                >
+                  📋 Enviar al Board
+                </button>
+              )}
             </div>
           );
         })}

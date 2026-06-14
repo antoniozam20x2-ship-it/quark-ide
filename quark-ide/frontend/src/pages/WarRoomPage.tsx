@@ -6,13 +6,18 @@ import BoardRoom from '../components/WarRoom/BoardRoom';
 type Tab = 'think' | 'search' | 'board';
 
 const TABS: { key: Tab; label: string; icon: string }[] = [
-  { key: 'think', label: 'THINK', icon: '🧐' },
+  { key: 'think',  label: 'THINK',  icon: '🧐' },
   { key: 'search', label: 'SEARCH', icon: '🔦' },
-  { key: 'board', label: 'BOARD', icon: '🎯' },
+  { key: 'board',  label: 'BOARD',  icon: '🎯' },
 ];
 
-export default function WarRoomPage() {
-  const [tab, setTab] = useState<Tab>('think');
+interface Props {
+  initialBrief?: string;
+  onBriefConsumed?: () => void;
+}
+
+export default function WarRoomPage({ initialBrief, onBriefConsumed }: Props) {
+  const [tab, setTab] = useState<Tab>(initialBrief ? 'board' : 'think');
 
   return (
     <div style={{ height: '100vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', background: '#08080f' }}>
@@ -73,9 +78,14 @@ export default function WarRoomPage() {
 
       {/* Tab Content */}
       <div style={{ flex: 1, overflow: 'visible', padding: 20 }}>
-        {tab === 'think' && <WarRoomPanel />}
+        {tab === 'think'  && <WarRoomPanel />}
         {tab === 'search' && <DeepSearch />}
-        {tab === 'board' && <BoardRoom />}
+        {tab === 'board'  && (
+          <BoardRoom
+            initialBrief={initialBrief}
+            onBriefConsumed={onBriefConsumed}
+          />
+        )}
       </div>
     </div>
   );
