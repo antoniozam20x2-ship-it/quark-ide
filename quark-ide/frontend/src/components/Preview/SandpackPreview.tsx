@@ -195,7 +195,7 @@ export default function SandpackPreview({ code, language, filename }: Props) {
       <iframe
         key={srcdoc}
         srcDoc={srcdoc}
-        sandbox="allow-scripts allow-same-origin"
+
         style={{
           flex: 1,
           width: '100%',
