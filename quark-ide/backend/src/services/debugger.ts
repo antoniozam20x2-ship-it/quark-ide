@@ -16,6 +16,15 @@ export interface DebugResult {
   rawAnalysis?: string;
 }
 
+export interface DebugLoop {
+  fixed: boolean;
+  attempts: number;
+  lastError?: string;
+  commits?: string[];
+}
+
+const MAX_RETRIES = 3;
+
 interface LogAnalysis {
   hasError: boolean;
   errorMessage: string;
@@ -229,36 +238,81 @@ async function generateAndApplyFix(
   return { commitMessage: parsed.commitMessage, fix: parsed.fixedCode };
 }
 
-export async function runDebugger(projectId: string): Promise<DebugResult> {
-  const deploymentId = await getLatestDeploymentId(projectId);
-  const logs = await fetchDeploymentLogs(deploymentId);
-  const analysis = await analyzeLogsWithAI(logs);
+async function generateFixWithGroq(
+  affectedFile: string,
+  errorMessage: string,
+  code: string,
+): Promise<string> {
+  const token = process.env.GROQ_API_KEY;
+  if (!token) throw new Error('GROQ_API_KEY is not set');
 
-  if (!analysis.hasError) {
-    return { hasError: false };
+  const res = await fetch(GROQ_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: `Eres un experto en Node.js y TypeScript. Se detectó este error en producción: ${errorMessage}. Este es el código del archivo ${affectedFile}: ${code}. Devuelve SOLO el código corregido completo, sin explicaciones ni markdown.`,
+        },
+        {
+          role: 'user',
+          content: 'Genera el fix.',
+        },
+      ],
+    }),
+  });
+
+  if (!res.ok) throw new Error(`Groq API error: ${res.status} ${res.statusText}`);
+
+  const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+  return json.choices?.[0]?.message?.content ?? '';
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function runDebugger(projectId: string): Promise<DebugLoop> {
+  const commits: string[] = [];
+  let lastError: string | undefined;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const deploymentId = await getLatestDeploymentId(projectId);
+    const logs = await fetchDeploymentLogs(deploymentId);
+    const analysis = await analyzeLogsWithAI(logs);
+
+    if (!analysis.hasError) {
+      return { fixed: true, attempts: attempt, commits };
+    }
+
+    lastError = analysis.errorMessage;
+
+    if (!analysis.affectedFile) {
+      if (attempt === MAX_RETRIES) break;
+      await wait(30_000);
+      continue;
+    }
+
+    const code = await getFileContent(analysis.affectedFile);
+    const fixedCode = await generateFixWithGroq(
+      analysis.affectedFile,
+      analysis.errorMessage,
+      code,
+    );
+
+    const commitMessage = `fix(auto): attempt ${attempt} — ${analysis.errorMessage.slice(0, 72)}`;
+    await createOrUpdateFile(analysis.affectedFile, fixedCode, commitMessage);
+    commits.push(commitMessage);
+
+    if (attempt < MAX_RETRIES) {
+      await wait(30_000);
+    }
   }
 
-  if (!analysis.affectedFile) {
-    return {
-      hasError: true,
-      errorMessage: analysis.errorMessage,
-      affectedFile: '',
-      rawAnalysis: analysis.fix,
-    };
-  }
-
-  const { commitMessage, fix } = await generateAndApplyFix(
-    analysis.affectedFile,
-    analysis.errorMessage,
-    analysis.fix,
-  );
-
-  return {
-    hasError: true,
-    errorMessage: analysis.errorMessage,
-    affectedFile: analysis.affectedFile,
-    fixed: true,
-    commitMessage,
-    fix,
-  };
+  return { fixed: false, attempts: MAX_RETRIES, lastError, commits };
 }
