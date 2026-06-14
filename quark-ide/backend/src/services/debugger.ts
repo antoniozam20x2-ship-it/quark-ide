@@ -159,10 +159,15 @@ async function analyzeLogsWithAI(logs: string): Promise<LogAnalysis> {
 
   const content = json.choices?.[0]?.message?.content ?? '';
 
+  const raw = content
+    .replace(/```json\n?/g, '')
+    .replace(/```\n?/g, '')
+    .trim();
+
   try {
-    return JSON.parse(content) as LogAnalysis;
+    return JSON.parse(raw) as LogAnalysis;
   } catch {
-    throw new Error(`Failed to parse AI response as JSON: ${content.slice(0, 200)}`);
+    throw new Error(`Failed to parse AI response as JSON: ${raw.slice(0, 200)}`);
   }
 }
 
