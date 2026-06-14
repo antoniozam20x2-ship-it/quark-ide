@@ -1,6 +1,8 @@
 import { getFileContent, createOrUpdateFile } from './github.js';
 
 const RAILWAY_GQL = 'https://backboard.railway.app/graphql/v2';
+const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_MODEL = 'llama-3.3-70b-versatile';
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODEL = 'anthropic/claude-opus-4-5';
 
@@ -122,17 +124,17 @@ async function fetchDeploymentLogs(deploymentId: string): Promise<string> {
 }
 
 async function analyzeLogsWithAI(logs: string): Promise<LogAnalysis> {
-  const token = process.env.OPENROUTER_API_KEY;
-  if (!token) throw new Error('OPENROUTER_API_KEY is not set');
+  const token = process.env.GROQ_API_KEY;
+  if (!token) throw new Error('GROQ_API_KEY is not set');
 
-  const res = await fetch(OPENROUTER_URL, {
+  const res = await fetch(GROQ_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`,
     },
     body: JSON.stringify({
-      model: OPENROUTER_MODEL,
+      model: GROQ_MODEL,
       messages: [
         {
           role: 'system',
