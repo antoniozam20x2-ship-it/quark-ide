@@ -21,29 +21,44 @@ interface LogAnalysis {
   fix: string;
 }
 
-async function fetchRailwayLogs(projectId: string): Promise<string> {
+async function gqlRequest<T>(query: string): Promise<T> {
   const token = process.env.RAILWAY_API_TOKEN;
   if (!token) throw new Error('RAILWAY_API_TOKEN is not set');
 
+  const res = await fetch(RAILWAY_GQL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify({ query }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Railway API error: ${res.status} ${res.statusText}`);
+  }
+
+  const json = await res.json() as { data?: T; errors?: Array<{ message: string }> };
+
+  if (json.errors?.length) {
+    throw new Error(`Railway GraphQL error: ${json.errors.map((e) => e.message).join(', ')}`);
+  }
+
+  return json.data as T;
+}
+
+async function getLatestDeploymentId(projectId: string): Promise<string> {
   const query = `
-    query GetDeploymentLogs($projectId: String!) {
-      project(id: $projectId) {
-        environments {
+    query {
+      project(id: "${projectId}") {
+        services {
           edges {
             node {
-              deployments(last: 1) {
+              deployments(first: 1) {
                 edges {
                   node {
                     id
-                    logs(limit: 200) {
-                      edges {
-                        node {
-                          message
-                          timestamp
-                          severity
-                        }
-                      }
-                    }
+                    status
                   }
                 }
               }
@@ -54,69 +69,56 @@ async function fetchRailwayLogs(projectId: string): Promise<string> {
     }
   `;
 
-  const res = await fetch(RAILWAY_GQL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-    },
-    body: JSON.stringify({ query, variables: { projectId } }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Railway API error: ${res.status} ${res.statusText}`);
-  }
-
-  const json = await res.json() as {
-    data?: {
-      project?: {
-        environments?: {
-          edges?: Array<{
-            node?: {
-              deployments?: {
-                edges?: Array<{
-                  node?: {
-                    logs?: {
-                      edges?: Array<{
-                        node?: { message?: string; timestamp?: string; severity?: string };
-                      }>;
-                    };
-                  };
-                }>;
-              };
+  const data = await gqlRequest<{
+    project?: {
+      services?: {
+        edges?: Array<{
+          node?: {
+            deployments?: {
+              edges?: Array<{ node?: { id?: string; status?: string } }>;
             };
-          }>;
-        };
+          };
+        }>;
       };
     };
-    errors?: Array<{ message: string }>;
-  };
+  }>(query);
 
-  if (json.errors?.length) {
-    throw new Error(`Railway GraphQL error: ${json.errors.map((e) => e.message).join(', ')}`);
-  }
-
-  const envEdges = json.data?.project?.environments?.edges ?? [];
-  const logLines: string[] = [];
-
-  for (const envEdge of envEdges) {
-    const deployEdges = envEdge.node?.deployments?.edges ?? [];
-    for (const depEdge of deployEdges) {
-      const logEdges = depEdge.node?.logs?.edges ?? [];
-      for (const logEdge of logEdges) {
-        const { message, timestamp, severity } = logEdge.node ?? {};
-        if (message) {
-          logLines.push(`[${timestamp ?? ''}] [${severity ?? 'INFO'}] ${message}`);
-        }
-      }
+  const serviceEdges = data.project?.services?.edges ?? [];
+  for (const svc of serviceEdges) {
+    const depEdges = svc.node?.deployments?.edges ?? [];
+    for (const dep of depEdges) {
+      const id = dep.node?.id;
+      if (id) return id;
     }
   }
 
-  if (logLines.length === 0) {
-    throw new Error('No logs found for the most recent deployment');
+  throw new Error(`No deployments found for project: ${projectId}`);
+}
+
+async function fetchDeploymentLogs(deploymentId: string): Promise<string> {
+  const query = `
+    query {
+      deploymentLogs(deploymentId: "${deploymentId}") {
+        message
+        timestamp
+        severity
+      }
+    }
+  `;
+
+  const data = await gqlRequest<{
+    deploymentLogs?: Array<{ message?: string; timestamp?: string; severity?: string }>;
+  }>(query);
+
+  const entries = data.deploymentLogs ?? [];
+
+  if (entries.length === 0) {
+    throw new Error(`No logs found for deployment: ${deploymentId}`);
   }
 
-  return logLines.join('\n');
+  return entries
+    .map((e) => `[${e.timestamp ?? ''}] [${e.severity ?? 'INFO'}] ${e.message ?? ''}`)
+    .join('\n');
 }
 
 async function analyzeLogsWithAI(logs: string): Promise<LogAnalysis> {
@@ -221,7 +223,8 @@ async function generateAndApplyFix(
 }
 
 export async function runDebugger(projectId: string): Promise<DebugResult> {
-  const logs = await fetchRailwayLogs(projectId);
+  const deploymentId = await getLatestDeploymentId(projectId);
+  const logs = await fetchDeploymentLogs(deploymentId);
   const analysis = await analyzeLogsWithAI(logs);
 
   if (!analysis.hasError) {
