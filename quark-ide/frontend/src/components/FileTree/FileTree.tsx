@@ -59,17 +59,28 @@ function buildTree(items: GitItem[]): TreeNode[] {
   return sortNodes(roots);
 }
 
+function countBlobs(nodes: TreeNode[]): number {
+  let count = 0;
+  for (const n of nodes) {
+    if (n.type === 'blob') count++;
+    else count += countBlobs(n.children);
+  }
+  return count;
+}
+
 function TreeNodeRow({
   node,
   depth,
   activePath,
   loading,
+  isTopLevel,
   onFileClick,
 }: {
   node: TreeNode;
   depth: number;
   activePath: string;
   loading: string;
+  isTopLevel?: boolean;
   onFileClick: (path: string) => void;
 }) {
   const [open, setOpen] = useState(depth < 2);
@@ -87,7 +98,8 @@ function TreeNodeRow({
           width: '100%',
           background: isActive ? 'rgba(0,255,136,0.08)' : 'transparent',
           border: 'none',
-          borderLeft: `2px solid ${isActive ? '#00ff88' : 'transparent'}`,
+          borderLeft: `2px solid ${isActive ? '#00ff88' : (isTopLevel && isFolder ? '#1e1e3f' : 'transparent')}`,
+          borderTop: isTopLevel && isFolder ? '1px solid #1e1e3f' : 'none',
           padding: `5px 8px 5px ${10 + depth * 14}px`,
           textAlign: 'left',
           color: isLoading ? '#00ff88' : isActive ? '#e2e8f0' : isFolder ? '#a0aec0' : '#6b7280',
@@ -128,6 +140,7 @@ export default function GitHubFileTree({ onFileSelect, activeRepo }: Props) {
   const [activePath, setActivePath] = useState('');
   const [loadingPath, setLoadingPath] = useState('');
   const [error, setError] = useState('');
+  const [collapsed, setCollapsed] = useState(false);
 
   function fetchFileTree() {
     setStatus('loading');
@@ -151,14 +164,16 @@ export default function GitHubFileTree({ onFileSelect, activeRepo }: Props) {
 
   useEffect(() => {
     if (activeRepo === undefined) return;
+    setCollapsed(false);
     fetchFileTree();
   }, [activeRepo]);
 
   async function handleFileClick(path: string) {
     if (loadingPath) return;
     setLoadingPath(path);
+    const repoParam = activeRepo ? `&repo=${encodeURIComponent(activeRepo)}` : '';
     try {
-      const res = await fetch(`${API_BASE}/github/file?path=${encodeURIComponent(path)}`);
+      const res = await fetch(`${API_BASE}/github/file?path=${encodeURIComponent(path)}${repoParam}`);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setActivePath(path);
@@ -170,58 +185,79 @@ export default function GitHubFileTree({ onFileSelect, activeRepo }: Props) {
     }
   }
 
+  const fileCount = countBlobs(tree);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      {/* Header */}
-      <div style={{
-        padding: '8px 12px',
-        borderBottom: '1px solid #1e1e3f',
-        borderTop: '1px solid #1e1e3f',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexShrink: 0,
-        background: '#0d0d1a',
-      }}>
+      {/* Header — clickable toggle */}
+      <button
+        onClick={() => setCollapsed((c) => !c)}
+        style={{
+          padding: '8px 12px',
+          borderBottom: collapsed ? 'none' : '1px solid #1e1e3f',
+          borderTop: '1px solid #1e1e3f',
+          borderLeft: 'none',
+          borderRight: 'none',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexShrink: 0,
+          background: '#0d0d1a',
+          cursor: 'pointer',
+          width: '100%',
+          textAlign: 'left',
+        }}
+      >
         <span style={{
           color: '#6b7280',
           fontSize: 11,
           letterSpacing: '0.08em',
           fontFamily: 'JetBrains Mono, monospace',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
         }}>
+          <span style={{ fontSize: 9 }}>{collapsed ? '▶' : '▼'}</span>
           GITHUB REPO
         </span>
         {status === 'loading' && (
-          <span style={{ color: '#00ff88', fontSize: 10 }}>loading…</span>
+          <span style={{ color: '#00ff88', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+            loading…
+          </span>
         )}
         {status === 'ready' && (
-          <span style={{ color: '#3a3a5c', fontSize: 10 }}>{tree.length} items</span>
+          <span style={{ color: '#3a3a5c', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+            {fileCount} archivos
+          </span>
         )}
-      </div>
+      </button>
 
       {/* Tree body */}
-      <div style={{ overflowY: 'auto', flex: 1, padding: '4px 0' }}>
-        {status === 'error' && (
-          <div style={{
-            padding: '8px 12px',
-            color: '#ff4444',
-            fontSize: 11,
-            fontFamily: 'JetBrains Mono, monospace',
-          }}>
-            ⚠ {error}
-          </div>
-        )}
-        {status === 'ready' && tree.map((node) => (
-          <TreeNodeRow
-            key={node.path}
-            node={node}
-            depth={0}
-            activePath={activePath}
-            loading={loadingPath}
-            onFileClick={handleFileClick}
-          />
-        ))}
-      </div>
+      {!collapsed && (
+        <div style={{ overflowY: 'auto', flex: 1, padding: '4px 0' }}>
+          {status === 'error' && (
+            <div style={{
+              padding: '8px 12px',
+              color: '#ff4444',
+              fontSize: 11,
+              fontFamily: 'JetBrains Mono, monospace',
+            }}>
+              ⚠ {error}
+            </div>
+          )}
+          {status === 'ready' && tree.map((node) => (
+            <TreeNodeRow
+              key={node.path}
+              node={node}
+              depth={0}
+              activePath={activePath}
+              loading={loadingPath}
+              isTopLevel={true}
+              onFileClick={handleFileClick}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
