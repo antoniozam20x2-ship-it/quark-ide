@@ -64,7 +64,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor }: Props) {
           try {
             const parsed = JSON.parse(line.slice(6)) as AgentEvent;
             setFeed((prev) => [...prev, parsed]);
-            if (parsed.event === 'done')  { setResult(parsed); setRunning(false); }
+            if (parsed.event === 'done')  { console.log('[Agent] Done received:', parsed); setResult(parsed); setRunning(false); }
             if (parsed.event === 'error') { setRunning(false); }
           } catch {}
         }

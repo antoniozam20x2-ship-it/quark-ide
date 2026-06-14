@@ -109,6 +109,8 @@ INSTRUCCIONES CRÍTICAS:
       branch,
     });
 
+    // Flush antes de cerrar — da tiempo al cliente de recibir 'done'
+    await new Promise((resolve) => setTimeout(resolve, 100));
     res.end();
   } catch (err) {
     send('error', { text: err instanceof Error ? err.message : String(err) });
