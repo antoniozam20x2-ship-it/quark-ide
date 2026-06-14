@@ -18,9 +18,10 @@ interface AgentEvent {
 interface Props {
   activeProject: Project;
   onApplyToEditor: (code: string) => void;
+  onShowPreview: () => void;
 }
 
-export default function QuarkAgent({ activeProject, onApplyToEditor }: Props) {
+export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPreview }: Props) {
   const [prompt, setPrompt]         = useState('');
   const [running, setRunning]       = useState(false);
   const [feed, setFeed]             = useState<AgentEvent[]>([]);
@@ -204,7 +205,14 @@ export default function QuarkAgent({ activeProject, onApplyToEditor }: Props) {
             <div style={{ display: 'flex', gap: 8 }}>
               {result.mainContent && (
                 <button
-                  onClick={() => onApplyToEditor(result.mainContent!)}
+                  onClick={() => {
+                    const cleanCode = result.mainContent!
+                      .split('\n')
+                      .filter((line) => !line.trim().startsWith('import'))
+                      .join('\n');
+                    onApplyToEditor(cleanCode);
+                    onShowPreview();
+                  }}
                   style={{
                     flex: 1, background: 'rgba(0,255,136,0.1)', border: '1px solid #1e3f2a',
                     borderRadius: 6, color: '#00ff88', fontFamily: 'JetBrains Mono, monospace',

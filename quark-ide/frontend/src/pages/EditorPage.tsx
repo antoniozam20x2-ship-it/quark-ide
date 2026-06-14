@@ -408,8 +408,8 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
               activeProject={activeProject}
               onApplyToEditor={(code) => {
                 updateFile(code);
-                setMobileTab('editor');
               }}
+              onShowPreview={() => setMobileTab('preview')}
             />
           )}
         </div>
@@ -513,6 +513,7 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
               <QuarkAgent
                 activeProject={activeProject}
                 onApplyToEditor={updateFile}
+                onShowPreview={() => setShowPreview(true)}
               />
             )}
           </div>
