@@ -174,18 +174,17 @@ export default function SandpackPreview({ code, language, filename }: Props) {
   });
 
   return (
-    <iframe
-      key={srcdoc}
-      srcDoc={srcdoc}
-      sandbox="allow-scripts allow-same-origin"
-      style={{
-        width: '100%',
-        height: '100%',
-        border: 'none',
-        background: '#08080f',
-        display: 'block',
-      }}
-      title="QUARK Preview"
-    />
+    <div style={{ width: '100%', height: '100%', overflow: 'auto', background: '#0a0a0a' }}>
+      <div style={{ color: '#00ff88', padding: '1rem', fontFamily: 'monospace', fontSize: '12px' }}>
+        ✅ code.length: {code.length} | lang: {lang} | filename: {filename}
+      </div>
+      <iframe
+        key={srcdoc}
+        srcDoc={srcdoc}
+        sandbox="allow-scripts allow-same-origin"
+        style={{ width: '100%', height: 'calc(100% - 40px)', border: 'none', display: 'block' }}
+        title="QUARK Preview"
+      />
+    </div>
   );
 }
