@@ -50,6 +50,15 @@ export default function Sidebar({ activePage, onNavigate }: Props) {
         violet
       />
 
+      {/* Debugger Nav */}
+      <NavItem
+        icon="🤖"
+        label="Debugger"
+        active={activePage === 'debugger'}
+        onClick={() => onNavigate('debugger')}
+        red
+      />
+
       <div className="flex-1" />
 
       {/* Settings */}
@@ -64,14 +73,16 @@ function NavItem({
   active,
   onClick,
   violet,
+  red,
 }: {
   icon: string;
   label: string;
   active: boolean;
   onClick: () => void;
   violet?: boolean;
+  red?: boolean;
 }) {
-  const activeColor = violet ? '#7c3aed' : '#00ff88';
+  const activeColor = violet ? '#7c3aed' : red ? '#ff4444' : '#00ff88';
   return (
     <button
       onClick={onClick}

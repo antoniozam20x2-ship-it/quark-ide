@@ -1,10 +1,10 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
 import { useState } from 'react';
 import Sidebar from './components/Layout/Sidebar';
 import EditorPage from './pages/EditorPage';
 import WarRoomPage from './pages/WarRoomPage';
+import DebuggerPage from './pages/DebuggerPage';
 
-export type Page = 'editor' | 'warroom';
+export type Page = 'editor' | 'warroom' | 'debugger';
 
 export default function App() {
   const [page, setPage] = useState<Page>('editor');
@@ -16,7 +16,9 @@ export default function App() {
     >
       <Sidebar activePage={page} onNavigate={setPage} />
       <div className="flex-1" style={{ minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'clip' }}>
-        {page === 'editor' ? <EditorPage /> : <WarRoomPage />}
+        {page === 'editor' && <EditorPage />}
+        {page === 'warroom' && <WarRoomPage />}
+        {page === 'debugger' && <DebuggerPage />}
       </div>
     </div>
   );
