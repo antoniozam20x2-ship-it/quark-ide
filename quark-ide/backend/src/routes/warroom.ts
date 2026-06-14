@@ -1,6 +1,51 @@
 import { Router, Request, Response } from 'express';
 import { generateContent } from '../services/gemini.js';
 
+const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_MODEL = 'llama-3.3-70b-versatile';
+const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
+const MISTRAL_MODEL = 'mistral-small-latest';
+
+async function callGroq(prompt: string, systemPrompt: string, maxTokens = 1024): Promise<string> {
+  const token = process.env.GROQ_API_KEY;
+  if (!token) throw new Error('GROQ_API_KEY is not set');
+  const res = await fetch(GROQ_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      max_tokens: maxTokens,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt },
+      ],
+    }),
+  });
+  if (!res.ok) throw new Error(`Groq API error: ${res.status} ${res.statusText}`);
+  const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+  return json.choices?.[0]?.message?.content ?? '';
+}
+
+async function callMistral(prompt: string, systemPrompt: string, maxTokens = 1024): Promise<string> {
+  const token = process.env.MISTRAL_API_KEY;
+  if (!token) throw new Error('MISTRAL_API_KEY is not set');
+  const res = await fetch(MISTRAL_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify({
+      model: MISTRAL_MODEL,
+      max_tokens: maxTokens,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt },
+      ],
+    }),
+  });
+  if (!res.ok) throw new Error(`Mistral API error: ${res.status} ${res.statusText}`);
+  const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+  return json.choices?.[0]?.message?.content ?? '';
+}
+
 const router = Router();
 
 const JEFFERSON_CONTEXT = `Jefferson is a solo developer building a personal crypto trading and intelligence ecosystem. His active projects:
@@ -39,6 +84,12 @@ Your lens is user experience and visual design. You know Jefferson's signature c
 ${JEFFERSON_CONTEXT}
 
 Your lens is risk, reliability, and edge cases. You deeply understand the danger zones of Jefferson's systems: a bug in Signal OS's position sizing logic could blow an account; a race condition in order execution could result in duplicate trades; a bad bias engine read during a trending market could flip the bot to the wrong side. Evaluate challenges from the angle of what could go wrong, failure modes, testing strategies, and safety mechanisms. Reference his specific risk parameters (1.5% per trade, -10% circuit breaker, 10x leverage) when relevant. Always recommend circuit breakers, logging, and graceful degradation.`,
+
+  DEBUGGER: `You are a senior debugging specialist and the Debugger advisor on Jefferson's personal board of directors.
+
+${JEFFERSON_CONTEXT}
+
+Your lens is root cause analysis and rapid error resolution. You specialize in reading Railway deployment logs, TypeScript/Node.js stack traces, PostgreSQL query errors, and React runtime exceptions. When given an error or log output, identify the exact cause, the affected file and line, and provide a concrete code fix. Prioritize production stability — Jefferson's Signal OS handles live trades and downtime costs real money. Always suggest the minimal targeted fix rather than broad refactors. Flag regressions and side effects the fix might introduce.`,
 };
 
 const THINK_SYSTEM = `You are QUARK, Jefferson's personal AI development co-founder and senior architect.
@@ -50,7 +101,19 @@ When Jefferson brings you a project idea or technical challenge, analyze it with
 async function callBoardMember(member: string, challenge: string): Promise<string> {
   const systemPrompt = BOARD_PROMPTS[member];
   if (!systemPrompt) throw new Error(`Invalid member: ${member}`);
-  return generateContent(challenge, systemPrompt, 1024, `/api/warroom/board/${member}`);
+
+  switch (member) {
+    case 'CEO':
+      return generateContent(challenge, systemPrompt, 1024, `/api/warroom/board/${member}`);
+    case 'CTO':
+    case 'Designer':
+    case 'DEBUGGER':
+      return callGroq(challenge, systemPrompt, 1024);
+    case 'QA':
+      return callMistral(challenge, systemPrompt, 1024);
+    default:
+      return generateContent(challenge, systemPrompt, 1024, `/api/warroom/board/${member}`);
+  }
 }
 
 async function generateConsensus(
@@ -107,7 +170,7 @@ router.post('/think', async (req: Request, res: Response) => {
 router.post('/board', async (req: Request, res: Response) => {
   const { challenge, member } = req.body as {
     challenge: string;
-    member: 'CEO' | 'CTO' | 'Designer' | 'QA';
+    member: 'CEO' | 'CTO' | 'Designer' | 'QA' | 'DEBUGGER';
   };
 
   if (!BOARD_PROMPTS[member]) {
