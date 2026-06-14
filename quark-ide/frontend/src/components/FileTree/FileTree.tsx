@@ -132,7 +132,8 @@ export default function GitHubFileTree({ onFileSelect, activeRepo }: Props) {
   function fetchFileTree() {
     setStatus('loading');
     setTree([]);
-    fetch(`${API_BASE}/github/tree`)
+    const repoParam = activeRepo ? `?repo=${encodeURIComponent(activeRepo)}` : '';
+    fetch(`${API_BASE}/github/tree${repoParam}`)
       .then((r) => r.json())
       .then((items: GitItem[]) => {
         setTree(buildTree(items));

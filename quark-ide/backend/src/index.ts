@@ -37,9 +37,11 @@ app.get('/api/costs', (_req, res) => {
   res.json(getCosts());
 });
 
-app.get('/github/tree', async (_req, res) => {
+app.get('/github/tree', async (req, res) => {
+  const repo   = req.query.repo   as string || undefined;
+  const branch = req.query.branch as string || undefined;
   try {
-    const tree = await getFileTree();
+    const tree = await getFileTree(repo, branch);
     res.json(tree);
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
@@ -48,9 +50,10 @@ app.get('/github/tree', async (_req, res) => {
 
 app.get('/github/file', async (req, res) => {
   const path = String(req.query.path ?? '');
+  const repo  = req.query.repo as string || undefined;
   if (!path) { res.status(400).json({ error: 'path is required' }); return; }
   try {
-    const content = await getFileContent(path);
+    const content = await getFileContent(path, repo);
     res.json({ path, content });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
