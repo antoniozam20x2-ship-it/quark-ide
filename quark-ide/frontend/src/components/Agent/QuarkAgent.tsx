@@ -31,7 +31,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor }: Props) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [feed]);
+  }, [feed, result]);
 
   async function generate() {
     if (!prompt.trim() || running) return;
@@ -54,19 +54,39 @@ export default function QuarkAgent({ activeProject, onApplyToEditor }: Props) {
 
       const reader  = res.body!.getReader();
       const decoder = new TextDecoder();
+      // Buffer acumula entre reads — evita que eventos grandes (done ~10KB)
+      // queden partidos entre chunks y fallen el JSON.parse
+      let buffer = '';
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        for (const line of chunk.split('\n')) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const parsed = JSON.parse(line.slice(6)) as AgentEvent;
-            setFeed((prev) => [...prev, parsed]);
-            if (parsed.event === 'done')  { console.log('[Agent] Done received:', parsed); setResult(parsed); setRunning(false); }
-            if (parsed.event === 'error') { setRunning(false); }
-          } catch {}
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Partir por \n\n: cada bloque es un evento SSE completo
+        const blocks = buffer.split('\n\n');
+        buffer = blocks.pop() ?? ''; // el último puede estar incompleto
+
+        for (const block of blocks) {
+          for (const line of block.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const parsed = JSON.parse(line.slice(6)) as AgentEvent;
+              console.log('[Agent] Event:', parsed.event);
+              setFeed((prev) => [...prev, parsed]);
+              if (parsed.event === 'done') {
+                console.log('[Agent] Done — files:', parsed.files?.length, 'mainContent:', parsed.mainContent?.length);
+                setResult(parsed);
+                setRunning(false);
+              }
+              if (parsed.event === 'error') {
+                setRunning(false);
+              }
+            } catch (e) {
+              console.warn('[Agent] Parse error on line:', line.slice(0, 100), e);
+            }
+          }
         }
       }
     } catch (err) {
@@ -123,7 +143,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor }: Props) {
         flex: 1, minHeight: 0, overflowY: 'auto', padding: '10px 12px',
         display: 'flex', flexDirection: 'column', gap: 6,
       }}>
-        {feed.length === 0 && !running && (
+        {feed.length === 0 && !running && !result && (
           <p style={{ color: '#3a3a5c', fontSize: 12, margin: 0, lineHeight: 1.6 }}>
             Describe lo que quieres construir en{' '}
             <span style={{ color: '#00ff88' }}>{activeProject.name}</span>.
@@ -170,7 +190,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor }: Props) {
           </div>
         )}
 
-        {/* Result actions */}
+        {/* Result actions — aparecen cuando result está seteado y running es false */}
         {result && !running && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
             <div style={{
