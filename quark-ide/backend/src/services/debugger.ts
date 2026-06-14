@@ -282,7 +282,9 @@ export async function runDebugger(projectId: string, projectName = 'Unknown'): P
   const commits: string[] = [];
   let lastError: string | undefined;
 
-  await sendTelegram(`🔍 <b>QUARK DEBUGGER</b>\nAnalizando logs de <b>${projectName}</b>...`);
+  await sendTelegram(
+    `🔍 <b>QUARK DEBUGGER</b>\nProyecto: <b>${projectName}</b>\nHora: ${new Date().toLocaleTimeString('es-ES')}\nLeyendo logs de Railway...`
+  );
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     const deploymentId = await getLatestDeploymentId(projectId);
@@ -290,6 +292,9 @@ export async function runDebugger(projectId: string, projectName = 'Unknown'): P
     const analysis = await analyzeLogsWithAI(logs);
 
     if (!analysis.hasError) {
+      await sendTelegram(
+        `✨ <b>Logs limpios</b>\nProyecto: <b>${projectName}</b>\nNo se detectaron errores en Railway`
+      );
       return { fixed: true, attempts: attempt, commits };
     }
 
@@ -312,13 +317,17 @@ export async function runDebugger(projectId: string, projectName = 'Unknown'): P
     await createOrUpdateFile(analysis.affectedFile, fixedCode, commitMessage);
     commits.push(commitMessage);
 
-    await sendTelegram(`✅ <b>Fix aplicado</b>\nProyecto: <b>${projectName}</b>\nIntento: ${attempt}/3\nCommit: ${commitMessage}`);
+    await sendTelegram(
+      `✅ <b>Fix aplicado</b>\nProyecto: <b>${projectName}</b>\nIntento: ${attempt}/3\nError detectado: <code>${lastError?.slice(0, 100) ?? 'N/A'}</code>\nCommit: <code>${commitMessage}</code>`
+    );
 
     if (attempt < MAX_RETRIES) {
       await wait(30_000);
     }
   }
 
-  await sendTelegram(`❌ <b>QUARK DEBUGGER</b>\nNo se pudo auto-fix <b>${projectName}</b> después de 3 intentos`);
+  await sendTelegram(
+    `❌ <b>Sin solución</b>\nProyecto: <b>${projectName}</b>\nDespués de 3 intentos no se pudo auto-fix\nÚltimo error: <code>${lastError?.slice(0, 150) ?? 'desconocido'}</code>`
+  );
   return { fixed: false, attempts: MAX_RETRIES, lastError, commits };
 }
