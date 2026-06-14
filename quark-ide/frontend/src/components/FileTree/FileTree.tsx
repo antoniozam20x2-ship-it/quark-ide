@@ -17,6 +17,7 @@ interface TreeNode {
 
 interface Props {
   onFileSelect: (path: string, content: string) => void;
+  activeRepo?: string;
 }
 
 function buildTree(items: GitItem[]): TreeNode[] {
@@ -121,14 +122,16 @@ function TreeNodeRow({
   );
 }
 
-export default function GitHubFileTree({ onFileSelect }: Props) {
+export default function GitHubFileTree({ onFileSelect, activeRepo }: Props) {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [activePath, setActivePath] = useState('');
   const [loadingPath, setLoadingPath] = useState('');
   const [error, setError] = useState('');
 
-  useEffect(() => {
+  function fetchFileTree() {
+    setStatus('loading');
+    setTree([]);
     fetch(`${API_BASE}/github/tree`)
       .then((r) => r.json())
       .then((items: GitItem[]) => {
@@ -139,7 +142,16 @@ export default function GitHubFileTree({ onFileSelect }: Props) {
         setError('Could not load repo. Check GITHUB_TOKEN.');
         setStatus('error');
       });
+  }
+
+  useEffect(() => {
+    fetchFileTree();
   }, []);
+
+  useEffect(() => {
+    if (activeRepo === undefined) return;
+    fetchFileTree();
+  }, [activeRepo]);
 
   async function handleFileClick(path: string) {
     if (loadingPath) return;

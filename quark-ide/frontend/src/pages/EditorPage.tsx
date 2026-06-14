@@ -143,10 +143,12 @@ export default function EditorPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [treeKey, setTreeKey] = useState(0);
+  const [activeRepo, setActiveRepo] = useState('quark-ide');
   const drawerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
 
-  function handleProjectSwitch(_repo: string, _branch: string) {
+  function handleProjectSwitch(repo: string, _branch: string) {
+    setActiveRepo(repo);
     setTreeKey((k) => k + 1);
   }
 
@@ -325,7 +327,7 @@ export default function EditorPage() {
                 onSelect={selectFile}
                 onNewFile={newFile}
               />
-              <GitHubFileTree key={treeKey} onFileSelect={handleGithubFileSelect} />
+              <GitHubFileTree key={treeKey} onFileSelect={handleGithubFileSelect} activeRepo={activeRepo} />
             </div>
           </>
         )}
@@ -429,7 +431,7 @@ export default function EditorPage() {
             onSelect={selectFile}
             onNewFile={newFile}
           />
-          <GitHubFileTree key={treeKey} onFileSelect={handleGithubFileSelect} />
+          <GitHubFileTree key={treeKey} onFileSelect={handleGithubFileSelect} activeRepo={activeRepo} />
         </div>
 
         {/* Col 2: Monaco editor */}
