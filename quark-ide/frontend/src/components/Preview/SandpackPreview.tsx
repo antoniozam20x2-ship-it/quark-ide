@@ -1,6 +1,7 @@
 interface Props {
   code: string;
   language: string;
+  filename?: string;
 }
 
 const SUPPORTED = new Set([
@@ -8,6 +9,17 @@ const SUPPORTED = new Set([
   'javascript', 'js', 'jsx',
   'typescript', 'ts', 'tsx',
 ]);
+
+function detectLanguage(filename: string): string | null {
+  const name = filename.toLowerCase();
+  if (name.endsWith('.tsx')) return 'tsx';
+  if (name.endsWith('.ts'))  return 'tsx';
+  if (name.endsWith('.jsx')) return 'jsx';
+  if (name.endsWith('.js'))  return 'jsx';
+  if (name.endsWith('.html')) return 'html';
+  if (name.endsWith('.css'))  return 'css';
+  return null;
+}
 
 function hasDefaultExport(code: string): boolean {
   return /export\s+default\s/m.test(code);
@@ -114,8 +126,10 @@ ${code}
   return '';
 }
 
-export default function SandpackPreview({ code, language }: Props) {
-  const lang = language.toLowerCase();
+export default function SandpackPreview({ code, language, filename }: Props) {
+  const rawLang = language.toLowerCase();
+  const needsFallback = !rawLang || rawLang === 'typescript' || rawLang === 'javascript' || !SUPPORTED.has(rawLang);
+  const lang = (needsFallback && filename ? detectLanguage(filename) : null) ?? rawLang;
   const supported = SUPPORTED.has(lang);
 
   if (!supported) {

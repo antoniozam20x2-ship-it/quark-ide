@@ -369,7 +369,7 @@ export default function EditorPage() {
           )}
           {mobileTab === 'preview' && (
             <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', background: '#08080f' }}>
-              <SandpackPreview code={activeFile.content} language={activeFile.language} />
+              <SandpackPreview code={activeFile.content} language={activeFile.language} filename={activeFile.name} />
             </div>
           )}
           {mobileTab === 'chat' && (
@@ -490,7 +490,7 @@ export default function EditorPage() {
           </div>
           {/* Preview content */}
           <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-            <SandpackPreview code={activeFile.content} language={activeFile.language} />
+            <SandpackPreview code={activeFile.content} language={activeFile.language} filename={activeFile.name} />
           </div>
         </div>
       )}
