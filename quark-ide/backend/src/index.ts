@@ -9,6 +9,7 @@ import { getCosts } from './services/costTracker.js';
 import { initDb } from './services/db.js';
 import { seedOnce } from './services/rufloMemory.js';
 import { getFileTree, getFileContent, createOrUpdateFile, deleteFile } from './services/github.js';
+import { runDebugger } from './services/debugger.js';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3001);
@@ -82,6 +83,19 @@ app.delete('/github/file', async (req, res) => {
   }
 });
 
+
+app.post('/debugger/run', async (req, res) => {
+  const { projectId } = req.body as { projectId?: string };
+  if (!projectId) {
+    res.status(400).json({ error: 'projectId is required' }); return;
+  }
+  try {
+    const result = await runDebugger(projectId);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
+  }
+});
 
 if (process.env.DATABASE_URL) {
   initDb()
