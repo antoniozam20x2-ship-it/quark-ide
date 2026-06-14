@@ -150,7 +150,28 @@ export default function SandpackPreview({ code, language, filename }: Props) {
     );
   }
 
+  if (!code || code.trim() === '') {
+    return (
+      <div style={{
+        color: 'red',
+        padding: '2rem',
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        background: '#0a0a0a'
+      }}>
+        ⚠️ ERROR: code prop está vacío o undefined
+      </div>
+    );
+  }
+
   const srcdoc = buildSrcdoc(code);
+
+  console.log('PREVIEW rendering:', {
+    codeLength: code?.length,
+    language,
+    filename,
+    lang
+  });
 
   return (
     <iframe
