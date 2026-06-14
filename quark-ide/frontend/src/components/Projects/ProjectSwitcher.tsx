@@ -3,11 +3,11 @@ import { useState } from 'react';
 const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
 
 const PROJECTS = [
-  { name: 'Quark IDE',  emoji: '⚛️', repo: 'quark-ide',       branch: 'main' },
-  { name: 'Signal OS',  emoji: '⚡', repo: 'Ahorar',           branch: 'main' },
-  { name: 'Sniper OS',  emoji: '🎯', repo: 'Trade-SnipeOS',    branch: 'main' },
-  { name: 'Nexus OS',   emoji: '🌐', repo: 'NEXUS-OS-app',     branch: 'main' },
-  { name: 'Core AI',    emoji: '🤖', repo: 'Code-Coretest',    branch: 'main' },
+  { name: 'Quark IDE',  emoji: '⚛️', repo: 'quark-ide',      branch: 'main', railwayProjectId: '5434ca01-48b0-4e39-82ee-67acdaa6d8af' },
+  { name: 'Signal OS',  emoji: '⚡', repo: 'Ahorar',          branch: 'main', railwayProjectId: '9e886245-114f-4bdf-9aa5-c87333aeef0a' },
+  { name: 'Sniper OS',  emoji: '🎯', repo: 'Trade-SnipeOS',   branch: 'main', railwayProjectId: '70612f14-41c5-48d5-9eb9-757861906b55' },
+  { name: 'Nexus OS',   emoji: '🌐', repo: 'NEXUS-OS-app',    branch: 'main', railwayProjectId: 'e4aac26a-e4d4-44fc-84a6-9bbef1ace410' },
+  { name: 'Core AI',    emoji: '🤖', repo: 'Code-Coretest',   branch: 'main', railwayProjectId: '3a13a380-68cb-43dd-a45b-2016fcb7baf0' },
 ];
 
 interface Props {
