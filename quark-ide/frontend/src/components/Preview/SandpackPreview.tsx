@@ -163,19 +163,47 @@ export default function SandpackPreview({ code, language, filename }: Props) {
 
   const srcdoc = buildSrcdoc(code);
 
+  function openPreview() {
+    const win = window.open('', '_blank');
+    win?.document.write(srcdoc);
+    win?.document.close();
+  }
+
   return (
-    <iframe
-      key={srcdoc}
-      srcDoc={srcdoc}
-      sandbox="allow-scripts"
-      style={{
-        width: '100%',
-        height: '100%',
-        border: 'none',
-        display: 'block',
-        background: '#0a0a0a',
-      }}
-      title="QUARK Preview"
-    />
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      height: '100%',
+      gap: 12,
+      background: '#08080f',
+    }}>
+      <button
+        onClick={openPreview}
+        style={{
+          background: '#00ff88',
+          color: '#08080f',
+          border: 'none',
+          borderRadius: 8,
+          padding: '12px 28px',
+          fontFamily: 'JetBrains Mono, monospace',
+          fontWeight: 700,
+          fontSize: 15,
+          cursor: 'pointer',
+          letterSpacing: '0.04em',
+        }}
+      >
+        🚀 Abrir Preview
+      </button>
+      <span style={{
+        color: '#3a3a5c',
+        fontFamily: 'JetBrains Mono, monospace',
+        fontSize: 11,
+        textAlign: 'center',
+      }}>
+        Preview se abre en nueva pestaña por<br />compatibilidad con Safari iOS
+      </span>
+    </div>
   );
 }
