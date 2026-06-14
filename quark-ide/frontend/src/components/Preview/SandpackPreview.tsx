@@ -21,14 +21,54 @@ function detectLanguage(filename: string): string | null {
   return null;
 }
 
+function codeHasReact(code: string): boolean {
+  return /React|JSX|<[A-Z][a-zA-Z]*[\s/>]|<[a-z]+[\s/>]/.test(code);
+}
+
+function resolveLanguage(
+  language: string,
+  code: string,
+  filename?: string,
+): { lang: string; unsupported?: string } {
+  // 1. Filename takes highest priority
+  if (filename) {
+    const fromFile = detectLanguage(filename);
+    if (fromFile) return { lang: fromFile };
+  }
+
+  const raw = language.toLowerCase();
+
+  // 2. Monaco returns "typescript" for both .ts and .tsx
+  if (raw === 'typescript') {
+    if (codeHasReact(code)) return { lang: 'tsx' };
+    return {
+      lang: '__ts_unsupported__',
+      unsupported:
+        'TypeScript puro no puede previsualizarse.\nUsa un componente React (.tsx)',
+    };
+  }
+
+  // 3. Monaco returns "javascript" for both .js and .jsx
+  if (raw === 'javascript') return { lang: 'jsx' };
+
+  if (SUPPORTED.has(raw)) return { lang: raw };
+
+  return { lang: raw };
+}
+
 function hasDefaultExport(code: string): boolean {
   return /export\s+default\s/m.test(code);
 }
 
 function findFirstComponentName(code: string): string | null {
   const patterns = [
+    // function Component() / function Component<T>()
     /^(?:export\s+(?:default\s+)?)?function\s+([A-Z][a-zA-Z0-9]*)\s*[(<]/m,
-    /^(?:export\s+)?const\s+([A-Z][a-zA-Z0-9]*)\s*[:=]/m,
+    // const Component: React.FC = ... / const Component = () => / const Component = (
+    /^(?:export\s+)?const\s+([A-Z][a-zA-Z0-9]*)\s*(?::\s*React\.(?:FC|VFC|ComponentType|ReactNode)[^=]*)?=\s*(?:\(|React\.memo|React\.forwardRef)/m,
+    // const Component: React.FC<...> (with generic)
+    /^(?:export\s+)?const\s+([A-Z][a-zA-Z0-9]*)\s*:/m,
+    // class Component
     /^(?:export\s+)?class\s+([A-Z][a-zA-Z0-9]*)\s/m,
   ];
   for (const p of patterns) {
@@ -127,24 +167,25 @@ ${code}
 }
 
 export default function SandpackPreview({ code, language, filename }: Props) {
-  const rawLang = language.toLowerCase();
-  const needsFallback = !rawLang || rawLang === 'typescript' || rawLang === 'javascript' || !SUPPORTED.has(rawLang);
-  const lang = (needsFallback && filename ? detectLanguage(filename) : null) ?? rawLang;
-  const supported = SUPPORTED.has(lang);
+  const { lang, unsupported } = resolveLanguage(language, code, filename);
 
-  if (!supported) {
+  if (unsupported || !SUPPORTED.has(lang)) {
     return (
       <div style={{
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         height: '100%',
+        padding: 24,
         color: '#3a3a5c',
         fontFamily: 'JetBrains Mono, monospace',
-        fontSize: 13,
+        fontSize: 12,
         background: '#08080f',
+        textAlign: 'center',
+        whiteSpace: 'pre-line',
+        lineHeight: 1.7,
       }}>
-        Preview no disponible para este tipo de archivo
+        {unsupported ?? 'Preview no disponible para este tipo de archivo'}
       </div>
     );
   }
