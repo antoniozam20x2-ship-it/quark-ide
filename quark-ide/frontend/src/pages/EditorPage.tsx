@@ -148,7 +148,7 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
   const [files, setFiles] = useState<FileEntry[]>(INITIAL_FILES);
   const [activeFile, setActiveFile] = useState<FileEntry>(INITIAL_FILES[0]);
   const [mobileTab, setMobileTab] = useState<'editor' | 'chat' | 'preview' | 'agent'>('editor');
-  const [panelTab, setPanelTab]   = useState<'chat' | 'agent'>('chat');
+  const [panelTab, setPanelTab]   = useState<'chat' | 'agent'>('agent');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [treeKey, setTreeKey] = useState(0);
