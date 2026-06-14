@@ -85,47 +85,10 @@ function injectDefaultExport(code: string): string {
   return code;
 }
 
-function buildReactTemplate(code: string, presets: string): string {
-  const processedCode = injectDefaultExport(code);
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8"/>
-<style>
-*, *::before, *::after { box-sizing: border-box; }
-body { background: #08080f; color: #e2e8f0; font-family: sans-serif; margin: 0; padding: 0; }
-#root { height: 100vh; }
-#error { padding: 16px; color: #ff4444; font-family: 'JetBrains Mono', monospace; font-size: 13px; white-space: pre-wrap; }
-</style>
-</head>
-<body>
-<div id="root"></div>
-<div id="error"></div>
-<script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
-<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
-<script type="text/babel" data-presets="${presets}">
-${processedCode}
-
-try {
-  const exports_ = typeof module !== 'undefined' && module.exports ? module.exports : {};
-  const DefaultExport = typeof App !== 'undefined' ? App : exports_.default ?? null;
-  if (DefaultExport) {
-    ReactDOM.createRoot(document.getElementById('root')).render(
-      React.createElement(DefaultExport)
-    );
-  } else {
-    document.getElementById('error').textContent = 'No se encontró un componente exportado por defecto (App).';
-  }
-} catch(e) {
-  document.getElementById('error').textContent = 'Error al renderizar: ' + e.message;
-}
-</script>
-</body>
-</html>`;
-}
-
 function buildSrcdoc(code: string): string {
+  const processedCode = injectDefaultExport(code);
+  const componentName = findFirstComponentName(code) || 'App';
+
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -133,25 +96,30 @@ function buildSrcdoc(code: string): string {
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <style>* { margin: 0; padding: 0; box-sizing: border-box; }</style>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0a0a; }
+    #error { color: red; padding: 1rem; font-family: monospace; }
+  </style>
 </head>
 <body>
   <div id="root"></div>
-  <script type="text/babel" data-type="module">
-    ${code}
-    
-    const __Component = typeof CryptoDashboard !== 'undefined' ? CryptoDashboard
-      : typeof App !== 'undefined' ? App
-      : typeof Default !== 'undefined' ? Default
-      : null;
-    
-    if (__Component) {
-      ReactDOM.createRoot(document.getElementById('root')).render(
-        React.createElement(__Component)
-      );
-    } else {
-      document.getElementById('root').innerHTML = 
-        '<p style="color:red">No se encontró componente exportado</p>';
+  <div id="error"></div>
+  <script type="text/babel" data-presets="react,typescript">
+    ${processedCode}
+    try {
+      const C = typeof ${componentName} !== 'undefined' 
+        ? ${componentName} : null;
+      if (C) {
+        ReactDOM.createRoot(document.getElementById('root'))
+          .render(React.createElement(C));
+      } else {
+        document.getElementById('error').textContent = 
+          'Componente no encontrado: ${componentName}';
+      }
+    } catch(e) {
+      document.getElementById('error').textContent = 
+        'Error: ' + e.message;
     }
   </script>
 </body>
