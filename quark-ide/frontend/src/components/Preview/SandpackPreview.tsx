@@ -174,15 +174,37 @@ export default function SandpackPreview({ code, language, filename }: Props) {
   });
 
   return (
-    <div style={{ width: '100%', height: '100%', overflow: 'auto', background: '#0a0a0a' }}>
-      <div style={{ color: '#00ff88', padding: '1rem', fontFamily: 'monospace', fontSize: '12px' }}>
+    <div style={{
+      width: '100%',
+      height: '100%',
+      minHeight: '300px',
+      overflow: 'auto',
+      background: '#0a0a0a',
+      display: 'flex',
+      flexDirection: 'column'
+    }}>
+      <div style={{
+        color: '#00ff88',
+        padding: '4px 1rem',
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        flexShrink: 0
+      }}>
         ✅ code.length: {code.length} | lang: {lang} | filename: {filename}
       </div>
       <iframe
         key={srcdoc}
         srcDoc={srcdoc}
         sandbox="allow-scripts allow-same-origin"
-        style={{ width: '100%', height: 'calc(100% - 40px)', border: 'none', display: 'block' }}
+        style={{
+          flex: 1,
+          width: '100%',
+          minHeight: '250px',
+          height: '100%',
+          border: 'none',
+          display: 'block',
+          background: '#0a0a0a'
+        }}
         title="QUARK Preview"
       />
     </div>
