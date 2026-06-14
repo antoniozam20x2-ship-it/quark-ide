@@ -46,6 +46,11 @@ function buildHtml(code: string): string {
   const processedCode = injectDefaultExport(code);
   const componentName = findFirstComponentName(code) ?? 'App';
 
+  const safeCode = processedCode
+    .replace(/\\/g, '\\\\')
+    .replace(/`/g, '\\`')
+    .replace(/\$\{/g, '\\${');
+
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -65,7 +70,7 @@ function buildHtml(code: string): string {
   <div id="root"></div>
   <div id="error"></div>
   <script type="text/babel" data-presets="react,typescript">
-    ${processedCode}
+    ${safeCode}
     try {
       const C = typeof ${componentName} !== 'undefined' ? ${componentName} : null;
       if (C) {
