@@ -187,6 +187,7 @@ export default function EditorPage() {
   }
 
   function handleGithubFileSelect(path: string, content: string) {
+    console.log('GitHub file loaded:', path, content.length, 'chars');
     const existing = files.find((f) => f.name === path);
     const ext = path.split('.').pop() ?? '';
     const langMap: Record<string, string> = {
