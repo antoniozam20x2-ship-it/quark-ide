@@ -84,6 +84,16 @@ app.delete('/github/file', async (req, res) => {
 });
 
 
+app.post('/github/switch-project', (req, res) => {
+  const { repo, branch } = req.body as { repo?: string; branch?: string };
+  if (!repo || !branch) {
+    res.status(400).json({ error: 'repo and branch are required' }); return;
+  }
+  process.env.GITHUB_REPO   = repo;
+  process.env.GITHUB_BRANCH = branch;
+  res.json({ success: true, repo, branch });
+});
+
 app.post('/debugger/run', async (req, res) => {
   const { projectId } = req.body as { projectId?: string };
   if (!projectId) {

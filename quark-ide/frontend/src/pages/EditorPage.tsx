@@ -5,6 +5,7 @@ import CodeEditor from '../components/Editor/CodeEditor';
 import ClaudeChat from '../components/Editor/ClaudeChat';
 import GitHubFileTree from '../components/FileTree/FileTree';
 import SandpackPreview from '../components/Preview/SandpackPreview';
+import ProjectSwitcher from '../components/Projects/ProjectSwitcher';
 
 interface FileEntry {
   name: string;
@@ -141,8 +142,13 @@ export default function EditorPage() {
   const [mobileTab, setMobileTab] = useState<'editor' | 'chat' | 'preview'>('editor');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [treeKey, setTreeKey] = useState(0);
   const drawerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+
+  function handleProjectSwitch(_repo: string, _branch: string) {
+    setTreeKey((k) => k + 1);
+  }
 
   // Close drawer when clicking outside
   useEffect(() => {
@@ -312,13 +318,14 @@ export default function EditorPage() {
                 overflowY: 'auto',
               }}
             >
+              <ProjectSwitcher onSwitch={handleProjectSwitch} />
               <FileTree
                 files={files}
                 activeFile={activeFile}
                 onSelect={selectFile}
                 onNewFile={newFile}
               />
-              <GitHubFileTree onFileSelect={handleGithubFileSelect} />
+              <GitHubFileTree key={treeKey} onFileSelect={handleGithubFileSelect} />
             </div>
           </>
         )}
@@ -415,13 +422,14 @@ export default function EditorPage() {
           display: 'flex',
           flexDirection: 'column',
         }}>
+          <ProjectSwitcher onSwitch={handleProjectSwitch} />
           <FileTree
             files={files}
             activeFile={activeFile}
             onSelect={selectFile}
             onNewFile={newFile}
           />
-          <GitHubFileTree onFileSelect={handleGithubFileSelect} />
+          <GitHubFileTree key={treeKey} onFileSelect={handleGithubFileSelect} />
         </div>
 
         {/* Col 2: Monaco editor */}
