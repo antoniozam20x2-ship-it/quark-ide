@@ -21,6 +21,21 @@ interface Props {
   onShowPreview: () => void;
 }
 
+function cleanCodeForPreview(code: string): string {
+  return code
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('import'))
+    .join('\n')
+    .replace(/:\s*(string|number|boolean|null|undefined|void|any|React\.FC|FC|React\.ReactNode|ReactNode)(\s*[,)\{=])/g, '$2')
+    .replace(/\(([^)]*)\):\s*\w+/g, '($1)')
+    .replace(/<(string|number|boolean|null|any)>/g, '')
+    .replace(/:\s*React\.FC\s*=/g, '=')
+    .replace(/:\s*FC\s*=/g, '=')
+    .replace(/export default /g, '')
+    .replace(/export const /g, 'const ')
+    .replace(/^(interface|type)\s+\w+[^{]*\{[^}]*\}/gm, '');
+}
+
 export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPreview }: Props) {
   const [prompt, setPrompt]         = useState('');
   const [running, setRunning]       = useState(false);
@@ -206,11 +221,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               {result.mainContent && (
                 <button
                   onClick={() => {
-                    const cleanCode = result.mainContent!
-                      .split('\n')
-                      .filter((line) => !line.trim().startsWith('import'))
-                      .join('\n');
-                    onApplyToEditor(cleanCode);
+                    onApplyToEditor(cleanCodeForPreview(result.mainContent!));
                     onShowPreview();
                   }}
                   style={{
