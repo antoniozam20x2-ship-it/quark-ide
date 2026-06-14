@@ -1,4 +1,5 @@
 import { getFileContent, createOrUpdateFile } from './github.js';
+import { sendTelegram } from '../utils/telegram.js';
 
 const RAILWAY_GQL = 'https://backboard.railway.app/graphql/v2';
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
@@ -277,9 +278,11 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function runDebugger(projectId: string): Promise<DebugLoop> {
+export async function runDebugger(projectId: string, projectName = 'Unknown'): Promise<DebugLoop> {
   const commits: string[] = [];
   let lastError: string | undefined;
+
+  await sendTelegram(`🔍 <b>QUARK DEBUGGER</b>\nAnalizando logs de <b>${projectName}</b>...`);
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     const deploymentId = await getLatestDeploymentId(projectId);
@@ -309,10 +312,13 @@ export async function runDebugger(projectId: string): Promise<DebugLoop> {
     await createOrUpdateFile(analysis.affectedFile, fixedCode, commitMessage);
     commits.push(commitMessage);
 
+    await sendTelegram(`✅ <b>Fix aplicado</b>\nProyecto: <b>${projectName}</b>\nIntento: ${attempt}/3\nCommit: ${commitMessage}`);
+
     if (attempt < MAX_RETRIES) {
       await wait(30_000);
     }
   }
 
+  await sendTelegram(`❌ <b>QUARK DEBUGGER</b>\nNo se pudo auto-fix <b>${projectName}</b> después de 3 intentos`);
   return { fixed: false, attempts: MAX_RETRIES, lastError, commits };
 }

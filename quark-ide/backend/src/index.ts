@@ -100,12 +100,12 @@ app.post('/github/switch-project', (req, res) => {
 });
 
 app.post('/debugger/run', async (req, res) => {
-  const { projectId } = req.body as { projectId?: string };
+  const { projectId, projectName } = req.body as { projectId?: string; projectName?: string };
   if (!projectId) {
     res.status(400).json({ error: 'projectId is required' }); return;
   }
   try {
-    const result = await runDebugger(projectId);
+    const result = await runDebugger(projectId, projectName ?? 'Unknown');
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
