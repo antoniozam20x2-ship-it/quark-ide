@@ -3,27 +3,26 @@ import { useState } from 'react';
 const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
 
 interface DebugResult {
-  hasError: boolean;
-  errorMessage?: string;
-  affectedFile?: string;
   fixed?: boolean;
-  commitMessage?: string;
-  fix?: string;
-  rawAnalysis?: string;
+  attempts?: number;
+  lastError?: string;
+  commits?: string[];
   error?: string;
 }
 
-type Status = 'idle' | 'analyzing' | 'fixing' | 'done' | 'error';
+type Status = 'idle' | 'analyzing' | 'done' | 'error';
 
-export default function DebuggerPage() {
-  const [projectId, setProjectId] = useState(
-    import.meta.env.VITE_RAILWAY_PROJECT_ID ?? '',
-  );
+interface Props {
+  railwayProjectId: string;
+  projectName: string;
+}
+
+export default function DebuggerPage({ railwayProjectId, projectName }: Props) {
   const [status, setStatus] = useState<Status>('idle');
   const [result, setResult] = useState<DebugResult | null>(null);
 
   async function runDebugger() {
-    if (!projectId.trim()) return;
+    if (!railwayProjectId) return;
     setStatus('analyzing');
     setResult(null);
 
@@ -31,7 +30,7 @@ export default function DebuggerPage() {
       const res = await fetch(`${API_BASE}/debugger/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: projectId.trim() }),
+        body: JSON.stringify({ projectId: railwayProjectId }),
       });
 
       const data = (await res.json()) as DebugResult;
@@ -42,16 +41,11 @@ export default function DebuggerPage() {
         return;
       }
 
-      if (data.hasError && !data.fixed) {
-        setStatus('fixing');
-        setResult(data);
-      } else {
-        setStatus('done');
-        setResult(data);
-      }
+      setStatus(data.error ? 'error' : 'done');
+      setResult(data);
     } catch (err) {
       setStatus('error');
-      setResult({ hasError: true, error: err instanceof Error ? err.message : String(err) });
+      setResult({ error: err instanceof Error ? err.message : String(err) });
     }
   }
 
@@ -71,6 +65,9 @@ export default function DebuggerPage() {
         borderBottom: '1px solid #1e1e3f',
         background: '#0d0d1a',
         flexShrink: 0,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
       }}>
         <span style={{
           color: '#00ff88',
@@ -79,9 +76,9 @@ export default function DebuggerPage() {
           letterSpacing: '0.1em',
           textShadow: '0 0 8px rgba(0,255,136,0.4)',
         }}>
-          🤖 QUARK DEBUGGER
+          🔧 DEBUGGER — {projectName}
         </span>
-        <span style={{ color: '#3a3a5c', fontSize: 11, marginLeft: 12 }}>
+        <span style={{ color: '#3a3a5c', fontSize: 11 }}>
           Railway logs → AI analysis → auto-fix
         </span>
       </div>
@@ -98,76 +95,82 @@ export default function DebuggerPage() {
         width: '100%',
         alignSelf: 'center',
       }}>
-        {/* Project ID input */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <label style={{ color: '#6b7280', fontSize: 11, letterSpacing: '0.08em' }}>
-            RAILWAY PROJECT ID
-          </label>
-          <input
-            value={projectId}
-            onChange={(e) => setProjectId(e.target.value)}
-            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-            style={{
-              background: '#0d0d1a',
-              border: '1px solid #1e1e3f',
-              borderRadius: 6,
-              color: '#00ff88',
-              fontFamily: 'JetBrains Mono, monospace',
-              fontSize: 13,
-              padding: '10px 14px',
-              outline: 'none',
-              width: '100%',
-            }}
-            onFocus={(e) => { e.currentTarget.style.borderColor = '#00ff88'; }}
-            onBlur={(e) => { e.currentTarget.style.borderColor = '#1e1e3f'; }}
-          />
+        {/* Project info */}
+        <div style={{
+          background: '#0d0d1a',
+          border: '1px solid #1e1e3f',
+          borderRadius: 6,
+          padding: '10px 14px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+        }}>
+          <span style={{ color: '#3a3a5c', fontSize: 11, letterSpacing: '0.08em' }}>PROJECT ID</span>
+          <span style={{ color: '#00ff88', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {railwayProjectId}
+          </span>
         </div>
 
         {/* Run button */}
         <button
           onClick={runDebugger}
-          disabled={!projectId.trim() || status === 'analyzing' || status === 'fixing'}
+          disabled={!railwayProjectId || status === 'analyzing'}
           style={{
-            background: (status === 'analyzing' || status === 'fixing') ? '#1e1e3f' : '#00ff88',
-            color: (status === 'analyzing' || status === 'fixing') ? '#3a3a5c' : '#08080f',
+            background: status === 'analyzing' ? '#1e1e3f' : '#00ff88',
+            color: status === 'analyzing' ? '#3a3a5c' : '#08080f',
             border: 'none',
             borderRadius: 8,
             padding: '12px 24px',
             fontFamily: 'JetBrains Mono, monospace',
             fontWeight: 700,
             fontSize: 14,
-            cursor: (status === 'analyzing' || status === 'fixing') ? 'not-allowed' : 'pointer',
+            cursor: status === 'analyzing' ? 'not-allowed' : 'pointer',
             letterSpacing: '0.06em',
             alignSelf: 'flex-start',
             transition: 'all 0.15s ease',
           }}
         >
-          🤖 RUN DEBUGGER
+          {status === 'analyzing' ? '⟳ ANALIZANDO…' : '🤖 RUN DEBUGGER'}
         </button>
 
-        {/* Status banner */}
+        {/* Status banners */}
         {status === 'analyzing' && (
           <StatusBanner color="#00ff88" text="⟳ Analizando logs de Railway..." />
         )}
-        {status === 'fixing' && (
-          <StatusBanner color="#f59e0b" text="🔴 Error detectado — aplicando fix..." />
+        {status === 'done' && result?.fixed === true && (
+          <StatusBanner color="#00ff88" text={`✅ Fix aplicado en ${result.attempts} intento${result.attempts === 1 ? '' : 's'}`} />
         )}
-        {status === 'done' && result && !result.hasError && (
-          <StatusBanner color="#00ff88" text="✅ Sin errores detectados" />
-        )}
-        {status === 'done' && result?.fixed && (
-          <StatusBanner color="#00ff88" text={`✅ Fix aplicado — commit realizado: ${result.commitMessage ?? ''}`} />
+        {status === 'done' && result?.fixed === false && (
+          <StatusBanner color="#f59e0b" text={`⚠ No se pudo resolver después de ${result.attempts} intentos`} />
         )}
         {status === 'error' && (
           <StatusBanner color="#ff4444" text={`❌ ${result?.error ?? 'Error desconocido'}`} />
         )}
 
+        {/* Commits list */}
+        {result?.commits && result.commits.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <span style={{ color: '#3a3a5c', fontSize: 11, letterSpacing: '0.08em' }}>COMMITS</span>
+            {result.commits.map((c, i) => (
+              <div key={i} style={{
+                background: '#0d0d1a',
+                border: '1px solid #1e1e3f',
+                borderLeft: '2px solid #00ff88',
+                borderRadius: 4,
+                padding: '6px 12px',
+                color: '#a0aec0',
+                fontSize: 11,
+              }}>
+                {c}
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Result JSON */}
         {result && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <span style={{ color: '#3a3a5c', fontSize: 11, letterSpacing: '0.08em' }}>
-              RESPUESTA
-            </span>
+            <span style={{ color: '#3a3a5c', fontSize: 11, letterSpacing: '0.08em' }}>RESPUESTA</span>
             <pre style={{
               background: '#000',
               border: '1px solid #1e1e3f',

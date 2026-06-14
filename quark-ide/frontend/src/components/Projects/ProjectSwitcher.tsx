@@ -1,26 +1,19 @@
 import { useState } from 'react';
+import { PROJECTS, type Project } from '../../App';
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
 
-const PROJECTS = [
-  { name: 'Quark IDE',  emoji: '⚛️', repo: 'quark-ide',      branch: 'main', railwayProjectId: '5434ca01-48b0-4e39-82ee-67acdaa6d8af' },
-  { name: 'Signal OS',  emoji: '⚡', repo: 'Ahorar',          branch: 'main', railwayProjectId: '9e886245-114f-4bdf-9aa5-c87333aeef0a' },
-  { name: 'Sniper OS',  emoji: '🎯', repo: 'Trade-SnipeOS',   branch: 'main', railwayProjectId: '70612f14-41c5-48d5-9eb9-757861906b55' },
-  { name: 'Nexus OS',   emoji: '🌐', repo: 'NEXUS-OS-app',    branch: 'main', railwayProjectId: 'e4aac26a-e4d4-44fc-84a6-9bbef1ace410' },
-  { name: 'Core AI',    emoji: '🤖', repo: 'Code-Coretest',   branch: 'main', railwayProjectId: '3a13a380-68cb-43dd-a45b-2016fcb7baf0' },
-];
-
 interface Props {
-  onSwitch: (repo: string, branch: string) => void;
+  activeProject: Project;
+  onSwitch: (project: Project) => void;
 }
 
-export default function ProjectSwitcher({ onSwitch }: Props) {
-  const [active, setActive]     = useState(PROJECTS[0]);
-  const [open, setOpen]         = useState(false);
+export default function ProjectSwitcher({ activeProject, onSwitch }: Props) {
+  const [open, setOpen]           = useState(false);
   const [switching, setSwitching] = useState(false);
 
-  async function switchProject(p: typeof PROJECTS[0]) {
-    if (p.repo === active.repo) { setOpen(false); return; }
+  async function switchProject(p: Project) {
+    if (p.repo === activeProject.repo) { setOpen(false); return; }
     setSwitching(true);
     try {
       await fetch(`${API_BASE}/github/switch-project`, {
@@ -28,8 +21,7 @@ export default function ProjectSwitcher({ onSwitch }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ repo: p.repo, branch: p.branch }),
       });
-      setActive(p);
-      onSwitch(p.repo, p.branch);
+      onSwitch(p);
     } finally {
       setSwitching(false);
       setOpen(false);
@@ -55,7 +47,7 @@ export default function ProjectSwitcher({ onSwitch }: Props) {
           textAlign: 'left',
         }}
       >
-        <span style={{ fontSize: 16, lineHeight: 1 }}>{active.emoji}</span>
+        <span style={{ fontSize: 16, lineHeight: 1 }}>{activeProject.emoji}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
             color: '#00ff88',
@@ -67,7 +59,7 @@ export default function ProjectSwitcher({ onSwitch }: Props) {
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
           }}>
-            {switching ? 'SWITCHING…' : active.name.toUpperCase()}
+            {switching ? 'SWITCHING…' : activeProject.name.toUpperCase()}
           </div>
           <div style={{
             color: '#3a3a5c',
@@ -77,7 +69,7 @@ export default function ProjectSwitcher({ onSwitch }: Props) {
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
           }}>
-            {active.repo}/{active.branch}
+            {activeProject.repo}/{activeProject.branch}
           </div>
         </div>
         <span style={{
@@ -103,7 +95,7 @@ export default function ProjectSwitcher({ onSwitch }: Props) {
           boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
         }}>
           {PROJECTS.map((p) => {
-            const isActive = p.repo === active.repo;
+            const isActive = p.repo === activeProject.repo;
             return (
               <button
                 key={p.repo}

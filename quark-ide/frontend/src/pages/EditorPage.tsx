@@ -6,6 +6,7 @@ import ClaudeChat from '../components/Editor/ClaudeChat';
 import GitHubFileTree from '../components/FileTree/FileTree';
 import SandpackPreview from '../components/Preview/SandpackPreview';
 import ProjectSwitcher from '../components/Projects/ProjectSwitcher';
+import type { Project } from '../App';
 
 interface FileEntry {
   name: string;
@@ -135,7 +136,12 @@ function FileTree({
   );
 }
 
-export default function EditorPage() {
+interface EditorPageProps {
+  activeProject: Project;
+  onProjectChange: (p: Project) => void;
+}
+
+export default function EditorPage({ activeProject, onProjectChange }: EditorPageProps) {
   const isMobile = useIsMobile();
   const [files, setFiles] = useState<FileEntry[]>(INITIAL_FILES);
   const [activeFile, setActiveFile] = useState<FileEntry>(INITIAL_FILES[0]);
@@ -143,12 +149,11 @@ export default function EditorPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [treeKey, setTreeKey] = useState(0);
-  const [activeRepo, setActiveRepo] = useState('quark-ide');
   const drawerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
 
-  function handleProjectSwitch(repo: string, _branch: string) {
-    setActiveRepo(repo);
+  function handleProjectSwitch(project: Project) {
+    onProjectChange(project);
     setTreeKey((k) => k + 1);
   }
 
@@ -320,14 +325,14 @@ export default function EditorPage() {
                 overflowY: 'auto',
               }}
             >
-              <ProjectSwitcher onSwitch={handleProjectSwitch} />
+              <ProjectSwitcher activeProject={activeProject} onSwitch={handleProjectSwitch} />
               <FileTree
                 files={files}
                 activeFile={activeFile}
                 onSelect={selectFile}
                 onNewFile={newFile}
               />
-              <GitHubFileTree key={treeKey} onFileSelect={handleGithubFileSelect} activeRepo={activeRepo} />
+              <GitHubFileTree key={treeKey} onFileSelect={handleGithubFileSelect} activeRepo={activeProject.repo} />
             </div>
           </>
         )}
@@ -424,14 +429,14 @@ export default function EditorPage() {
           display: 'flex',
           flexDirection: 'column',
         }}>
-          <ProjectSwitcher onSwitch={handleProjectSwitch} />
+          <ProjectSwitcher activeProject={activeProject} onSwitch={handleProjectSwitch} />
           <FileTree
             files={files}
             activeFile={activeFile}
             onSelect={selectFile}
             onNewFile={newFile}
           />
-          <GitHubFileTree key={treeKey} onFileSelect={handleGithubFileSelect} activeRepo={activeRepo} />
+          <GitHubFileTree key={treeKey} onFileSelect={handleGithubFileSelect} activeRepo={activeProject.repo} />
         </div>
 
         {/* Col 2: Monaco editor */}
