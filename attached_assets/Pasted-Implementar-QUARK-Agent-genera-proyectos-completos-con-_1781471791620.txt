@@ -1,0 +1,224 @@
+Implementar QUARK Agent — genera proyectos completos 
+con Gemini y muestra preview + opción de commit manual.
+
+PASO 1 — backend/src/services/github.ts
+Agregar función commitMultipleFiles al final:
+
+export async function commitMultipleFiles(
+  files: { path: string; content: string }[],
+  message: string,
+  repo: string = DEFAULT_REPO,
+  branch: string = DEFAULT_BRANCH
+): Promise<string> {
+  // 1. Obtener SHA del branch actual
+  const ref = await octokit.git.getRef({
+    owner: OWNER, repo, ref: `heads/${branch}`
+  });
+  const latestCommitSha = ref.data.object.sha;
+
+  // 2. Obtener SHA del tree base
+  const commit = await octokit.git.getCommit({
+    owner: OWNER, repo, commit_sha: latestCommitSha
+  });
+  const baseTreeSha = commit.data.tree.sha;
+
+  // 3. Crear blobs en paralelo
+  const blobs = await Promise.all(
+    files.map(f => octokit.git.createBlob({
+      owner: OWNER, repo,
+      content: Buffer.from(f.content).toString('base64'),
+      encoding: 'base64'
+    }))
+  );
+
+  // 4. Crear nuevo tree
+  const tree = await octokit.git.createTree({
+    owner: OWNER, repo,
+    base_tree: baseTreeSha,
+    tree: files.map((f, i) => ({
+      path: f.path,
+      mode: '100644' as const,
+      type: 'blob' as const,
+      sha: blobs[i].data.sha
+    }))
+  });
+
+  // 5. Crear commit
+  const newCommit = await octokit.git.createCommit({
+    owner: OWNER, repo,
+    message,
+    tree: tree.data.sha,
+    parents: [latestCommitSha]
+  });
+
+  // 6. Actualizar branch ref
+  await octokit.git.updateRef({
+    owner: OWNER, repo,
+    ref: `heads/${branch}`,
+    sha: newCommit.data.sha
+  });
+
+  return newCommit.data.sha;
+}
+
+PASO 2 — backend/src/routes/agent.ts (nuevo archivo)
+Endpoint POST /agent/generate:
+
+import { Router } from 'express';
+import { getFileTree } from '../services/github.js';
+import { commitMultipleFiles } from '../services/github.js';
+import { GoogleGenerativeAI } from '@google/genai';
+
+const router = Router();
+const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+
+router.post('/generate', async (req, res) => {
+  const { prompt, repo, branch = 'main', projectName } = req.body;
+  if (!prompt || !repo) {
+    res.status(400).json({ error: 'prompt and repo are required' });
+    return;
+  }
+
+  // SSE setup
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  const send = (event: string, data: object) => {
+    res.write(`data: ${JSON.stringify({ event, ...data })}\n\n`);
+  };
+
+  try {
+    // Step 1: obtener file tree
+    send('action', { text: '🔍 Leyendo estructura del repo...' });
+    const tree = await getFileTree(repo, branch);
+    const filePaths = tree
+      .filter((f: any) => f.type === 'blob')
+      .map((f: any) => f.path)
+      .slice(0, 50)
+      .join('\n');
+
+    // Step 2: Gemini genera los archivos
+    send('action', { text: '🧠 Generando archivos con Gemini...' });
+    
+    const model = genai.getGenerativeModel({ 
+      model: 'gemini-2.5-flash-lite' 
+    });
+
+    const systemPrompt = `Eres un agente de código experto. 
+Tu tarea es generar archivos de código para un proyecto.
+
+Repo activo: ${projectName} (${repo})
+Archivos existentes en el repo:
+${filePaths}
+
+INSTRUCCIONES CRÍTICAS:
+- Responde SOLO con JSON válido, sin markdown, sin backticks
+- El JSON debe tener este formato exacto:
+{
+  "files": [
+    {"path": "src/components/App.tsx", "content": "código aquí"},
+    {"path": "src/hooks/useData.ts", "content": "código aquí"}
+  ],
+  "commitMessage": "feat: descripción del cambio",
+  "mainComponent": "src/components/App.tsx"
+}
+- mainComponent es el archivo TSX principal para el preview
+- Genera código real y funcional, no placeholders
+- Usa TypeScript, React, inline styles (no Tailwind)
+- Sin imports de librerías externas (solo react)`;
+
+    const result = await model.generateContent(
+      systemPrompt + '\n\nTAREA: ' + prompt
+    );
+    const raw = result.response.text().trim();
+    
+    // Parsear JSON
+    let parsed: any;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error('Gemini no devolvió JSON válido');
+      parsed = JSON.parse(match[0]);
+    }
+
+    const { files, commitMessage, mainComponent } = parsed;
+
+    // Step 3: reportar archivos generados
+    send('action', { text: `✏️ ${files.length} archivos generados:` });
+    for (const f of files) {
+      send('file', { path: f.path });
+    }
+
+    // Step 4: devolver resultado (sin commit aún)
+    const mainFile = files.find((f: any) => 
+      f.path === mainComponent
+    ) || files.find((f: any) => f.path.endsWith('.tsx')) || files[0];
+
+    send('done', {
+      files,
+      commitMessage,
+      mainComponent: mainFile?.path,
+      mainContent: mainFile?.content,
+      repo,
+      branch
+    });
+
+    res.end();
+
+  } catch (err: any) {
+    send('error', { text: err.message });
+    res.end();
+  }
+});
+
+export default router;
+
+PASO 3 — backend/src/index.ts
+Registrar el router:
+import agentRouter from './routes/agent.js';
+app.use('/agent', agentRouter);
+
+PASO 4 — frontend/src/components/Agent/QuarkAgent.tsx
+Nuevo componente con:
+
+Props: { activeProject: Project, onApplyToEditor: (code: string) => void }
+
+UI:
+- Input de texto para describir la app
+- Botón "⚡ Generar"
+- Feed de acciones en tiempo real (SSE)
+  muestra cada evento action/file/error
+- Al recibir 'done':
+  → Muestra botón "▶️ Ver Preview" 
+     (llama onApplyToEditor con mainContent)
+  → Muestra botón "⚡ Commit a GitHub"
+     (POST /github/commit-multiple con files+commitMessage+repo)
+
+PASO 5 — backend: agregar endpoint para commit manual
+En index.ts agregar:
+app.post('/github/commit-multiple', async (req, res) => {
+  const { files, message, repo, branch } = req.body;
+  try {
+    const sha = await commitMultipleFiles(files, message, repo, branch);
+    res.json({ sha });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+PASO 6 — Integrar QuarkAgent en EditorPage.tsx
+- Agregar tab "🤖 Agent" junto al chat actual
+- Cuando el tab Agent está activo, mostrar QuarkAgent
+- Pasar activeProject y onApplyToEditor
+
+Muéstrame cada archivo completo antes de guardar.
+Guarda en orden:
+1. github.ts (agregar commitMultipleFiles)
+2. agent.ts (nuevo route)
+3. index.ts (registrar route + endpoint commit-multiple)
+4. QuarkAgent.tsx (nuevo componente)
+5. EditorPage.tsx (agregar tab Agent)
+
+tsc --noEmit al final.

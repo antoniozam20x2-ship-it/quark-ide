@@ -5,10 +5,11 @@ import chatRouter from './routes/chat.js';
 import warroomRouter from './routes/warroom.js';
 import searchRouter from './routes/search.js';
 import memoryRouter from './routes/memory.js';
+import agentRouter from './routes/agent.js';
 import { getCosts } from './services/costTracker.js';
 import { initDb } from './services/db.js';
 import { seedOnce } from './services/rufloMemory.js';
-import { getFileTree, getFileContent, createOrUpdateFile, deleteFile } from './services/github.js';
+import { getFileTree, getFileContent, createOrUpdateFile, deleteFile, commitMultipleFiles } from './services/github.js';
 import { runDebugger } from './services/debugger.js';
 import previewRouter from './routes/preview.js';
 
@@ -34,6 +35,7 @@ app.use('/api/warroom', warroomRouter);
 app.use('/api/preview', previewRouter);
 app.use('/api/warroom/search', searchRouter);
 app.use('/api/memory', memoryRouter);
+app.use('/agent', agentRouter);
 
 app.get('/api/costs', (_req, res) => {
   res.json(getCosts());
@@ -97,6 +99,24 @@ app.post('/github/switch-project', (req, res) => {
   process.env.GITHUB_REPO   = repo;
   process.env.GITHUB_BRANCH = branch;
   res.json({ success: true, repo, branch });
+});
+
+app.post('/github/commit-multiple', async (req, res) => {
+  const { files, message, repo, branch } = req.body as {
+    files?: { path: string; content: string }[];
+    message?: string;
+    repo?: string;
+    branch?: string;
+  };
+  if (!files?.length || !message) {
+    res.status(400).json({ error: 'files and message are required' }); return;
+  }
+  try {
+    const sha = await commitMultipleFiles(files, message, repo, branch);
+    res.json({ sha });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
+  }
 });
 
 app.post('/debugger/run', async (req, res) => {

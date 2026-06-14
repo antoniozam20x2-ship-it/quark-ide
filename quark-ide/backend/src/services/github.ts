@@ -95,3 +95,58 @@ export async function deleteFile(path: string, message: string): Promise<void> {
     branch: b,
   });
 }
+
+export async function commitMultipleFiles(
+  files: { path: string; content: string }[],
+  message: string,
+  repo: string = DEFAULT_REPO,
+  branch: string = DEFAULT_BRANCH,
+): Promise<string> {
+  // 1. SHA del branch actual
+  const ref = await octokit.git.getRef({ owner: OWNER, repo, ref: `heads/${branch}` });
+  const latestCommitSha = ref.data.object.sha;
+
+  // 2. SHA del tree base
+  const commit = await octokit.git.getCommit({ owner: OWNER, repo, commit_sha: latestCommitSha });
+  const baseTreeSha = commit.data.tree.sha;
+
+  // 3. Crear blobs en paralelo
+  const blobs = await Promise.all(
+    files.map((f) =>
+      octokit.git.createBlob({
+        owner: OWNER, repo,
+        content: Buffer.from(f.content).toString('base64'),
+        encoding: 'base64',
+      }),
+    ),
+  );
+
+  // 4. Crear nuevo tree
+  const tree = await octokit.git.createTree({
+    owner: OWNER, repo,
+    base_tree: baseTreeSha,
+    tree: files.map((f, i) => ({
+      path: f.path,
+      mode: '100644' as const,
+      type: 'blob'  as const,
+      sha:  blobs[i].data.sha,
+    })),
+  });
+
+  // 5. Crear commit
+  const newCommit = await octokit.git.createCommit({
+    owner: OWNER, repo,
+    message,
+    tree:    tree.data.sha,
+    parents: [latestCommitSha],
+  });
+
+  // 6. Actualizar branch ref
+  await octokit.git.updateRef({
+    owner: OWNER, repo,
+    ref: `heads/${branch}`,
+    sha: newCommit.data.sha,
+  });
+
+  return newCommit.data.sha;
+}

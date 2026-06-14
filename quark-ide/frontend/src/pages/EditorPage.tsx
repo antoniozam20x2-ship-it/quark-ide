@@ -7,6 +7,7 @@ import GitHubFileTree from '../components/FileTree/FileTree';
 import SandpackPreview from '../components/Preview/SandpackPreview';
 import ProjectSwitcher from '../components/Projects/ProjectSwitcher';
 import type { Project } from '../App';
+import QuarkAgent from '../components/Agent/QuarkAgent';
 
 interface FileEntry {
   name: string;
@@ -146,7 +147,8 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
   const isMobile = useIsMobile();
   const [files, setFiles] = useState<FileEntry[]>(INITIAL_FILES);
   const [activeFile, setActiveFile] = useState<FileEntry>(INITIAL_FILES[0]);
-  const [mobileTab, setMobileTab] = useState<'editor' | 'chat' | 'preview'>('editor');
+  const [mobileTab, setMobileTab] = useState<'editor' | 'chat' | 'preview' | 'agent'>('editor');
+  const [panelTab, setPanelTab]   = useState<'chat' | 'agent'>('chat');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [treeKey, setTreeKey] = useState(0);
@@ -272,9 +274,10 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
           {/* Tabs */}
           <div style={{ display: 'flex', gap: 0, flexShrink: 0, paddingRight: 8 }}>
             {([
-              { key: 'editor', label: '</>' },
+              { key: 'editor',  label: '</>' },
               { key: 'preview', label: '▶' },
-              { key: 'chat', label: '⚛' },
+              { key: 'chat',    label: '⚛' },
+              { key: 'agent',   label: '🤖' },
             ] as const).map((t) => (
               <button
                 key={t.key}
@@ -400,6 +403,15 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
               layout="fullscreen"
             />
           )}
+          {mobileTab === 'agent' && (
+            <QuarkAgent
+              activeProject={activeProject}
+              onApplyToEditor={(code) => {
+                updateFile(code);
+                setMobileTab('editor');
+              }}
+            />
+          )}
         </div>
       </div>
     );
@@ -451,14 +463,60 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
           />
         </div>
 
-        {/* Col 3: Chat sidebar */}
-        <ClaudeChat
-          fileContent={activeFile.content}
-          fileName={activeFile.name}
-          onApplyToEditor={updateFile}
-          onSendToBoard={onSendToBoard}
-          layout="panel"
-        />
+        {/* Col 3: Chat / Agent sidebar */}
+        <div style={{
+          width: 320, flexShrink: 0, display: 'flex', flexDirection: 'column',
+          borderLeft: '1px solid #1e1e3f', background: '#0d0d1a', minHeight: 0,
+        }}>
+          {/* Tab toggle header */}
+          <div style={{
+            display: 'flex', gap: 0, borderBottom: '1px solid #1e1e3f', flexShrink: 0,
+          }}>
+            {([
+              { key: 'chat',  label: '⚛ CHAT' },
+              { key: 'agent', label: '🤖 AGENT' },
+            ] as const).map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setPanelTab(t.key)}
+                style={{
+                  flex: 1,
+                  background: panelTab === t.key ? 'rgba(0,255,136,0.08)' : 'transparent',
+                  border: 'none',
+                  borderBottom: `2px solid ${panelTab === t.key ? '#00ff88' : 'transparent'}`,
+                  color: panelTab === t.key ? '#00ff88' : '#3a3a5c',
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  padding: '8px 0',
+                  cursor: 'pointer',
+                  letterSpacing: '0.08em',
+                  transition: 'all 0.15s',
+                }}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Panel content */}
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            {panelTab === 'chat' ? (
+              <ClaudeChat
+                fileContent={activeFile.content}
+                fileName={activeFile.name}
+                onApplyToEditor={updateFile}
+                onSendToBoard={onSendToBoard}
+                layout="panel"
+              />
+            ) : (
+              <QuarkAgent
+                activeProject={activeProject}
+                onApplyToEditor={updateFile}
+              />
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Preview panel — bottom drawer */}
