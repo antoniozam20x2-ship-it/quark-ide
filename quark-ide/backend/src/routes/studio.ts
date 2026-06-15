@@ -42,14 +42,24 @@ REGLAS ESTRICTAS:
 - Interactividad básica con JavaScript inline si aplica (hover states, clicks)
 - Sin frameworks externos — solo HTML + CSS inline + JS vanilla`,
 
-  engineer: `Eres un engineer senior especialista en React y JavaScript puro.
-Dado un brief de producto con análisis de arquitectura y diseño, genera ÚNICAMENTE el siguiente texto — nada más, sin explicaciones:
+  engineer: `Eres un engineer senior especialista en React y TypeScript.
+Dado un brief de producto con análisis de arquitectura y diseño, genera ÚNICAMENTE un prompt técnico detallado para un agente de código.
 
-Crea una función React llamada App en JavaScript puro (sin TypeScript, sin imports, sin export) que implemente: [descripción específica del componente].
-Usa React.useState y React.useEffect. Inline styles con estos colores exactos: [colores del diseño].
-El componente debe ser interactivo y funcional. Máximo 60 líneas.
+El prompt debe especificar:
+1. Qué componentes crear con nombres exactos
+2. Colores exactos en hex del diseño (extráelos del brief del designer)
+3. Estructura de datos y estado necesario
+4. Interacciones y animaciones específicas
+5. Que use inline styles, solo React, sin librerías externas
 
-Sustituye los corchetes con los detalles específicos del brief. Devuelve SOLO el prompt, una sola vez, sin repetir, sin encabezados, sin numeración.`,
+FORMATO DE SALIDA — devuelve SOLO esto, sin explicaciones:
+"Crea un componente React TypeScript llamado [Nombre] que implemente [descripción detallada].
+Colores: fondo [hex], texto [hex], acentos [hex].
+Debe incluir: [lista de features específicas].
+Usa inline styles, React.useState, React.useEffect.
+Sin librerías externas. Completamente funcional e interactivo."
+
+Sustituye los corchetes con detalles específicos del brief. Una sola vez, sin repetir.`,
 
   qa: `Eres un QA engineer senior. Dado un brief de producto, define en máximo 6 líneas:
 - 3 criterios de éxito verificables
@@ -60,12 +70,38 @@ Sé específico y medible.`
 
 router.post('/analyze', async (req, res) => {
   try {
-    const { brief, role } = req.body
+    const { brief, role, architectResult, designerResult } = req.body
     if (!brief || !role) return res.status(400).json({ error: 'brief y role requeridos' })
 
     const systemPrompt = SYSTEM_PROMPTS[role]
     if (!systemPrompt) return res.status(400).json({ error: 'role inválido' })
 
+    // Engineer usa Claude via OpenRouter — entiende mejor el contexto visual y genera prompts más precisos
+    if (role === 'engineer') {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://quark-ide.railway.app',
+          'X-Title': 'QUARK IDE',
+        },
+        body: JSON.stringify({
+          model: 'anthropic/claude-sonnet-4-6',
+          max_tokens: 500,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: `BRIEF: ${brief}\n\nARQUITECTURA: ${architectResult ?? ''}\n\nDISEÑO: ${designerResult ?? ''}` },
+          ],
+        }),
+      })
+      const data = await response.json() as any
+      if (!response.ok) throw new Error(data?.error?.message ?? `OpenRouter ${response.status}`)
+      const text = data.choices?.[0]?.message?.content ?? ''
+      return res.json({ result: text, role })
+    }
+
+    // Resto de roles usan Gemini
     const result = await callGeminiWithRetry(() => ai.models.generateContent({
       model: 'gemini-2.0-flash-lite',
       contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\nBRIEF: ${brief}` }] }],

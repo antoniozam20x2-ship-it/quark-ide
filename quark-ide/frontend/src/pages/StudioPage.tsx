@@ -52,16 +52,23 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
     setAgents(AGENTS.map(a => ({ ...a, content: '', status: 'idle' })))
 
     const roles = ['architect', 'designer', 'engineer', 'qa']
+    const results: Record<string, string> = {}
 
     for (const role of roles) {
       updateAgent(role, { status: 'thinking' })
       try {
+        const body: Record<string, string> = { brief: input, role }
+        if (role === 'engineer') {
+          body.architectResult = results['architect'] ?? ''
+          body.designerResult  = results['designer']  ?? ''
+        }
         const res = await fetch(`${API_BASE}/api/studio/analyze`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ brief: input, role })
+          body: JSON.stringify(body)
         })
         const data = await res.json()
+        results[role] = data.result ?? ''
         updateAgent(role, { content: data.result, status: 'done' })
         if (role === 'designer') {
           setDesignPrototype(data.result ?? '')
