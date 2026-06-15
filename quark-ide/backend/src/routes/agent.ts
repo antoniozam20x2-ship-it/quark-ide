@@ -76,7 +76,7 @@ REGLAS PARA previewCode (MUY IMPORTANTE):
 - Ejemplo válido: function App() { const [x, setX] = React.useState(0); return <div>{x}</div>; }`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-lite',
+      model: 'gemini-3.1-flash-lite',
       contents: [{ role: 'user', parts: [{ text: systemPrompt + '\n\nTAREA: ' + prompt }] }],
       config: { maxOutputTokens: 8192 },
     });
