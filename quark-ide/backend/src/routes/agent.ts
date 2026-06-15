@@ -186,7 +186,7 @@ router.post('/generate-html', async (req, res) => {
       const geminiPrompt = `Convierte este componente React/TSX a HTML puro standalone (sin imports, sin build step, usando CDN de React desde unpkg).${filesContext}\n\nComponente principal:\n${code}\n\nResponde SOLO con el HTML completo, sin markdown ni backticks. Empieza con <!DOCTYPE html>.`;
 
       const response = await callGeminiWithRetry(() => ai.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
+        model: 'gemini-3.1-flash-lite',
         contents: [{ role: 'user', parts: [{ text: geminiPrompt }] }],
         config: { maxOutputTokens: 8192 },
       }));
