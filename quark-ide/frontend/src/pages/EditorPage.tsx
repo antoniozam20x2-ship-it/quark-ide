@@ -171,7 +171,7 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
     if (initialPrompt && initialPrompt.trim()) {
       setMobileTab('agent');
       setPanelTab('agent');
-      onPromptConsumed?.();
+      setTimeout(() => onPromptConsumed?.(), 2000);
     }
   }, [initialPrompt]);
 
