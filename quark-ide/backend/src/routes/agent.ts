@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { GoogleGenAI } from '@google/genai';
-import { getFileTree, commitMultipleFiles } from '../services/github.js';
+import { getFileTree } from '../services/github.js';
 
 const router = Router();
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
@@ -47,21 +47,33 @@ Repo activo: ${projectName ?? repo} (${repo})
 Archivos existentes en el repo:
 ${filePaths}
 
-INSTRUCCIONES CRÍTICAS:
-- Responde SOLO con JSON válido, sin markdown, sin backticks
-- El JSON debe tener este formato exacto:
+RESPONDE ÚNICAMENTE CON ESTE JSON (sin markdown, sin backticks, sin texto extra):
 {
   "files": [
-    {"path": "src/components/App.tsx", "content": "código aquí"},
-    {"path": "src/hooks/useData.ts", "content": "código aquí"}
+    {"path": "src/components/App.tsx", "content": "código TypeScript completo aquí"},
+    {"path": "src/hooks/useData.ts", "content": "código TypeScript completo aquí"}
   ],
   "commitMessage": "feat: descripción del cambio",
-  "mainComponent": "src/components/App.tsx"
+  "mainComponent": "src/components/App.tsx",
+  "previewCode": "función React en JavaScript puro aquí, sin imports, sin tipos TypeScript, sin export, usando React.useState en lugar de useState"
 }
-- mainComponent es el archivo TSX principal para el preview
-- Genera código real y funcional, no placeholders
-- Usa TypeScript, React, inline styles (no Tailwind)
-- Sin imports de librerías externas (solo react)`;
+
+REGLAS PARA files[].content:
+- TypeScript completo y funcional
+- Incluir todos los imports necesarios
+- Inline styles (no Tailwind)
+- Sin librerías externas (solo react)
+
+REGLAS PARA previewCode (MUY IMPORTANTE):
+- Sin imports de ningún tipo
+- Sin tipos TypeScript (:string, :number, :boolean, React.FC, etc.)
+- Sin generics (<string>, <number>, etc.)
+- Sin export default ni export const
+- Usar React.useState() no useState()
+- Usar React.useEffect() no useEffect()
+- Solo JSX y JavaScript puro
+- La función principal debe llamarse App
+- Ejemplo válido: function App() { const [x, setX] = React.useState(0); return <div>{x}</div>; }`;
 
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-lite',
@@ -74,7 +86,12 @@ INSTRUCCIONES CRÍTICAS:
     console.log('[Agent] Raw length:', raw.length);
     console.log('[Agent] Raw preview:', raw.slice(0, 300));
 
-    let parsed: { files: { path: string; content: string }[]; commitMessage: string; mainComponent: string };
+    let parsed: {
+      files: { path: string; content: string }[];
+      commitMessage: string;
+      mainComponent: string;
+      previewCode?: string;
+    };
     try {
       parsed = JSON.parse(raw);
     } catch {
@@ -84,9 +101,9 @@ INSTRUCCIONES CRÍTICAS:
     }
 
     console.log('[Agent] Parsed files count:', parsed?.files?.length);
-    console.log('[Agent] Main content length:', parsed?.files?.[0]?.content?.length);
+    console.log('[Agent] previewCode length:', parsed?.previewCode?.length);
 
-    const { files, commitMessage, mainComponent } = parsed;
+    const { files, commitMessage, mainComponent, previewCode } = parsed;
 
     // Step 3: reportar archivos generados
     send('action', { text: `✏️ ${files.length} archivos generados:` });
@@ -104,7 +121,9 @@ INSTRUCCIONES CRÍTICAS:
       files,
       commitMessage,
       mainComponent: mainFile?.path,
-      mainContent:   mainFile?.content,
+      // previewCode = JS puro listo para react-live
+      // fallback al .tsx si Gemini no generó previewCode
+      mainContent: previewCode ?? mainFile?.content,
       repo,
       branch,
     });
