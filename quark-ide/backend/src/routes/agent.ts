@@ -130,6 +130,13 @@ function App() {
     console.log('[Agent] Parsed files count:', parsed?.files?.length);
     console.log('[Agent] previewCode length:', parsed?.previewCode?.length);
 
+    if (parsed.previewCode) {
+      parsed.previewCode = parsed.previewCode
+        .replace(/^```[\w]*\n?/gm, '')
+        .replace(/```$/gm, '')
+        .trim();
+    }
+
     const { files, commitMessage, mainComponent, previewCode } = parsed;
 
     // Step 3: reportar archivos generados

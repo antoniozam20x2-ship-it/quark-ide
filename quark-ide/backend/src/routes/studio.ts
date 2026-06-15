@@ -36,15 +36,14 @@ Sé específico y conciso. Sin explicaciones largas.`,
 - UX flow principal
 Sé específico con valores exactos.`,
 
-  engineer: `Eres un engineer senior especialista en React y JavaScript.
-Dado un brief y el análisis de arquitectura y diseño, genera UN PROMPT EJECUTABLE para que otro agente de IA genere el código.
-El prompt debe:
-- Ser específico sobre qué componente crear
-- Incluir los colores exactos del diseño
-- Especificar el comportamiento interactivo
-- Pedir JavaScript puro (sin TypeScript, sin imports)
-- Pedir que el componente principal sea una función llamada App
-Máximo 10 líneas. Solo el prompt, nada más.`,
+  engineer: `Eres un engineer senior especialista en React y JavaScript puro.
+Dado un brief de producto con análisis de arquitectura y diseño, genera ÚNICAMENTE el siguiente texto — nada más, sin explicaciones:
+
+Crea una función React llamada App en JavaScript puro (sin TypeScript, sin imports, sin export) que implemente: [descripción específica del componente].
+Usa React.useState y React.useEffect. Inline styles con estos colores exactos: [colores del diseño].
+El componente debe ser interactivo y funcional. Máximo 60 líneas.
+
+Sustituye los corchetes con los detalles específicos del brief. Devuelve SOLO el prompt, una sola vez, sin repetir, sin encabezados, sin numeración.`,
 
   qa: `Eres un QA engineer senior. Dado un brief de producto, define en máximo 6 líneas:
 - 3 criterios de éxito verificables
