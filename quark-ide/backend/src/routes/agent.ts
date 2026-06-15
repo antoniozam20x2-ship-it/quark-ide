@@ -130,11 +130,28 @@ router.post('/generate', async (req, res) => {
       send('action', { text: `📖 Modo lectura directa — ${filePath}` });
       try {
         const content = await getFileContent(filePath, repo);
+
+        const keyword = prompt.match(/\b(EXPIRED|cronSchedule|cron|TTL|sweeper|signal|snipe|entry|exit|strategy|trigger|filter|interval|timeout|delay|retry|limit|threshold|price|fee|slippage)\b/i)?.[0];
+
+        let finalContent: string;
+        if (keyword) {
+          const lines = content.split('\n');
+          const relevant = lines
+            .map((line, i) => ({ line, num: i + 1 }))
+            .filter(({ line }) => line.toLowerCase().includes(keyword.toLowerCase()));
+          finalContent = relevant.length
+            ? relevant.map(({ line, num }) => `L${num}: ${line}`).join('\n')
+            : `// No se encontró '${keyword}' en ${filePath}`;
+          send('action', { text: `🔎 ${relevant.length} línea(s) con '${keyword}'` });
+        } else {
+          finalContent = content.split('\n').slice(0, 200).join('\n');
+        }
+
         send('done', {
-          files: [{ path: filePath, content }],
+          files: [{ path: filePath, content: finalContent }],
           commitMessage: '',
           mainComponent: filePath,
-          mainContent: content,
+          mainContent: finalContent,
           repo,
           branch,
         });
