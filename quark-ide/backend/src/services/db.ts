@@ -48,6 +48,14 @@ export async function initDb(): Promise<void> {
       created_at  TIMESTAMPTZ DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS editor_state (
+      id SERIAL PRIMARY KEY,
+      project_id TEXT NOT NULL UNIQUE,
+      files JSONB NOT NULL DEFAULT '[]',
+      active_file_name TEXT,
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_memory_namespace ON memory_entries(namespace);
   `);

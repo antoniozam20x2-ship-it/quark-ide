@@ -165,6 +165,41 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
     }
   }, [autoShowPreview]);
 
+  const backendUrl = window.location.origin.replace('frontend', 'backend');
+
+  // Al montar — cargar estado guardado
+  useEffect(() => {
+    const projectName = activeProject?.name || 'default';
+    fetch(`${backendUrl}/api/editor/state?project=${encodeURIComponent(projectName)}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.files && data.files.length > 0) {
+          setFiles(data.files);
+          const active = data.files.find((f: FileEntry) => f.name === data.activeFileName);
+          if (active) setActiveFile(active);
+        }
+      })
+      .catch(() => {});
+  }, []); // solo al montar
+
+  // Con debounce — guardar cuando files cambia
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const projectName = activeProject?.name || 'default';
+      fetch(`${backendUrl}/api/editor/state`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: projectName,
+          files,
+          activeFileName: activeFile.name,
+        }),
+      }).catch(() => {});
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [files, activeFile]);
+
   function handleProjectSwitch(project: Project) {
     onProjectChange(project);
     setTreeKey((k) => k + 1);

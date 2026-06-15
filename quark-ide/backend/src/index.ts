@@ -12,6 +12,7 @@ import { seedOnce } from './services/rufloMemory.js';
 import { getFileTree, getFileContent, createOrUpdateFile, deleteFile, commitMultipleFiles } from './services/github.js';
 import { runDebugger } from './services/debugger.js';
 import previewRouter from './routes/preview.js';
+import editorRouter from './routes/editor.js';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3001);
@@ -36,6 +37,7 @@ app.use('/api/preview', previewRouter);
 app.use('/api/warroom/search', searchRouter);
 app.use('/api/memory', memoryRouter);
 app.use('/agent', agentRouter);
+app.use('/api/editor', editorRouter);
 
 app.get('/api/costs', (_req, res) => {
   res.json(getCosts());
