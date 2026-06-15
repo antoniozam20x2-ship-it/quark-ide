@@ -165,39 +165,34 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
     }
   }, [autoShowPreview]);
 
-  const backendUrl = window.location.origin.replace('frontend', 'backend');
-
-  // Al montar — cargar estado guardado
+  // Al montar — restaurar desde localStorage
   useEffect(() => {
-    const projectName = activeProject?.name || 'default';
-    fetch(`${backendUrl}/api/editor/state?project=${encodeURIComponent(projectName)}`)
-      .then(r => r.json())
-      .then(data => {
-        if (data.files && data.files.length > 0) {
-          setFiles(data.files);
-          const active = data.files.find((f: FileEntry) => f.name === data.activeFileName);
-          if (active) setActiveFile(active);
+    try {
+      const projectName = activeProject?.name || 'default'
+      const saved = localStorage.getItem(`quark-editor-${projectName}`)
+      if (saved) {
+        const { files: savedFiles, activeFileName } = JSON.parse(saved)
+        if (savedFiles && savedFiles.length > 0) {
+          setFiles(savedFiles)
+          const active = savedFiles.find((f: FileEntry) => f.name === activeFileName)
+          if (active) setActiveFile(active)
         }
-      })
-      .catch(() => {});
-  }, []); // solo al montar
+      }
+    } catch (e) {}
+  }, [])
 
-  // Con debounce — guardar cuando files cambia
+  // Con debounce — guardar en localStorage cuando files cambia
   useEffect(() => {
     const timer = setTimeout(() => {
-      const projectName = activeProject?.name || 'default';
-      fetch(`${backendUrl}/api/editor/state`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectId: projectName,
+      try {
+        const projectName = activeProject?.name || 'default'
+        localStorage.setItem(`quark-editor-${projectName}`, JSON.stringify({
           files,
-          activeFileName: activeFile.name,
-        }),
-      }).catch(() => {});
-    }, 1500);
-
-    return () => clearTimeout(timer);
+          activeFileName: activeFile.name
+        }))
+      } catch (e) {}
+    }, 1500)
+    return () => clearTimeout(timer)
   }, [files, activeFile]);
 
   function handleProjectSwitch(project: Project) {
