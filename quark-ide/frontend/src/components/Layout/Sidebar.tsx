@@ -18,28 +18,14 @@ export default function Sidebar({ activePage, onNavigate }: Props) {
         overflow: 'hidden',
       }}
     >
-      {/* Logo */}
-      <div className="flex flex-col items-center mb-4 px-1">
-        <span
-          className="text-lg font-bold"
-          style={{
-            color: '#00ff88',
-            textShadow: '0 0 10px rgba(0,255,136,0.5)',
-            fontFamily: 'JetBrains Mono, monospace',
-            lineHeight: 1,
-          }}
-        >
-          ⚛
-        </span>
-      </div>
-
-      {/* Agent Nav */}
+      {/* Agent Nav — logo + nav fusionados */}
       <NavItem
         icon="⚛"
         label="Agent"
         active={activePage === 'agent'}
         onClick={() => onNavigate('agent')}
         violet
+        large
       />
 
       {/* Editor Nav */}
@@ -83,6 +69,7 @@ function NavItem({
   onClick,
   violet,
   red,
+  large,
 }: {
   icon: string;
   label: string;
@@ -90,6 +77,7 @@ function NavItem({
   onClick: () => void;
   violet?: boolean;
   red?: boolean;
+  large?: boolean;
 }) {
   const activeColor = violet ? '#7c3aed' : red ? '#ff4444' : '#00ff88';
   return (
@@ -98,7 +86,7 @@ function NavItem({
       title={label}
       style={{
         width: 44,
-        height: 44,
+        height: large ? 52 : 44,
         background: active ? (violet ? 'rgba(124,58,237,0.12)' : 'rgba(0,255,136,0.08)') : 'transparent',
         border: 'none',
         borderRadius: 6,
@@ -106,10 +94,11 @@ function NavItem({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        fontSize: 18,
+        fontSize: large ? 26 : 18,
         position: 'relative',
         transition: 'all 0.15s ease',
         borderLeft: active ? `2px solid ${activeColor}` : '2px solid transparent',
+        marginBottom: large ? 6 : 0,
       }}
     >
       {icon}
