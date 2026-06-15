@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { GoogleGenAI } from '@google/genai';
-import { getFileTree } from '../services/github.js';
+import { getFileTree, getFileContent } from '../services/github.js';
 
 const router = Router();
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
@@ -56,6 +56,50 @@ REGLAS:
   return JSON.parse(text.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim());
 }
 
+// ── Read intent detection ────────────────────────────────────────────────────
+const READ_KEYWORDS  = /\b(lee|leer|muéstrame|muestra|busca|buscar|encuentra|ver|dime|qué tiene|qué hay|analiza|analizar|diagnóstico|diagnóstica|revisa|revisar|explica|explicar|describe|describir|inspecciona|inspeccionar|abre|abrir|lista|listar|qué hace|cómo está|cómo funciona|show me|read|find|look at)\b/i;
+const GEN_KEYWORDS   = /\b(genera|generar|crea|crear|escribe|escribir|implementa|implementar|añade|añadir|agrega|agregar|cambia|cambiar|modifica|modificar|fix|arregla|arreglar|refactoriza|refactorizar|construye|construir|desarrolla|desarrollar|actualiza|actualizar|add|create|write|implement|modify|change|build)\b/i;
+
+function detectReadIntent(prompt: string): boolean {
+  const hasRead = READ_KEYWORDS.test(prompt);
+  const hasGen  = GEN_KEYWORDS.test(prompt);
+  // Read intent only if has read keywords AND no explicit generation keywords
+  return hasRead && !hasGen;
+}
+
+// Ask Gemini to pick the most relevant file paths from the tree given the prompt
+async function identifyFilesToRead(
+  prompt: string,
+  filePaths: string,
+): Promise<string[]> {
+  const identifyPrompt = `Dado este prompt del usuario y esta lista de archivos de un repo, devuelve un JSON array con los paths de los archivos más relevantes para responder al prompt. Máximo 5 archivos. Solo paths que existen en la lista.
+
+PROMPT: ${prompt}
+
+ARCHIVOS DISPONIBLES:
+${filePaths}
+
+Responde SOLO con un JSON array de strings, sin markdown ni explicaciones. Ejemplo: ["src/server.ts","src/db.ts"]`;
+
+  const resp = await callGeminiWithRetry(() => ai.models.generateContent({
+    model: 'gemini-3.1-flash-lite',
+    contents: [{ role: 'user', parts: [{ text: identifyPrompt }] }],
+    config: { maxOutputTokens: 512 },
+  }));
+
+  const raw = (resp.text ?? '').trim()
+    .replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
+
+  try {
+    const paths = JSON.parse(raw) as string[];
+    return Array.isArray(paths) ? paths.slice(0, 5) : [];
+  } catch {
+    // Fallback: extract anything that looks like a file path
+    const matches = raw.match(/"([^"]+\.[a-z]{1,5})"/g) ?? [];
+    return matches.map((m) => m.replace(/"/g, '')).slice(0, 5);
+  }
+}
+
 router.post('/generate', async (req, res) => {
   const { prompt, repo, branch = 'main', projectName } = req.body as {
     prompt?: string;
@@ -79,16 +123,61 @@ router.post('/generate', async (req, res) => {
   };
 
   try {
-    // Step 1: file tree
+    // Step 1: file tree (always needed)
     send('action', { text: '🔍 Leyendo estructura del repo...' });
     const tree = await getFileTree(repo, branch);
     const filePaths = tree
       .filter((f) => f.type === 'blob')
       .map((f) => f.path)
-      .slice(0, 50)
+      .slice(0, 80)
       .join('\n');
 
-    // Step 2: Gemini genera archivos
+    // ── READ PATH — no Gemini generation, just fetch real file content ────────
+    if (detectReadIntent(prompt)) {
+      send('action', { text: '📖 Modo lectura — identificando archivos relevantes...' });
+
+      const pathsToRead = await identifyFilesToRead(prompt, filePaths);
+
+      if (!pathsToRead.length) {
+        send('action', { text: '⚠️ No se encontraron archivos relevantes para ese prompt.' });
+        send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+        await new Promise((r) => setTimeout(r, 100));
+        res.end();
+        return;
+      }
+
+      send('action', { text: `📂 Leyendo ${pathsToRead.length} archivo(s) de GitHub...` });
+
+      const readFiles: { path: string; content: string }[] = [];
+
+      for (const filePath of pathsToRead) {
+        try {
+          send('file', { path: filePath });
+          const content = await getFileContent(filePath, repo);
+          readFiles.push({ path: filePath, content });
+          console.log(`[Agent/Read] ✅ ${filePath} (${content.length} chars)`);
+        } catch (e: any) {
+          console.warn(`[Agent/Read] ⚠️ Could not read ${filePath}:`, e.message);
+          send('action', { text: `⚠️ No se pudo leer: ${filePath}` });
+        }
+      }
+
+      // done with real file content — no commitMessage (read-only)
+      send('done', {
+        files:         readFiles,
+        commitMessage: '',
+        mainComponent: readFiles[0]?.path ?? '',
+        mainContent:   readFiles[0]?.content ?? '',
+        repo,
+        branch,
+      });
+
+      await new Promise((r) => setTimeout(r, 100));
+      res.end();
+      return;
+    }
+
+    // ── GENERATION PATH — Gemini generates new/modified files ────────────────
     send('action', { text: '🧠 Generando archivos con Gemini...' });
 
     const systemPrompt = `Eres un agente de código experto.
