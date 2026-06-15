@@ -77,7 +77,12 @@ REGLAS PARA files[].content:
 - TypeScript completo y funcional
 - Incluir todos los imports necesarios
 - Inline styles (no Tailwind)
-- Sin librerías externas (solo react)`;
+- Sin librerías externas (solo react)
+
+CRÍTICO: El JSON debe usar SOLO comillas dobles.
+NUNCA uses comillas simples en property names ni values.
+NUNCA incluyas comentarios dentro del JSON.
+El campo content de cada archivo debe ser un string JSON válido con caracteres escapados correctamente.`;
 
     const response = await callGeminiWithRetry(() => ai.models.generateContent({
       model: 'gemini-3.1-flash-lite',
@@ -94,14 +99,30 @@ REGLAS PARA files[].content:
       files: { path: string; content: string }[];
       commitMessage: string;
       mainComponent: string;
-      previewCode?: string;
     };
     try {
+      // Intento 1: JSON directo
       parsed = JSON.parse(raw);
     } catch {
-      const match = raw.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error('Gemini no devolvió JSON válido');
-      parsed = JSON.parse(match[0]);
+      try {
+        // Intento 2: limpiar backticks y markdown
+        const cleaned = raw
+          .replace(/```json\s*/gi, '')
+          .replace(/```\s*/gi, '')
+          .trim();
+        parsed = JSON.parse(cleaned);
+      } catch {
+        // Intento 3: extraer el primer objeto JSON que contenga "files"
+        const match = raw.match(/\{[\s\S]*"files"[\s\S]*\}/);
+        if (!match) throw new Error(`JSON inválido de Gemini: ${raw.slice(0, 200)}`);
+        try {
+          parsed = JSON.parse(match[0]);
+        } catch {
+          // Intento 4: reparar comillas simples en property names
+          const repaired = match[0].replace(/(['"])?([a-zA-Z_][a-zA-Z0-9_]*)(['"])?\s*:/g, '"$2":');
+          parsed = JSON.parse(repaired);
+        }
+      }
     }
 
     console.log('[Agent] Parsed files count:', parsed?.files?.length);
