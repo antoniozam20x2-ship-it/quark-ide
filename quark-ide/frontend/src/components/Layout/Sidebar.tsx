@@ -33,6 +33,15 @@ export default function Sidebar({ activePage, onNavigate }: Props) {
         </span>
       </div>
 
+      {/* Agent Nav */}
+      <NavItem
+        icon="⚛"
+        label="Agent"
+        active={activePage === 'agent'}
+        onClick={() => onNavigate('agent')}
+        violet
+      />
+
       {/* Editor Nav */}
       <NavItem
         icon="💻"

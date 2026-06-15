@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import Sidebar from './components/Layout/Sidebar';
+import AgentPage from './pages/AgentPage';
 import EditorPage from './pages/EditorPage';
 import WarRoomPage from './pages/WarRoomPage';
 import DebuggerPage from './pages/DebuggerPage';
 
-export type Page = 'editor' | 'warroom' | 'debugger';
+export type Page = 'agent' | 'editor' | 'warroom' | 'debugger';
 
 export interface Project {
   name: string;
@@ -23,7 +24,7 @@ export const PROJECTS: Project[] = [
 ];
 
 export default function App() {
-  const [page, setPage]                   = useState<Page>('editor');
+  const [page, setPage]                   = useState<Page>('agent');
   const [activeProject, setActiveProject] = useState<Project>(PROJECTS[0]);
   const [boardBrief, setBoardBrief]       = useState<string>('');
 
@@ -34,6 +35,9 @@ export default function App() {
     >
       <Sidebar activePage={page} onNavigate={setPage} />
       <div className="flex-1" style={{ minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'clip' }}>
+        {page === 'agent' && (
+          <AgentPage onOpenEditor={() => setPage('editor')} />
+        )}
         {page === 'editor' && (
           <EditorPage
             activeProject={activeProject}
