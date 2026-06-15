@@ -171,4 +171,54 @@ function App() {
   }
 });
 
+const GENERATE_HTML_SYSTEM_PROMPT = `You are an elite UI engineer and visual designer. Your job is to generate a SINGLE complete HTML file with embedded CSS and JavaScript that implements the requested UI with exceptional visual quality.
+
+STRICT RULES:
+1. Return ONLY raw HTML. No markdown, no explanation, no code fences. Start with <!DOCTYPE html>.
+2. All CSS must be inside a <style> tag in <head>.
+3. All JavaScript must be inside a <script> tag before </body>.
+4. No external CDN links. Use only vanilla HTML/CSS/JS.
+5. Make it visually stunning. Use the exact colors, typography, and layout described in the brief.
+6. Include real placeholder content: product names, prices, descriptions — all invented but coherent.
+7. The design must be fully responsive and work inside an iframe at 390px width (mobile-first).
+8. Implement ALL interactions described: hover effects, cart updates, modals, animations.
+9. Color palette: respect what the brief specifies. If cyberpunk: use #0a0a0a background, neon green #00ff88 accents, monospace fonts.
+10. DO NOT generate a skeleton. Generate a COMPLETE, production-quality UI.`;
+
+router.post('/generate-html', async (req, res) => {
+  const { prompt, projectName } = req.body as { prompt?: string; projectName?: string };
+  if (!prompt) return res.status(400).json({ success: false, error: 'prompt requerido' });
+
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://quark-ide.railway.app',
+        'X-Title': 'QUARK IDE',
+      },
+      body: JSON.stringify({
+        model: 'anthropic/claude-sonnet-4-6',
+        max_tokens: 4000,
+        messages: [
+          { role: 'system', content: GENERATE_HTML_SYSTEM_PROMPT },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    });
+
+    const data = await response.json() as any;
+    if (!response.ok) throw new Error(data?.error?.message ?? `OpenRouter ${response.status}`);
+
+    const html = data.choices?.[0]?.message?.content ?? '';
+    if (!html) throw new Error('OpenRouter no devolvió contenido');
+
+    res.json({ html, success: true });
+  } catch (err) {
+    console.error('[generate-html] error:', err);
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 export default router;

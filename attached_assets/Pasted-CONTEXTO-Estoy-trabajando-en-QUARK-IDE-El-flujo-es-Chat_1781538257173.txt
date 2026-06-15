@@ -1,0 +1,113 @@
+CONTEXTO:
+Estoy trabajando en QUARK IDE. El flujo es:
+Chat → Studio → QUARK Agent → Preview → Commit.
+
+El problema actual: cuando QUARK Agent genera el 
+código y se muestra en Preview (react-live), el 
+resultado es demasiado básico. El Preview muestra 
+solo texto plano porque react-live tiene limitaciones 
+severas de imports y CSS complejo.
+
+OBJETIVO:
+Cambiar el sistema de Preview del QUARK Agent para 
+que en lugar de usar react-live, use un <iframe> 
+con HTML/CSS/JS completo. Simultáneamente, cambiar 
+el modelo generador de código del Agent para usar 
+Claude claude-sonnet-4-6 vía OpenRouter en lugar de 
+Gemini, porque Claude genera HTML/CSS mucho más rico 
+y detallado.
+
+CAMBIOS EXACTOS A IMPLEMENTAR:
+
+─────────────────────────────────────────
+CAMBIO 1 — BACKEND: nueva ruta de generación
+─────────────────────────────────────────
+Archivo: backend/src/routes/agent.ts 
+(o donde esté la ruta del QUARK Agent)
+
+Agregar una nueva ruta POST /api/agent/generate-html
+
+Esta ruta recibe:
+{
+  "prompt": string,        // el brief completo del Studio
+  "projectName": string    // nombre del proyecto activo
+}
+
+Y llama a OpenRouter con este modelo:
+  model: "anthropic/claude-sonnet-4-6"
+  
+Con este system prompt EXACTO:
+---
+You are an elite UI engineer and visual designer. 
+Your job is to generate a SINGLE complete HTML file 
+with embedded CSS and JavaScript that implements the 
+requested UI with exceptional visual quality.
+
+STRICT RULES:
+1. Return ONLY raw HTML. No markdown, no explanation, 
+   no code fences. Start with <!DOCTYPE html>.
+2. All CSS must be inside a <style> tag in <head>.
+3. All JavaScript must be inside a <script> tag 
+   before </body>.
+4. No external CDN links. Use only vanilla HTML/CSS/JS.
+5. Make it visually stunning. Use the exact colors, 
+   typography, and layout described in the brief.
+6. Include real placeholder content: product names, 
+   prices, descriptions — all invented but coherent.
+7. The design must be fully responsive and work 
+   inside an iframe at 390px width (mobile-first).
+8. Implement ALL interactions described: hover 
+   effects, cart updates, modals, animations.
+9. Color palette: respect what the brief specifies. 
+   If cyberpunk: use #0a0a0a background, neon green 
+   #00ff88 accents, monospace fonts.
+10. DO NOT generate a skeleton. Generate a COMPLETE, 
+    production-quality UI.
+---
+
+El user prompt que se envía es el `prompt` recibido.
+
+La respuesta (HTML crudo) se devuelve así:
+{
+  "html": "<string con el HTML completo>",
+  "success": true
+}
+
+Si hay error:
+{
+  "success": false,
+  "error": "mensaje"
+}
+
+─────────────────────────────────────────
+CAMBIO 2 — FRONTEND: PreviewPanel con iframe
+─────────────────────────────────────────
+Archivo: frontend/src/components/QuarkAgent.tsx
+(o el componente donde está el botón "Ver Preview")
+
+Cuando el usuario hace click en "▶️ Ver Preview":
+
+1. Si el Agent ya tiene `generatedHtml` en su estado
+   → renderizar directamente en el iframe (ver abajo).
+
+2. Si NO tiene HTML aún (flujo normal desde Studio):
+   → llamar a POST /api/agent/generate-html con el 
+     prompt del Studio.
+   → mostrar loading: "⚡ Generando con Claude..."
+   → al recibir la respuesta, guardar el HTML en 
+     estado y renderizarlo en el iframe.
+
+El iframe debe renderizarse así:
+```tsx
+<iframe
+  srcDoc={generatedHtml}
+  style={{
+    width: '100%',
+    height: '600px',
+    border: 'none',
+    borderRadius: '8px',
+    background: '#0a0a0a'
+  }}
+  sandbox="allow-scripts allow-same-origin"
+  title="QUARK Preview"
+/>

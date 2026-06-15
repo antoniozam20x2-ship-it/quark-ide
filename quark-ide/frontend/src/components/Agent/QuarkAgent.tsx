@@ -59,8 +59,10 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   const [running, setRunning]       = useState(false);
   const [feed, setFeed]             = useState<AgentEvent[]>([]);
   const [result, setResult]         = useState<AgentEvent | null>(null);
-  const [committing, setCommitting] = useState(false);
-  const [commitSha, setCommitSha]   = useState('');
+  const [committing, setCommitting]         = useState(false);
+  const [commitSha, setCommitSha]           = useState('');
+  const [generatedHtml, setGeneratedHtml]   = useState<string>('');
+  const [isGeneratingHtml, setIsGeneratingHtml] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -136,6 +138,27 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
       setFeed((prev) => [...prev, { event: 'error', text: err instanceof Error ? err.message : String(err) }]);
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function generateHtml() {
+    if (generatedHtml) return; // ya existe, el iframe ya se muestra
+    const text = prompt.trim();
+    if (!text || isGeneratingHtml) return;
+    setIsGeneratingHtml(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/agent/generate-html`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: text, projectName: activeProject.name }),
+      });
+      const data = await res.json() as { html?: string; success: boolean; error?: string };
+      if (!data.success || !data.html) throw new Error(data.error ?? 'Sin HTML');
+      setGeneratedHtml(data.html);
+    } catch (err) {
+      setFeed((prev) => [...prev, { event: 'error', text: err instanceof Error ? err.message : String(err) }]);
+    } finally {
+      setIsGeneratingHtml(false);
     }
   }
 
@@ -245,28 +268,24 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
             </div>
 
             <div style={{ display: 'flex', gap: 8 }}>
-              {result.mainContent && (
+              {!generatedHtml && (
                 <button
-                  onClick={() => {
-                    const cleaned = cleanCodeForPreview(result.mainContent!)
-                    if (cleaned.trim()) {
-                      onApplyToEditor(cleaned)
-                      onShowPreview()
-                    } else {
-                      onApplyToEditor(result.mainContent!)
-                      onShowPreview()
-                    }
-                  }}
+                  onClick={generateHtml}
+                  disabled={isGeneratingHtml}
                   style={{
-                    flex: 1, background: 'rgba(0,255,136,0.1)', border: '1px solid #1e3f2a',
-                    borderRadius: 6, color: '#00ff88', fontFamily: 'JetBrains Mono, monospace',
-                    fontSize: 11, fontWeight: 700, padding: '8px 12px', cursor: 'pointer',
+                    flex: 1,
+                    background: isGeneratingHtml ? '#1e1e3f' : 'rgba(0,255,136,0.1)',
+                    border: '1px solid #1e3f2a',
+                    borderRadius: 6, color: isGeneratingHtml ? '#3a3a5c' : '#00ff88',
+                    fontFamily: 'JetBrains Mono, monospace',
+                    fontSize: 11, fontWeight: 700, padding: '8px 12px',
+                    cursor: isGeneratingHtml ? 'not-allowed' : 'pointer',
                     letterSpacing: '0.04em', transition: 'background 0.15s',
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(0,255,136,0.18)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(0,255,136,0.1)')}
+                  onMouseEnter={(e) => { if (!isGeneratingHtml) e.currentTarget.style.background = 'rgba(0,255,136,0.18)'; }}
+                  onMouseLeave={(e) => { if (!isGeneratingHtml) e.currentTarget.style.background = 'rgba(0,255,136,0.1)'; }}
                 >
-                  ▶️ Ver Preview
+                  {isGeneratingHtml ? '⚡ Generando con Claude…' : '▶️ Ver Preview'}
                 </button>
               )}
 
@@ -300,6 +319,36 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                 </div>
               )}
             </div>
+
+            {generatedHtml && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#3a3a5c', marginBottom: 6 }}>
+                  // preview — Claude claude-sonnet-4-6
+                </div>
+                <iframe
+                  srcDoc={generatedHtml}
+                  style={{
+                    width: '100%',
+                    height: 600,
+                    border: 'none',
+                    borderRadius: 8,
+                    background: '#0a0a0a',
+                  }}
+                  sandbox="allow-scripts allow-same-origin"
+                  title="QUARK Preview"
+                />
+                <button
+                  onClick={() => setGeneratedHtml('')}
+                  style={{
+                    marginTop: 6, background: 'transparent', border: '1px solid #1e1e3f',
+                    borderRadius: 6, color: '#3a3a5c', fontFamily: 'JetBrains Mono, monospace',
+                    fontSize: 10, padding: '4px 10px', cursor: 'pointer',
+                  }}
+                >
+                  ✕ cerrar preview
+                </button>
+              </div>
+            )}
           </div>
         )}
 
