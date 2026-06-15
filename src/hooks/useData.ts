@@ -1,34 +1,13 @@
 import { useState, useEffect } from 'react';
 
-interface Data {
-  message: string;
-}
-
-const useData = () => {
-  const [data, setData] = useState<Data | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
+export const useData = <T>(initialData: T) => {
+  const [data, setData] = useState<T>(initialData);
+  const [loading, setLoading] = useState<boolean>(false);
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        // In a real app, you would fetch data from an API
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate network delay
-        const mockData: Data = {
-          message: 'Welcome to the Calculator!'
-        };
-        setData(mockData);
-      } catch (err) {
-        setError('Failed to fetch data.');
-      } finally {
-        setLoading(false);
-      }
-    };
+    setLoading(true);
+    setTimeout(() => setLoading(false), 500);
+  }, [data]);
 
-    fetchData();
-  }, []);
-
-  return { data, loading, error };
+  return { data, loading, setData };
 };
-
-export default useData;
