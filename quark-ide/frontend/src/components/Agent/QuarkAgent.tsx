@@ -72,35 +72,50 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
       // queden partidos entre chunks y fallen el JSON.parse
       let buffer = '';
 
+      const processBlock = (block: string) => {
+        for (const line of block.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const parsed = JSON.parse(line.slice(6)) as AgentEvent;
+            console.log('[Agent] Event:', parsed.event);
+            setFeed((prev) => [...prev, parsed]);
+            if (parsed.event === 'done') {
+              console.log('[Agent] Done — files:', parsed.files?.length, 'mainContent:', parsed.mainContent?.length);
+              setResult(parsed);
+              if (parsed.mainContent) {
+                onApplyToEditor(parsed.mainContent);
+              }
+              setRunning(false);
+            }
+            if (parsed.event === 'error') {
+              setRunning(false);
+            }
+          } catch (e) {
+            console.warn('[Agent] Parse error on line:', line.slice(0, 100), e);
+          }
+        }
+      };
+
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
+        if (value) {
+          buffer += decoder.decode(value, { stream: !done });
+        }
 
         // Partir por \n\n: cada bloque es un evento SSE completo
         const blocks = buffer.split('\n\n');
-        buffer = blocks.pop() ?? ''; // el último puede estar incompleto
+        // Si el stream terminó, procesar todos los bloques incluyendo el último
+        // Si no, el último puede estar incompleto — guardarlo para el próximo chunk
+        buffer = done ? '' : (blocks.pop() ?? '');
 
         for (const block of blocks) {
-          for (const line of block.split('\n')) {
-            if (!line.startsWith('data: ')) continue;
-            try {
-              const parsed = JSON.parse(line.slice(6)) as AgentEvent;
-              console.log('[Agent] Event:', parsed.event);
-              setFeed((prev) => [...prev, parsed]);
-              if (parsed.event === 'done') {
-                console.log('[Agent] Done — files:', parsed.files?.length, 'mainContent:', parsed.mainContent?.length);
-                setResult(parsed);
-                setRunning(false);
-              }
-              if (parsed.event === 'error') {
-                setRunning(false);
-              }
-            } catch (e) {
-              console.warn('[Agent] Parse error on line:', line.slice(0, 100), e);
-            }
-          }
+          processBlock(block);
+        }
+        // Si el stream terminó y quedó algo en buffer (sin \n\n final), procesarlo también
+        if (done) {
+          if (buffer.trim()) processBlock(buffer);
+          break;
         }
       }
     } catch (err) {
