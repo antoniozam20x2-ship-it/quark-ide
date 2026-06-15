@@ -53,6 +53,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     setFeed([]);
     setResult(null);
     setCommitSha('');
+    setGeneratedHtml('');
 
     try {
       const res = await fetch(`${API_BASE}/agent/generate`, {
@@ -125,13 +126,21 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     }
   }
 
+  // Auto-dispara el preview cuando result llega con contenido
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (result && !generatedHtml && !isGeneratingHtml) {
+      generateHtml();
+    }
+  }, [result]);
+
   async function generateHtml() {
     if (!result) return;
     if (generatedHtml) return;
     if (isGeneratingHtml) return;
     setIsGeneratingHtml(true);
     try {
-      const res = await fetch(`${API_BASE}/api/agent/generate-html`, {
+      const res = await fetch(`${API_BASE}/agent/generate-html`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
