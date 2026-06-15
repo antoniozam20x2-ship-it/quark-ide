@@ -123,7 +123,31 @@ router.post('/generate', async (req, res) => {
   };
 
   try {
-    // Step 1: file tree (always needed)
+    // ── FAST READ PATH — explicit filename in prompt, skip tree + Gemini ──────
+    const fastFileMatch = prompt.match(/[\w/\-\.]+\.(ts|tsx|js|jsx|json|py|md|yml|yaml|env|sh|css|html)/);
+    if (fastFileMatch && READ_KEYWORDS.test(prompt) && !GEN_KEYWORDS.test(prompt)) {
+      const filePath = fastFileMatch[0];
+      send('action', { text: `📖 Modo lectura directa — ${filePath}` });
+      try {
+        const content = await getFileContent(filePath, repo);
+        send('done', {
+          files: [{ path: filePath, content }],
+          commitMessage: '',
+          mainComponent: filePath,
+          mainContent: content,
+          repo,
+          branch,
+        });
+      } catch (e: any) {
+        send('action', { text: `⚠️ No se pudo leer ${filePath}: ${e.message}` });
+        send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+      }
+      await new Promise((r) => setTimeout(r, 100));
+      res.end();
+      return;
+    }
+
+    // Step 1: file tree (needed for smart read + generation paths)
     send('action', { text: '🔍 Leyendo estructura del repo...' });
     const tree = await getFileTree(repo, branch);
     const filePaths = tree
