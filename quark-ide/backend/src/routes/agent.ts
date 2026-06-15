@@ -21,6 +21,41 @@ async function callGeminiWithRetry(fn: () => Promise<any>, maxRetries = 3, delay
   }
 }
 
+async function repairWithClaude(rawResponse: string, originalPrompt: string): Promise<any> {
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://quark-ide.railway.app',
+      'X-Title': 'QUARK IDE',
+    },
+    body: JSON.stringify({
+      model: 'anthropic/claude-sonnet-4-6',
+      max_tokens: 8192,
+      messages: [
+        {
+          role: 'system',
+          content: `Eres un agente de reparación de JSON.
+Recibes una respuesta malformada de Gemini y debes devolver JSON válido.
+REGLAS:
+- Devuelve SOLO el JSON, sin markdown ni explicaciones
+- El JSON debe tener exactamente: { "files": [{"path": string, "content": string}], "commitMessage": string, "mainComponent": string }
+- En el campo content, escapa correctamente: comillas → \\" , saltos de línea → \\n, backticks → \`
+- Si el contenido tiene SVG o HTML dentro del TSX, escápalo correctamente como string`,
+        },
+        {
+          role: 'user',
+          content: `Prompt original: ${originalPrompt}\n\nRespuesta rota de Gemini:\n${rawResponse.slice(0, 6000)}\n\nRepara el JSON y devuélvelo válido.`,
+        },
+      ],
+    }),
+  });
+  const data = await response.json() as any;
+  const text = data.choices?.[0]?.message?.content ?? '';
+  return JSON.parse(text.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim());
+}
+
 router.post('/generate', async (req, res) => {
   const { prompt, repo, branch = 'main', projectName } = req.body as {
     prompt?: string;
@@ -112,15 +147,18 @@ El campo content de cada archivo debe ser un string JSON válido con caracteres 
           .trim();
         parsed = JSON.parse(cleaned);
       } catch {
-        // Intento 3: extraer el primer objeto JSON que contenga "files"
-        const match = raw.match(/\{[\s\S]*"files"[\s\S]*\}/);
-        if (!match) throw new Error(`JSON inválido de Gemini: ${raw.slice(0, 200)}`);
         try {
-          parsed = JSON.parse(match[0]);
+          // Intento 3: extraer el primer objeto JSON que contenga "files"
+          const match = raw.match(/\{[\s\S]*"files"[\s\S]*\}/);
+          if (match) {
+            parsed = JSON.parse(match[0]);
+          } else {
+            throw new Error('no match');
+          }
         } catch {
-          // Intento 4: reparar comillas simples en property names
-          const repaired = match[0].replace(/(['"])?([a-zA-Z_][a-zA-Z0-9_]*)(['"])?\s*:/g, '"$2":');
-          parsed = JSON.parse(repaired);
+          // Último recurso — Claude repara el JSON roto
+          send('action', { text: '🔧 Reparando respuesta con Claude...' });
+          parsed = await repairWithClaude(raw, prompt);
         }
       }
     }
