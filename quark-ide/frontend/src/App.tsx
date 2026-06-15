@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import Sidebar from './components/Layout/Sidebar';
 import AgentPage from './pages/AgentPage';
-import EditorPage, { type FileEntry, INITIAL_FILES } from './pages/EditorPage';
+import EditorPage from './pages/EditorPage';
 import WarRoomPage from './pages/WarRoomPage';
 import DebuggerPage from './pages/DebuggerPage';
 
@@ -28,9 +28,6 @@ export default function App() {
   const [activeProject, setActiveProject] = useState<Project>(PROJECTS[0]);
   const [boardBrief, setBoardBrief]       = useState<string>('');
   const [agentPreviewPending, setAgentPreviewPending] = useState(false);
-  const [editorFiles, setEditorFiles]           = useState<FileEntry[]>(INITIAL_FILES);
-  const [editorActiveFile, setEditorActiveFile] = useState<FileEntry>(INITIAL_FILES[0]);
-  const [editorMobileTab, setEditorMobileTab]   = useState<'editor' | 'chat' | 'preview' | 'agent'>('editor');
 
   return (
     <div
@@ -54,12 +51,6 @@ export default function App() {
             onSendToBoard={(brief) => { setBoardBrief(brief); setPage('warroom'); }}
             autoShowPreview={agentPreviewPending}
             onPreviewShown={() => setAgentPreviewPending(false)}
-            persistedFiles={editorFiles}
-            persistedActiveFile={editorActiveFile}
-            persistedMobileTab={editorMobileTab}
-            onFilesChange={setEditorFiles}
-            onActiveFileChange={setEditorActiveFile}
-            onMobileTabChange={setEditorMobileTab}
           />
         )}
         {page === 'warroom' && (

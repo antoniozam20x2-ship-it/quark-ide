@@ -9,13 +9,13 @@ import ProjectSwitcher from '../components/Projects/ProjectSwitcher';
 import type { Project } from '../App';
 import QuarkAgent from '../components/Agent/QuarkAgent';
 
-export interface FileEntry {
+interface FileEntry {
   name: string;
   content: string;
   language: string;
 }
 
-export const INITIAL_FILES: FileEntry[] = [
+const INITIAL_FILES: FileEntry[] = [
   {
     name: 'index.ts',
     language: 'typescript',
@@ -143,19 +143,13 @@ interface EditorPageProps {
   onSendToBoard: (brief: string) => void;
   autoShowPreview?: boolean;
   onPreviewShown?: () => void;
-  persistedFiles: FileEntry[];
-  persistedActiveFile: FileEntry;
-  persistedMobileTab: 'editor' | 'chat' | 'preview' | 'agent';
-  onFilesChange: (files: FileEntry[]) => void;
-  onActiveFileChange: (file: FileEntry) => void;
-  onMobileTabChange: (tab: 'editor' | 'chat' | 'preview' | 'agent') => void;
 }
 
-export default function EditorPage({ activeProject, onProjectChange, onSendToBoard, autoShowPreview, onPreviewShown, persistedFiles, persistedActiveFile, persistedMobileTab, onFilesChange, onActiveFileChange, onMobileTabChange }: EditorPageProps) {
+export default function EditorPage({ activeProject, onProjectChange, onSendToBoard, autoShowPreview, onPreviewShown }: EditorPageProps) {
   const isMobile = useIsMobile();
-  const [files, setFiles]         = [persistedFiles, onFilesChange] as const;
-  const [activeFile, setActiveFile] = [persistedActiveFile, onActiveFileChange] as const;
-  const [mobileTab, setMobileTab]   = [persistedMobileTab, onMobileTabChange] as const;
+  const [files, setFiles] = useState<FileEntry[]>(INITIAL_FILES);
+  const [activeFile, setActiveFile] = useState<FileEntry>(INITIAL_FILES[0]);
+  const [mobileTab, setMobileTab] = useState<'editor' | 'chat' | 'preview' | 'agent'>('editor');
   const [panelTab, setPanelTab]   = useState<'chat' | 'agent'>('agent');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
