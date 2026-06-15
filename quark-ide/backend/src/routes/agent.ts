@@ -96,7 +96,7 @@ Responde SOLO con un JSON array de strings, sin markdown ni explicaciones. Ejemp
   } catch {
     // Fallback: extract anything that looks like a file path
     const matches = raw.match(/"([^"]+\.[a-z]{1,5})"/g) ?? [];
-    return matches.map((m) => m.replace(/"/g, '')).slice(0, 5);
+    return matches.map((m: string) => m.replace(/"/g, '')).slice(0, 5);
   }
 }
 
