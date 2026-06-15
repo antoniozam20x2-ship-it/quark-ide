@@ -54,6 +54,15 @@ export default function Sidebar({ activePage, onNavigate }: Props) {
         red
       />
 
+      {/* Studio Nav */}
+      <NavItem
+        icon="🎨"
+        label="Studio"
+        active={activePage === 'studio'}
+        onClick={() => onNavigate('studio')}
+        violet
+      />
+
       <div className="flex-1" />
 
       {/* Settings */}

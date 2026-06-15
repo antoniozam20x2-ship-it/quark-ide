@@ -13,6 +13,7 @@ import { getFileTree, getFileContent, createOrUpdateFile, deleteFile, commitMult
 import { runDebugger } from './services/debugger.js';
 import previewRouter from './routes/preview.js';
 import editorRouter from './routes/editor.js';
+import studioRouter from './routes/studio.js';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3001);
@@ -38,6 +39,7 @@ app.use('/api/warroom/search', searchRouter);
 app.use('/api/memory', memoryRouter);
 app.use('/agent', agentRouter);
 app.use('/api/editor', editorRouter);
+app.use('/api/studio', studioRouter);
 
 app.get('/api/costs', (_req, res) => {
   res.json(getCosts());

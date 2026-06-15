@@ -4,8 +4,9 @@ import AgentPage from './pages/AgentPage';
 import EditorPage from './pages/EditorPage';
 import WarRoomPage from './pages/WarRoomPage';
 import DebuggerPage from './pages/DebuggerPage';
+import StudioPage from './pages/StudioPage';
 
-export type Page = 'agent' | 'editor' | 'warroom' | 'debugger';
+export type Page = 'agent' | 'editor' | 'warroom' | 'debugger' | 'studio';
 
 export interface Project {
   name: string;
@@ -29,6 +30,7 @@ export default function App() {
   const [boardBrief, setBoardBrief]       = useState<string>('');
   const [agentPreviewPending, setAgentPreviewPending] = useState(false);
   const [pipelinePrompt, setPipelinePrompt] = useState<string>('');
+  const [studioBrief, setStudioBrief] = useState<string>('');
 
   return (
     <div
@@ -70,6 +72,16 @@ export default function App() {
           <DebuggerPage
             railwayProjectId={activeProject.railwayProjectId}
             projectName={activeProject.name}
+          />
+        )}
+        {page === 'studio' && (
+          <StudioPage
+            initialBrief={studioBrief}
+            onBriefConsumed={() => setStudioBrief('')}
+            onSendToAgent={(prompt) => {
+              setPipelinePrompt(prompt);
+              setPage('agent');
+            }}
           />
         )}
       </div>
