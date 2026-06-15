@@ -143,9 +143,11 @@ interface EditorPageProps {
   onSendToBoard: (brief: string) => void;
   autoShowPreview?: boolean;
   onPreviewShown?: () => void;
+  initialPrompt?: string;
+  onPromptConsumed?: () => void;
 }
 
-export default function EditorPage({ activeProject, onProjectChange, onSendToBoard, autoShowPreview, onPreviewShown }: EditorPageProps) {
+export default function EditorPage({ activeProject, onProjectChange, onSendToBoard, autoShowPreview, onPreviewShown, initialPrompt, onPromptConsumed }: EditorPageProps) {
   const isMobile = useIsMobile();
   const [files, setFiles] = useState<FileEntry[]>(INITIAL_FILES);
   const [activeFile, setActiveFile] = useState<FileEntry>(INITIAL_FILES[0]);
@@ -164,6 +166,14 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
       onPreviewShown?.();
     }
   }, [autoShowPreview]);
+
+  useEffect(() => {
+    if (initialPrompt && initialPrompt.trim()) {
+      setMobileTab('agent');
+      setPanelTab('agent');
+      onPromptConsumed?.();
+    }
+  }, [initialPrompt]);
 
   // Al montar — restaurar desde localStorage
   useEffect(() => {
@@ -450,6 +460,7 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
                 updateFile(code);
               }}
               onShowPreview={() => setMobileTab('preview')}
+              initialPrompt={initialPrompt}
             />
           )}
         </div>
@@ -554,6 +565,7 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
                 activeProject={activeProject}
                 onApplyToEditor={updateFile}
                 onShowPreview={() => setShowPreview(true)}
+                initialPrompt={initialPrompt}
               />
             )}
           </div>

@@ -56,6 +56,8 @@ export default function App() {
             onSendToBoard={(brief) => { setBoardBrief(brief); setPage('warroom'); }}
             autoShowPreview={agentPreviewPending}
             onPreviewShown={() => setAgentPreviewPending(false)}
+            initialPrompt={pipelinePrompt}
+            onPromptConsumed={() => setPipelinePrompt('')}
           />
         )}
         {page === 'warroom' && (
@@ -64,7 +66,7 @@ export default function App() {
             onBriefConsumed={() => setBoardBrief('')}
             onSendToAgent={(prompt) => {
               setPipelinePrompt(prompt);
-              setPage('agent');
+              setPage('editor');
             }}
           />
         )}
@@ -80,7 +82,7 @@ export default function App() {
             onBriefConsumed={() => setStudioBrief('')}
             onSendToAgent={(prompt) => {
               setPipelinePrompt(prompt);
-              setPage('agent');
+              setPage('editor');
             }}
           />
         )}
