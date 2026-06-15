@@ -4,6 +4,22 @@ import { GoogleGenAI } from '@google/genai'
 const router = Router()
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! })
 
+async function callGeminiWithRetry(fn: () => Promise<any>, maxRetries = 3, delayMs = 3000) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn()
+    } catch (err: any) {
+      const is503 = err?.status === 503 || err?.message?.includes('503') || err?.message?.includes('UNAVAILABLE')
+      if (is503 && attempt < maxRetries) {
+        console.log(`Gemini 503 — reintento ${attempt}/${maxRetries} en ${delayMs}ms`)
+        await new Promise(r => setTimeout(r, delayMs))
+        continue
+      }
+      throw err
+    }
+  }
+}
+
 const SYSTEM_PROMPTS: Record<string, string> = {
   architect: `Eres un arquitecto de software senior. Dado un brief de producto, define en máximo 8 líneas:
 - Estructura de archivos necesarios (máximo 3 archivos)
@@ -45,10 +61,10 @@ router.post('/analyze', async (req, res) => {
     const systemPrompt = SYSTEM_PROMPTS[role]
     if (!systemPrompt) return res.status(400).json({ error: 'role inválido' })
 
-    const result = await ai.models.generateContent({
+    const result = await callGeminiWithRetry(() => ai.models.generateContent({
       model: 'gemini-2.0-flash-lite',
       contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\nBRIEF: ${brief}` }] }],
-    })
+    }))
     const text = result.text ?? ''
 
     res.json({ result: text, role })

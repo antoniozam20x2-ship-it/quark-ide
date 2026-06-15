@@ -5,6 +5,22 @@ import { getFileTree } from '../services/github.js';
 const router = Router();
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
+async function callGeminiWithRetry(fn: () => Promise<any>, maxRetries = 3, delayMs = 3000) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      const is503 = err?.status === 503 || err?.message?.includes('503') || err?.message?.includes('UNAVAILABLE');
+      if (is503 && attempt < maxRetries) {
+        console.log(`Gemini 503 — reintento ${attempt}/${maxRetries} en ${delayMs}ms`);
+        await new Promise(r => setTimeout(r, delayMs));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 router.post('/generate', async (req, res) => {
   const { prompt, repo, branch = 'main', projectName } = req.body as {
     prompt?: string;
@@ -86,11 +102,11 @@ function App() {
   );
 }`;
 
-    const response = await ai.models.generateContent({
+    const response = await callGeminiWithRetry(() => ai.models.generateContent({
       model: 'gemini-3.1-flash-lite',
       contents: [{ role: 'user', parts: [{ text: systemPrompt + '\n\nTAREA: ' + prompt }] }],
       config: { maxOutputTokens: 8192 },
-    });
+    }));
 
     const raw = (response.text ?? '').trim();
 
