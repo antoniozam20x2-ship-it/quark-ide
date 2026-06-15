@@ -141,13 +141,14 @@ interface EditorPageProps {
   activeProject: Project;
   onProjectChange: (p: Project) => void;
   onSendToBoard: (brief: string) => void;
+  onSendToStudio?: (brief: string) => void;
   autoShowPreview?: boolean;
   onPreviewShown?: () => void;
   initialPrompt?: string;
   onPromptConsumed?: () => void;
 }
 
-export default function EditorPage({ activeProject, onProjectChange, onSendToBoard, autoShowPreview, onPreviewShown, initialPrompt, onPromptConsumed }: EditorPageProps) {
+export default function EditorPage({ activeProject, onProjectChange, onSendToBoard, onSendToStudio, autoShowPreview, onPreviewShown, initialPrompt, onPromptConsumed }: EditorPageProps) {
   const isMobile = useIsMobile();
   const [files, setFiles] = useState<FileEntry[]>(INITIAL_FILES);
   const [activeFile, setActiveFile] = useState<FileEntry>(INITIAL_FILES[0]);
@@ -450,6 +451,7 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
                 setMobileTab('editor');
               }}
               onSendToBoard={onSendToBoard}
+              onSendToStudio={onSendToStudio}
               layout="fullscreen"
             />
           )}
@@ -558,6 +560,7 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
                 fileName={activeFile.name}
                 onApplyToEditor={updateFile}
                 onSendToBoard={onSendToBoard}
+                onSendToStudio={onSendToStudio}
                 layout="panel"
               />
             ) : (

@@ -12,6 +12,7 @@ interface Props {
   fileName: string;
   onApplyToEditor: (code: string) => void;
   onSendToBoard?: (brief: string) => void;
+  onSendToStudio?: (brief: string) => void;
   layout?: 'panel' | 'fullscreen';
 }
 
@@ -30,6 +31,7 @@ export default function ClaudeChat({
   fileName,
   onApplyToEditor,
   onSendToBoard,
+  onSendToStudio,
   layout = 'panel',
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -301,6 +303,30 @@ export default function ClaudeChat({
                   onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(124,58,237,0.12)')}
                 >
                   📋 Enviar al Board
+                </button>
+              )}
+              {isLastAssistant && onSendToStudio && msg.content && (
+                <button
+                  onClick={() => onSendToStudio(msg.content)}
+                  style={{
+                    marginTop: 8,
+                    padding: '6px 14px',
+                    background: 'rgba(6,182,212,0.12)',
+                    border: '1px solid rgba(6,182,212,0.3)',
+                    borderRadius: 6,
+                    color: '#06B6D4',
+                    fontFamily: 'JetBrains Mono, monospace',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(6,182,212,0.22)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(6,182,212,0.12)')}
+                >
+                  🎨 Enviar a Studio
                 </button>
               )}
             </div>
