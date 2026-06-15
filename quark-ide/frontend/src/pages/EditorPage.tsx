@@ -141,9 +141,11 @@ interface EditorPageProps {
   activeProject: Project;
   onProjectChange: (p: Project) => void;
   onSendToBoard: (brief: string) => void;
+  autoShowPreview?: boolean;
+  onPreviewShown?: () => void;
 }
 
-export default function EditorPage({ activeProject, onProjectChange, onSendToBoard }: EditorPageProps) {
+export default function EditorPage({ activeProject, onProjectChange, onSendToBoard, autoShowPreview, onPreviewShown }: EditorPageProps) {
   const isMobile = useIsMobile();
   const [files, setFiles] = useState<FileEntry[]>(INITIAL_FILES);
   const [activeFile, setActiveFile] = useState<FileEntry>(INITIAL_FILES[0]);
@@ -154,6 +156,14 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
   const [treeKey, setTreeKey] = useState(0);
   const drawerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+
+  useEffect(() => {
+    if (autoShowPreview) {
+      setShowPreview(true);
+      setMobileTab('preview');
+      onPreviewShown?.();
+    }
+  }, [autoShowPreview]);
 
   function handleProjectSwitch(project: Project) {
     onProjectChange(project);
