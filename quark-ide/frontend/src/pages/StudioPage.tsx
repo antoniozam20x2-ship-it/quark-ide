@@ -29,6 +29,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
   const [agents, setAgents] = useState<AgentResult[]>(AGENTS)
   const [running, setRunning] = useState(false)
   const [engineeredPrompt, setEngineeredPrompt] = useState('')
+  const [designPrototype, setDesignPrototype] = useState<string>('')
 
   useEffect(() => {
     if (initialBrief) {
@@ -62,6 +63,9 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
         })
         const data = await res.json()
         updateAgent(role, { content: data.result, status: 'done' })
+        if (role === 'designer') {
+          setDesignPrototype(data.result ?? '')
+        }
         if (role === 'engineer') {
           console.log('Engineer result:', data.result)
           setEngineeredPrompt(data.result ?? '')
@@ -118,8 +122,36 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
               {agent.status === 'done' && <span style={{ fontSize: 10, color: agent.color }}>✓</span>}
             </div>
             {(agent.status === 'done' || agent.status === 'error') && agent.content && (
-              <div style={{ padding: '0 12px 12px', fontFamily: mono, fontSize: 11, color: '#94A3B8', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
-                {agent.content}
+              <div style={{ padding: '0 12px 12px' }}>
+                {agent.role === 'designer' && designPrototype ? (
+                  <div>
+                    <div style={{ fontFamily: mono, fontSize: 10, color: '#64748B', marginBottom: 8 }}>
+                      // prototipo visual
+                    </div>
+                    <iframe
+                      srcDoc={designPrototype}
+                      style={{
+                        width: '100%',
+                        height: 320,
+                        border: '1px solid #1E1E2E',
+                        borderRadius: 8,
+                        background: '#000',
+                      }}
+                      sandbox="allow-scripts"
+                      title="Design Prototype"
+                    />
+                    <button
+                      onClick={() => setDesignPrototype('')}
+                      style={{ marginTop: 8, background: 'transparent', border: '1px solid #1E1E2E', borderRadius: 6, color: '#64748B', fontFamily: mono, fontSize: 10, padding: '4px 10px', cursor: 'pointer' }}
+                    >
+                      ver código
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ fontFamily: mono, fontSize: 11, color: '#94A3B8', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+                    {agent.content}
+                  </div>
+                )}
               </div>
             )}
           </div>
