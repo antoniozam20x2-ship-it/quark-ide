@@ -41,6 +41,7 @@ export default function App() {
       <div className="flex-1" style={{ minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'clip' }}>
         {page === 'agent' && (
           <AgentPage
+            activeProject={activeProject}
             onOpenEditor={(showPreview) => {
               setPage('editor');
               if (showPreview) setTimeout(() => setAgentPreviewPending(true), 100);
