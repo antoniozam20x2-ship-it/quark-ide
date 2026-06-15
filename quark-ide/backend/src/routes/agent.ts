@@ -70,37 +70,14 @@ RESPONDE ÚNICAMENTE CON ESTE JSON (sin markdown, sin backticks, sin texto extra
     {"path": "src/hooks/useData.ts", "content": "código TypeScript completo aquí"}
   ],
   "commitMessage": "feat: descripción del cambio",
-  "mainComponent": "src/components/App.tsx",
-  "previewCode": "función React en JavaScript puro aquí, sin imports, sin tipos TypeScript, sin export, usando React.useState en lugar de useState"
+  "mainComponent": "src/components/App.tsx"
 }
 
 REGLAS PARA files[].content:
 - TypeScript completo y funcional
 - Incluir todos los imports necesarios
 - Inline styles (no Tailwind)
-- Sin librerías externas (solo react)
-
-REGLAS ESTRICTAS para previewCode:
-- CERO imports de cualquier tipo
-- CERO tipos TypeScript (:string, :number, <T>, etc.)
-- CERO export (ni default ni named)
-- Usar React.useState en vez de useState
-- Usar React.useEffect en vez de useEffect
-- La función se llama App sin tipo: function App() {
-- Solo JSX + JavaScript puro
-- Máximo 50 líneas
-- Si el componente es complejo, simplificarlo para el preview manteniendo la idea visual
-
-Ejemplo CORRECTO de previewCode:
-function App() {
-  const [count, setCount] = React.useState(0);
-  return (
-    <div style={{padding:20}}>
-      <h1>Counter: {count}</h1>
-      <button onClick={() => setCount(c => c+1)}>+1</button>
-    </div>
-  );
-}`;
+- Sin librerías externas (solo react)`;
 
     const response = await callGeminiWithRetry(() => ai.models.generateContent({
       model: 'gemini-3.1-flash-lite',
@@ -128,16 +105,8 @@ function App() {
     }
 
     console.log('[Agent] Parsed files count:', parsed?.files?.length);
-    console.log('[Agent] previewCode length:', parsed?.previewCode?.length);
 
-    if (parsed.previewCode) {
-      parsed.previewCode = parsed.previewCode
-        .replace(/^```[\w]*\n?/gm, '')
-        .replace(/```$/gm, '')
-        .trim();
-    }
-
-    const { files, commitMessage, mainComponent, previewCode } = parsed;
+    const { files, commitMessage, mainComponent } = parsed;
 
     // Step 3: reportar archivos generados
     send('action', { text: `✏️ ${files.length} archivos generados:` });
@@ -155,9 +124,7 @@ function App() {
       files,
       commitMessage,
       mainComponent: mainFile?.path,
-      // previewCode = JS puro listo para react-live
-      // fallback al .tsx si Gemini no generó previewCode
-      mainContent: previewCode ?? mainFile?.content,
+      mainContent: mainFile?.content ?? '',
       repo,
       branch,
     });
@@ -202,8 +169,40 @@ function extractHtml(raw: string): string {
 }
 
 router.post('/generate-html', async (req, res) => {
-  const { prompt, projectName } = req.body as { prompt?: string; projectName?: string };
-  if (!prompt) return res.status(400).json({ success: false, error: 'prompt requerido' });
+  const { prompt, projectName, code, files } = req.body as {
+    prompt?: string;
+    projectName?: string;
+    code?: string;
+    files?: { path: string; content: string }[];
+  };
+
+  // Path A: convierte TSX/código del Agent a HTML standalone con Gemini
+  if (code) {
+    try {
+      const filesContext = files?.length
+        ? `\n\nArchivos del proyecto:\n${JSON.stringify(files, null, 2)}`
+        : '';
+
+      const geminiPrompt = `Convierte este componente React/TSX a HTML puro standalone (sin imports, sin build step, usando CDN de React desde unpkg).${filesContext}\n\nComponente principal:\n${code}\n\nResponde SOLO con el HTML completo, sin markdown ni backticks. Empieza con <!DOCTYPE html>.`;
+
+      const response = await callGeminiWithRetry(() => ai.models.generateContent({
+        model: 'gemini-2.0-flash-lite',
+        contents: [{ role: 'user', parts: [{ text: geminiPrompt }] }],
+        config: { maxOutputTokens: 8192 },
+      }));
+
+      const rawHtml = (response.text ?? '').trim();
+      if (!rawHtml) throw new Error('Gemini no devolvió contenido');
+      const cleanHtml = extractHtml(rawHtml);
+      return res.json({ html: cleanHtml, success: true });
+    } catch (err) {
+      console.error('[generate-html/gemini] error:', err);
+      return res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  // Path B: genera HTML desde design prompt con Claude (OpenRouter)
+  if (!prompt) return res.status(400).json({ success: false, error: 'prompt o code requerido' });
 
   try {
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {

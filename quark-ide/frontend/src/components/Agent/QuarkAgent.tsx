@@ -111,15 +111,18 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   }
 
   async function generateHtml() {
-    if (generatedHtml) return; // ya existe, el iframe ya se muestra
-    const text = prompt.trim();
-    if (!text || isGeneratingHtml) return;
+    if (!result) return;
+    if (generatedHtml) return;
+    if (isGeneratingHtml) return;
     setIsGeneratingHtml(true);
     try {
       const res = await fetch(`${API_BASE}/api/agent/generate-html`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: text, projectName: activeProject.name }),
+        body: JSON.stringify({
+          code:  result.mainContent ?? '',
+          files: result.files ?? [],
+        }),
       });
       const data = await res.json() as { html?: string; success: boolean; error?: string };
       if (!data.success || !data.html) throw new Error(data.error ?? 'Sin HTML');
