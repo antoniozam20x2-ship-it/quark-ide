@@ -4,6 +4,25 @@ import { searchMemory } from '../services/rufloMemory.js';
 
 const router = Router();
 
+type ProjectType = 'trading' | 'ecommerce' | 'dashboard' | 'landing' | 'app';
+
+function detectProjectType(projectName: string): ProjectType {
+  const n = projectName.toLowerCase();
+  if (n.includes('signal') || n.includes('sniper') || n.includes('nexus') || n.includes('trade') || n.includes('trading') || n.includes('core')) return 'trading';
+  if (n.includes('shop') || n.includes('store') || n.includes('ecommerce') || n.includes('tienda')) return 'ecommerce';
+  if (n.includes('dashboard') || n.includes('admin') || n.includes('panel')) return 'dashboard';
+  if (n.includes('landing') || n.includes('marketing') || n.includes('promo')) return 'landing';
+  return 'app';
+}
+
+const PROJECT_REFERENCES: Record<ProjectType, string> = {
+  trading:   'TradingView, Binance, Bloomberg Terminal',
+  ecommerce: 'Amazon, Shopify, MercadoLibre',
+  dashboard: 'Linear, Notion, Vercel Dashboard',
+  landing:   'Stripe, Linear, Vercel marketing pages',
+  app:       'Linear, Notion, Vercel',
+};
+
 const JEFFERSON_CONTEXT = `You are QUARK, Jefferson's personal AI co-founder and strategic thinking partner. You help him refine ideas, analyze problems, and prepare detailed briefs — but you NEVER generate code directly.
 
 JEFFERSON'S ECOSYSTEM:
@@ -28,17 +47,20 @@ WHEN TO SUGGEST SENDING:
 - Bug or trading problem → suggest [📋 Enviar al Board]
 - Still vague → keep asking questions
 
-RESPONSE STYLE:
+RESPONSE RULES:
 - Conversational, direct, like a co-founder
-- Ask ONE question at a time when refining
+- NEVER ask more than 1 question at a time
+- When asking a question, ALWAYS offer options — format exactly: OPTIONS:["option1","option2","option3"]
+- If the user can also answer freely, add on a new line: ALLOW_CUSTOM:true
 - When the brief is ready, summarize it clearly before suggesting to send
 - Never use markdown code blocks — you don't write code`;
 
 router.post('/', async (req: Request, res: Response) => {
-  const { messages, fileContent, fileName } = req.body as {
+  const { messages, fileContent, fileName, activeProject } = req.body as {
     messages: { role: string; content: string }[];
     fileContent?: string;
     fileName?: string;
+    activeProject?: { name: string; repo: string };
   };
 
   const lastUserMessage = messages.filter((m) => m.role === 'user').at(-1)?.content ?? '';
@@ -53,7 +75,17 @@ router.post('/', async (req: Request, res: Response) => {
     }
   } catch {}
 
-  const systemPrompt = `${JEFFERSON_CONTEXT}${memoryContext}`;
+  // Contexto del proyecto activo
+  let projectContext = '';
+  if (activeProject?.name) {
+    const projectType = detectProjectType(activeProject.name);
+    const refs = PROJECT_REFERENCES[projectType];
+    projectContext = `\n\nPROYECTO ACTIVO: ${activeProject.name} (repo: ${activeProject.repo})
+Tipo detectado: ${projectType}
+Referencias visuales para sugerencias: ${refs}`;
+  }
+
+  const systemPrompt = `${JEFFERSON_CONTEXT}${projectContext}${memoryContext}`;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');

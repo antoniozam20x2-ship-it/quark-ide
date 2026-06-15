@@ -1,10 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
 import QuarkMarkdown from '../shared/QuarkMarkdown';
+import type { Project } from '../../App';
 
 interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  type?: 'question' | 'suggestion' | 'confirmation';
+  options?: string[];
+  allowCustom?: boolean;
 }
 
 interface Props {
@@ -14,17 +18,50 @@ interface Props {
   onSendToBoard?: (brief: string) => void;
   onSendToStudio?: (brief: string) => void;
   layout?: 'panel' | 'fullscreen';
+  activeProject?: Project;
 }
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
 
+const MESSAGE_COLORS = {
+  question:     '#7C3AED',
+  suggestion:   '#06B6D4',
+  confirmation: '#10B981',
+  user:         '#F59E0B',
+  system:       '#64748B',
+} as const;
+
 const JEFFERSON_PROJECTS = [
-  { label: 'Signal OS', prompt: 'Tell me about Signal OS — what areas of the trading bot logic can we improve next?' },
-  { label: 'Snipe OS', prompt: 'Tell me about Snipe OS — what features should we focus on for the signal intelligence PWA?' },
-  { label: 'NEXUS Capital', prompt: 'Tell me about NEXUS Capital — how can we improve the Snipe Radar and Smart Concept indicators?' },
-  { label: 'CORE AI', prompt: 'Tell me about CORE AI — how should we architect the 6-agent trading council with Oracle verdict system?' },
-  { label: 'QUARK IDE', prompt: 'Tell me about QUARK IDE — what features should we add next to this development superapp?' },
+  { label: 'Signal OS',    prompt: 'Tell me about Signal OS — what areas of the trading bot logic can we improve next?' },
+  { label: 'Snipe OS',     prompt: 'Tell me about Snipe OS — what features should we focus on for the signal intelligence PWA?' },
+  { label: 'NEXUS Capital',prompt: 'Tell me about NEXUS Capital — how can we improve the Snipe Radar and Smart Concept indicators?' },
+  { label: 'CORE AI',      prompt: 'Tell me about CORE AI — how should we architect the 6-agent trading council with Oracle verdict system?' },
+  { label: 'QUARK IDE',    prompt: 'Tell me about QUARK IDE — what features should we add next to this development superapp?' },
 ];
+
+function detectMessageType(content: string): 'question' | 'suggestion' | 'confirmation' | undefined {
+  const c = content.toLowerCase();
+  if (content.trimEnd().endsWith('?') || c.includes('¿')) return 'question';
+  if (c.includes('sugiero') || c.includes('considera') || c.includes('podrías') || c.includes('recomiendo') || c.includes('podría ser')) return 'suggestion';
+  if (c.includes('entendido') || c.includes('perfecto') || c.includes('listo') || c.includes('confirmo') || c.includes('de acuerdo') || c.includes('understood')) return 'confirmation';
+  return undefined;
+}
+
+function parseOptions(content: string): { cleaned: string; options?: string[]; allowCustom?: boolean } {
+  const optionsMatch = content.match(/OPTIONS:\s*(\[[\s\S]*?\])/);
+  const allowCustom = /ALLOW_CUSTOM:\s*true/i.test(content);
+  if (!optionsMatch) return { cleaned: content };
+  try {
+    const options = JSON.parse(optionsMatch[1]) as string[];
+    const cleaned = content
+      .replace(/\n?OPTIONS:\s*\[[\s\S]*?\]\n?/, '')
+      .replace(/\n?ALLOW_CUSTOM:\s*true\n?/i, '')
+      .trim();
+    return { cleaned, options, allowCustom };
+  } catch {
+    return { cleaned: content };
+  }
+}
 
 export default function ClaudeChat({
   fileContent,
@@ -33,6 +70,7 @@ export default function ClaudeChat({
   onSendToBoard,
   onSendToStudio,
   layout = 'panel',
+  activeProject,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -44,6 +82,7 @@ export default function ClaudeChat({
   const [searching, setSearching] = useState(false);
   const [showProjects, setShowProjects] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [customOptionInput, setCustomOptionInput] = useState('');
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -71,7 +110,6 @@ export default function ClaudeChat({
   }
 
   function applyCode(code: string) {
-    console.log('[QUARK] Applying code to editor — length:', code.length, 'chars\n', code);
     onApplyToEditor(code);
     showToast('⚛ Applied to editor');
   }
@@ -133,6 +171,7 @@ export default function ClaudeChat({
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     setInput('');
+    setCustomOptionInput('');
     setLoading(true);
 
     const assistantMsg: Message = {
@@ -142,14 +181,18 @@ export default function ClaudeChat({
     };
     setMessages([...newMessages, assistantMsg]);
 
+    // Últimos 5 exchanges (10 mensajes) como contexto
+    const historyToSend = newMessages.slice(-10).map((m) => ({ role: m.role, content: m.content }));
+
     try {
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
+          messages: historyToSend,
           fileContent,
           fileName,
+          activeProject: activeProject ? { name: activeProject.name, repo: activeProject.repo } : undefined,
         }),
       });
 
@@ -178,6 +221,15 @@ export default function ClaudeChat({
           } catch {}
         }
       }
+
+      // Post-proceso: detectar tipo y extraer opciones del mensaje completo
+      const { cleaned, options, allowCustom } = parseOptions(assistantContent);
+      const type = detectMessageType(cleaned);
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[updated.length - 1] = { ...assistantMsg, content: cleaned, type, options, allowCustom };
+        return updated;
+      });
     } catch {
       setMessages((prev) => {
         const updated = [...prev];
@@ -236,8 +288,13 @@ export default function ClaudeChat({
         display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, background: '#0d0d1a',
       }}>
         <span style={{ color: '#00ff88', fontSize: 11, fontWeight: 700 }}>⚛ QUARK CHAT</span>
-        <span style={{ color: '#6b7280', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          — {fileName}
+        {activeProject && (
+          <span style={{ fontSize: 10, color: '#7C3AED', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700 }}>
+            {activeProject.emoji} {activeProject.name}
+          </span>
+        )}
+        <span style={{ color: '#6b7280', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginLeft: 'auto' }}>
+          {fileName}
         </span>
       </div>
 
@@ -257,18 +314,41 @@ export default function ClaudeChat({
         {messages.map((msg, i) => {
           const isStreamingThis = loading && i === messages.length - 1 && msg.role === 'assistant';
           const isLastAssistant = !loading && i === messages.length - 1 && msg.role === 'assistant';
+          const accentColor = msg.role === 'user'
+            ? MESSAGE_COLORS.user
+            : msg.type === 'question'     ? MESSAGE_COLORS.question
+            : msg.type === 'suggestion'   ? MESSAGE_COLORS.suggestion
+            : msg.type === 'confirmation' ? MESSAGE_COLORS.confirmation
+            : '#00ff88';
+
           return (
             <div key={i} style={{ width: '100%', minWidth: 0 }}>
+              {/* Label row */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <span style={{ fontSize: 10, fontWeight: 700, color: msg.role === 'user' ? '#6b7280' : '#00ff88', letterSpacing: '0.1em', flexShrink: 0 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: accentColor, letterSpacing: '0.1em', flexShrink: 0 }}>
                   {msg.role === 'user' ? 'YOU' : 'QUARK'}
                 </span>
+                {msg.type && msg.role === 'assistant' && (
+                  <span style={{
+                    fontSize: 9, color: accentColor, border: `1px solid ${accentColor}55`,
+                    borderRadius: 3, padding: '1px 5px', fontFamily: 'JetBrains Mono, monospace',
+                    opacity: 0.85, letterSpacing: '0.05em',
+                  }}>
+                    {msg.type}
+                  </span>
+                )}
                 <span style={{ fontSize: 10, color: '#3a3a5c' }}>{msg.timestamp}</span>
                 {isStreamingThis && (
                   <span style={{ fontSize: 10, color: '#3a3a5c' }} className="thinking-dots">thinking</span>
                 )}
               </div>
-              <div style={{ width: '100%', minWidth: 0 }}>
+
+              {/* Content with accent left border */}
+              <div style={{
+                borderLeft: msg.role === 'assistant' && msg.type ? `2px solid ${accentColor}55` : '2px solid transparent',
+                paddingLeft: msg.role === 'assistant' && msg.type ? 8 : 0,
+                width: '100%', minWidth: 0,
+              }}>
                 {msg.content ? (
                   <QuarkMarkdown
                     onApplyCode={msg.role === 'assistant' ? applyCode : undefined}
@@ -282,6 +362,60 @@ export default function ClaudeChat({
                   </span>
                 )}
               </div>
+
+              {/* Opciones interactivas */}
+              {isLastAssistant && msg.options && msg.options.length > 0 && (
+                <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {msg.options.map((opt, oi) => (
+                      <button
+                        key={oi}
+                        onClick={() => sendMessage(opt)}
+                        style={{
+                          background: `${accentColor}11`,
+                          border: `1px solid ${accentColor}44`,
+                          borderRadius: 6,
+                          color: accentColor,
+                          fontFamily: 'JetBrains Mono, monospace',
+                          fontSize: 11,
+                          fontWeight: 600,
+                          padding: '6px 12px',
+                          cursor: 'pointer',
+                          transition: 'background 0.15s',
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = `${accentColor}22`)}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = `${accentColor}11`)}
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+                  {msg.allowCustom && (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input
+                        className="quark-input"
+                        style={{ flex: 1, height: 30, fontSize: 11, minWidth: 0 }}
+                        placeholder="O escribe tu preferencia..."
+                        value={customOptionInput}
+                        onChange={(e) => setCustomOptionInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && customOptionInput.trim()) sendMessage(customOptionInput.trim());
+                        }}
+                      />
+                      <button
+                        className="quark-btn-primary"
+                        style={{ fontSize: 11, padding: '0 12px', height: 30, flexShrink: 0 }}
+                        onClick={() => customOptionInput.trim() && sendMessage(customOptionInput.trim())}
+                        disabled={!customOptionInput.trim()}
+                      >
+                        →
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Acciones del último mensaje del asistente */}
               {isLastAssistant && onSendToBoard && msg.content && (
                 <button
                   onClick={() => onSendToBoard(msg.content)}
@@ -363,16 +497,15 @@ export default function ClaudeChat({
           {searchResults.length === 0 && !searching && searchQuery && (
             <span style={{ color: '#3a3a5c', fontSize: 11 }}>No results found.</span>
           )}
-          {searchResults.map((r, i) => (
+          {searchResults.map((r, ri) => (
             <div
-              key={i}
+              key={ri}
               onClick={() => insertSearchResult(r)}
               style={{
                 background: '#0d0d1a', border: '1px solid #1e1e3f', borderRadius: 4,
                 padding: '6px 8px', cursor: 'pointer', fontSize: 11,
                 color: '#a0a0c0', fontFamily: 'JetBrains Mono, monospace',
-                whiteSpace: 'pre-wrap', lineClamp: 3,
-                overflow: 'hidden', maxHeight: 60,
+                whiteSpace: 'pre-wrap', overflow: 'hidden', maxHeight: 60,
               }}
             >
               {r.split('\n')[0]}
@@ -395,26 +528,16 @@ export default function ClaudeChat({
         >
           {saving ? '...' : '💾 Save'}
         </button>
-
         <button
-          style={{
-            ...btnStyle,
-            background: showSearch ? 'rgba(0,255,136,0.15)' : btnStyle.background,
-            borderColor: showSearch ? '#00ff88' : '#1e3f2a',
-          }}
+          style={{ ...btnStyle, background: showSearch ? 'rgba(0,255,136,0.15)' : btnStyle.background, borderColor: showSearch ? '#00ff88' : '#1e3f2a' }}
           onClick={() => { setShowSearch((v) => !v); setShowProjects(false); }}
           title="Search QUARK Memory"
         >
           🔍 Search
         </button>
-
         <div ref={projectsRef} style={{ position: 'relative' }}>
           <button
-            style={{
-              ...btnStyle,
-              background: showProjects ? 'rgba(0,255,136,0.15)' : btnStyle.background,
-              borderColor: showProjects ? '#00ff88' : '#1e3f2a',
-            }}
+            style={{ ...btnStyle, background: showProjects ? 'rgba(0,255,136,0.15)' : btnStyle.background, borderColor: showProjects ? '#00ff88' : '#1e3f2a' }}
             onClick={() => { setShowProjects((v) => !v); setShowSearch(false); }}
             title="Load project context into chat"
           >
