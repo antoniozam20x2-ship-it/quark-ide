@@ -1,61 +1,57 @@
-import { LiveProvider, LivePreview, LiveError } from 'react-live';
-
 interface Props {
   code: string;
   language: string;
   filename?: string;
 }
 
-const REACT_LANGS = new Set(['tsx', 'jsx', 'typescript', 'javascript', 'ts', 'js']);
+const HTML_LANGS = new Set(['html']);
 
-function isReactLang(language: string, filename?: string): boolean {
-  if (filename) {
-    const name = filename.toLowerCase();
-    if (name.endsWith('.tsx') || name.endsWith('.jsx') || name.endsWith('.js') || name.endsWith('.ts')) {
-      return true;
-    }
-    if (name.endsWith('.css') || name.endsWith('.html') || name.endsWith('.md')) return false;
+function buildHtmlDoc(code: string, language: string, filename?: string): string {
+  const name = filename?.toLowerCase() ?? '';
+  const isHtml = HTML_LANGS.has(language.toLowerCase()) || name.endsWith('.html');
+  if (isHtml) return code;
+
+  const isReact = name.endsWith('.tsx') || name.endsWith('.jsx') ||
+    name.endsWith('.ts') || name.endsWith('.js') ||
+    ['tsx', 'jsx', 'typescript', 'javascript', 'ts', 'js'].includes(language.toLowerCase());
+
+  if (isReact) {
+    return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+  body { margin: 0; background: #0a0a0a; color: #e2e8f0;
+         font-family: JetBrains Mono, monospace; padding: 16px; }
+  pre  { white-space: pre-wrap; word-break: break-all; font-size: 12px;
+         line-height: 1.6; color: #94a3b8; }
+  .hint { color: #3a3a5c; font-size: 11px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<p class="hint">// source — usa el Agent para generar un preview visual</p>
+<pre>${code.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+</body>
+</html>`;
   }
-  return REACT_LANGS.has(language.toLowerCase());
-}
 
-function cleanForPreview(code: string): string {
-  return code
-    // Eliminar todos los imports
-    .split('\n')
-    .filter(line => !line.trim().startsWith('import'))
-    .join('\n')
-    // Eliminar tipos TypeScript
-    .replace(/:\s*(string|number|boolean|void|any|null|undefined|React\.FC|FC|ReactNode|React\.ReactNode)(\s*[=,\)\{>;])/g, '$2')
-    // Eliminar generics simples
-    .replace(/<(string|number|boolean|null|undefined|any)>/g, '')
-    // Eliminar React.FC
-    .replace(/:\s*React\.FC(\s*=)/g, '$1')
-    .replace(/:\s*FC(\s*=)/g, '$1')
-    // Eliminar interface y type blocks
-    .replace(/^(export\s+)?(interface|type)\s+\w+[^{]*\{[^}]*\}/gm, '')
-    // Eliminar export
-    .replace(/export default /g, '')
-    .replace(/export const /g, 'const ')
-    .replace(/export function /g, 'function ')
-    .trim();
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+  body { margin: 0; background: #0a0a0a; color: #94a3b8;
+         font-family: JetBrains Mono, monospace; padding: 16px; }
+  pre  { white-space: pre-wrap; word-break: break-all; font-size: 12px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<pre>${code.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+</body>
+</html>`;
 }
 
 export default function SandpackPreview({ code, language, filename }: Props) {
-  if (!isReactLang(language, filename)) {
-    return (
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        height: '100%', padding: 24, color: '#3a3a5c',
-        fontFamily: 'JetBrains Mono, monospace', fontSize: 12,
-        background: '#08080f', textAlign: 'center',
-        whiteSpace: 'pre-line', lineHeight: 1.7,
-      }}>
-        Solo se puede previsualizar componentes React (.tsx)
-      </div>
-    );
-  }
-
   if (!code || !code.trim()) {
     return (
       <div style={{
@@ -69,30 +65,14 @@ export default function SandpackPreview({ code, language, filename }: Props) {
     );
   }
 
-  const cleanCode = cleanForPreview(code);
+  const srcDoc = buildHtmlDoc(code, language, filename);
 
   return (
-    <div style={{ height: '100%', background: '#08080f', overflow: 'auto' }}>
-      <LiveProvider code={cleanCode} noInline={false}>
-        <div style={{
-          background: '#0a0a0a',
-          minHeight: 300,
-          padding: 16,
-        }}>
-          <LivePreview />
-        </div>
-        <LiveError style={{
-          color: '#ff4444',
-          fontFamily: 'JetBrains Mono, monospace',
-          fontSize: 11,
-          padding: '8px 16px',
-          background: '#1a0a0a',
-          borderTop: '1px solid #3a1a1a',
-          margin: 0,
-          whiteSpace: 'pre-wrap',
-          display: 'block',
-        }} />
-      </LiveProvider>
-    </div>
+    <iframe
+      srcDoc={srcDoc}
+      style={{ width: '100%', height: '100%', border: 'none', background: '#08080f' }}
+      sandbox="allow-scripts"
+      title="Preview"
+    />
   );
 }

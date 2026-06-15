@@ -22,37 +22,6 @@ interface Props {
   initialPrompt?: string;
 }
 
-function cleanCodeForPreview(code: string): string {
-  return code
-    // elimina bloques import completos (multilinea)
-    .replace(/^import\s+[\s\S]*?from\s+['"][^'"]+['"];?\s*$/gm, '')
-    .replace(/^import\s+['"][^'"]+['"];?\s*$/gm, '')
-    // elimina bloques interface y type completos (multilinea)
-    .replace(/^(export\s+)?(interface|type)\s+\w+[\s\S]*?\n\}/gm, '')
-    // elimina enums
-    .replace(/^(export\s+)?enum\s+\w+\s*\{[\s\S]*?\}/gm, '')
-    // elimina generics simples y complejos: <Type>, <T extends X>
-    .replace(/<([A-Z][a-zA-Z]*(\s*\|\s*[a-zA-Z]+)*(\[\])?(\s*,\s*[A-Z][a-zA-Z]*)*)>/g, '')
-    // elimina union types en anotaciones: : string | null | undefined
-    .replace(/:\s*[a-zA-Z]+(\s*\|\s*[a-zA-Z]+)+(\s*[,)\{=\n])/g, '$2')
-    // elimina tipos simples inline: : string, : number, etc
-    .replace(/:\s*(string|number|boolean|null|undefined|void|any|object|never)(\s*[,)\{=\n])/g, '$2')
-    // elimina return types de funciones: ): Type {
-    .replace(/\)\s*:\s*[A-Za-z<>\[\]|&\s]+\s*(\{|=>)/g, ') $1')
-    // elimina type assertions: as Type, as unknown as Type
-    .replace(/\s+as\s+[A-Za-z<>\[\]]+/g, '')
-    // elimina readonly
-    .replace(/\breadonly\b\s+/g, '')
-    // elimina modificadores de acceso
-    .replace(/\b(public|private|protected)\b\s+/g, '')
-    // export default → nada, export const → const
-    .replace(/export\s+default\s+/g, '')
-    .replace(/export\s+const\s+/g, 'const ')
-    .replace(/export\s+function\s+/g, 'function ')
-    // limpia líneas vacías múltiples
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
 
 export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPreview, initialPrompt }: Props) {
   const [prompt, setPrompt]         = useState('');

@@ -1,0 +1,74 @@
+CONTEXTO:
+En frontend/src/components/Agent/QuarkAgent.tsx
+el botón "Ver Preview" tiene dos caminos posibles:
+1. El viejo: usa previewCode con react-live
+2. El nuevo: llama a /api/agent/generate-html e iframe
+
+El problema: sigue ejecutando el camino viejo 
+(react-live) que falla con "The string did not 
+match the expected pattern".
+
+FIX EXACTO:
+
+Busca la función que se ejecuta al hacer click 
+en "Ver Preview". Puede llamarse handlePreview, 
+showPreview, o similar.
+
+Elimina COMPLETAMENTE cualquier lógica que use:
+- previewCode
+- react-live
+- LiveProvider, LivePreview, LiveError
+- cualquier import de 'react-live'
+
+El botón "Ver Preview" debe hacer ÚNICAMENTE esto:
+
+async function handlePreview() {
+  setIsGeneratingHtml(true);
+  try {
+    const response = await fetch(
+      '/api/agent/generate-html',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: currentPrompt, 
+          // currentPrompt = el texto que el usuario 
+          // escribió en el input del Agent
+          projectName: activeProject || 'Quark IDE'
+        })
+      }
+    );
+    const data = await response.json();
+    if (data.success && data.html) {
+      setGeneratedHtml(data.html);
+    } else {
+      console.error('Error generating HTML:', data.error);
+    }
+  } catch (err) {
+    console.error('Preview error:', err);
+  } finally {
+    setIsGeneratingHtml(false);
+  }
+}
+
+El iframe que renderiza generatedHtml ya existe,
+no tocarlo.
+
+TAMBIÉN:
+Eliminar cualquier import de 'react-live' si existe
+en QuarkAgent.tsx — esto puede estar causando el 
+error de build en Vite (npm error signal SIGTERM).
+
+NO TOCAR:
+- La función commitToGitHub
+- La generación de archivos con Gemini
+- Studio, Chat, War Room, Monaco
+- Ningún otro componente
+
+VERIFICACIÓN:
+[ ] No hay ningún import de react-live
+[ ] handlePreview solo llama a /api/agent/generate-html
+[ ] Estados generatedHtml e isGeneratingHtml presentes
+[ ] iframe con srcDoc={generatedHtml} presente
+[ ] Build de Vite sin errores
+[ ] Build del backend sin errores
