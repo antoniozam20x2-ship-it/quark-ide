@@ -14,9 +14,10 @@ const TABS: { key: Tab; label: string; icon: string }[] = [
 interface Props {
   initialBrief?: string;
   onBriefConsumed?: () => void;
+  onSendToAgent?: (prompt: string) => void;
 }
 
-export default function WarRoomPage({ initialBrief, onBriefConsumed }: Props) {
+export default function WarRoomPage({ initialBrief, onBriefConsumed, onSendToAgent }: Props) {
   const [tab, setTab] = useState<Tab>(initialBrief ? 'board' : 'think');
 
   return (
@@ -84,6 +85,7 @@ export default function WarRoomPage({ initialBrief, onBriefConsumed }: Props) {
           <BoardRoom
             initialBrief={initialBrief}
             onBriefConsumed={onBriefConsumed}
+            onSendToAgent={onSendToAgent}
           />
         )}
       </div>

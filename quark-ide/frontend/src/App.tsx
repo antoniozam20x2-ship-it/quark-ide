@@ -28,6 +28,7 @@ export default function App() {
   const [activeProject, setActiveProject] = useState<Project>(PROJECTS[0]);
   const [boardBrief, setBoardBrief]       = useState<string>('');
   const [agentPreviewPending, setAgentPreviewPending] = useState(false);
+  const [pipelinePrompt, setPipelinePrompt] = useState<string>('');
 
   return (
     <div
@@ -37,12 +38,14 @@ export default function App() {
       <Sidebar activePage={page} onNavigate={setPage} />
       <div className="flex-1" style={{ minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'clip' }}>
         {page === 'agent' && (
-          <AgentPage onOpenEditor={(showPreview) => {
-            setPage('editor');
-            if (showPreview) {
-              setTimeout(() => setAgentPreviewPending(true), 100);
-            }
-          }} />
+          <AgentPage
+            onOpenEditor={(showPreview) => {
+              setPage('editor');
+              if (showPreview) setTimeout(() => setAgentPreviewPending(true), 100);
+            }}
+            initialPrompt={pipelinePrompt}
+            onPromptConsumed={() => setPipelinePrompt('')}
+          />
         )}
         {page === 'editor' && (
           <EditorPage
@@ -57,6 +60,10 @@ export default function App() {
           <WarRoomPage
             initialBrief={boardBrief}
             onBriefConsumed={() => setBoardBrief('')}
+            onSendToAgent={(prompt) => {
+              setPipelinePrompt(prompt);
+              setPage('agent');
+            }}
           />
         )}
         {page === 'debugger' && (

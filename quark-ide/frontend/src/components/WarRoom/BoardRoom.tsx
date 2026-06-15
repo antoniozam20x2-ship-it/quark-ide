@@ -21,9 +21,10 @@ interface MemberResponse {
 interface Props {
   initialBrief?: string;
   onBriefConsumed?: () => void;
+  onSendToAgent?: (prompt: string) => void;
 }
 
-export default function BoardRoom({ initialBrief, onBriefConsumed }: Props) {
+export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent }: Props) {
   const [challenge, setChallenge] = useState('');
   const [statuses, setStatuses] = useState<Record<MemberKey, MemberStatus>>({
     CEO: 'idle', CTO: 'idle', Designer: 'idle', QA: 'idle',
@@ -372,6 +373,31 @@ export default function BoardRoom({ initialBrief, onBriefConsumed }: Props) {
                   <QuarkMarkdown>{consensus}</QuarkMarkdown>
                 </div>
               </div>
+            )}
+
+            {consensus && consensus !== 'generating' && onSendToAgent && (
+              <button
+                onClick={() => onSendToAgent(consensus)}
+                style={{
+                  marginTop: 12,
+                  width: '100%',
+                  padding: '12px 16px',
+                  background: 'linear-gradient(135deg, #7C3AED, #6D28D9)',
+                  border: 'none',
+                  borderRadius: 8,
+                  color: '#fff',
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                }}
+              >
+                ⚡ Enviar al Agent → construir
+              </button>
             )}
           </div>
         )}

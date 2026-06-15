@@ -19,6 +19,7 @@ interface Props {
   activeProject: Project;
   onApplyToEditor: (code: string) => void;
   onShowPreview: () => void;
+  initialPrompt?: string;
 }
 
 function cleanCodeForPreview(code: string): string {
@@ -53,7 +54,7 @@ function cleanCodeForPreview(code: string): string {
     .trim();
 }
 
-export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPreview }: Props) {
+export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPreview, initialPrompt }: Props) {
   const [prompt, setPrompt]         = useState('');
   const [running, setRunning]       = useState(false);
   const [feed, setFeed]             = useState<AgentEvent[]>([]);
@@ -66,8 +67,17 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [feed, result]);
 
-  async function generate() {
-    if (!prompt.trim() || running) return;
+  useEffect(() => {
+    if (initialPrompt && initialPrompt.trim()) {
+      setPrompt(initialPrompt);
+      setTimeout(() => generate(initialPrompt), 300);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPrompt]);
+
+  async function generate(promptOverride?: string) {
+    const text = (promptOverride ?? prompt).trim();
+    if (!text || running) return;
     setRunning(true);
     setFeed([]);
     setResult(null);
