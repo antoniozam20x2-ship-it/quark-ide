@@ -1,7 +1,7 @@
 {
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "npm install && npm run build"
+    "buildCommand": "NODE_ENV=development npm install && npm run build"
   },
   "deploy": {
     "startCommand": "npm run start",
