@@ -64,16 +64,27 @@ REGLAS PARA files[].content:
 - Inline styles (no Tailwind)
 - Sin librerías externas (solo react)
 
-REGLAS PARA previewCode (MUY IMPORTANTE):
-- Sin imports de ningún tipo
-- Sin tipos TypeScript (:string, :number, :boolean, React.FC, etc.)
-- Sin generics (<string>, <number>, etc.)
-- Sin export default ni export const
-- Usar React.useState() no useState()
-- Usar React.useEffect() no useEffect()
-- Solo JSX y JavaScript puro
-- La función principal debe llamarse App
-- Ejemplo válido: function App() { const [x, setX] = React.useState(0); return <div>{x}</div>; }`;
+REGLAS ESTRICTAS para previewCode:
+- CERO imports de cualquier tipo
+- CERO tipos TypeScript (:string, :number, <T>, etc.)
+- CERO export (ni default ni named)
+- Usar React.useState en vez de useState
+- Usar React.useEffect en vez de useEffect
+- La función se llama App sin tipo: function App() {
+- Solo JSX + JavaScript puro
+- Máximo 50 líneas
+- Si el componente es complejo, simplificarlo para el preview manteniendo la idea visual
+
+Ejemplo CORRECTO de previewCode:
+function App() {
+  const [count, setCount] = React.useState(0);
+  return (
+    <div style={{padding:20}}>
+      <h1>Counter: {count}</h1>
+      <button onClick={() => setCount(c => c+1)}>+1</button>
+    </div>
+  );
+}`;
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.1-flash-lite',
