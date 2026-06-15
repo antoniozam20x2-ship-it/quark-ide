@@ -117,7 +117,7 @@ app.post('/github/commit-multiple', async (req, res) => {
   }
   try {
     const sha = await commitMultipleFiles(files, message, repo, branch);
-    res.json({ sha });
+    res.json({ sha, owner: process.env.GITHUB_OWNER ?? '' });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
   }

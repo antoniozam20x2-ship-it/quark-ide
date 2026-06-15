@@ -3,6 +3,12 @@ import type { Project } from '../../App';
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
 
+const BACKEND_PROJECTS = ['Signal OS', 'Sniper OS', 'Nexus OS'];
+
+function isBackendProject(name: string): boolean {
+  return BACKEND_PROJECTS.some((b) => name.includes(b));
+}
+
 interface AgentEvent {
   event: 'action' | 'file' | 'done' | 'error';
   text?: string;
@@ -15,6 +21,14 @@ interface AgentEvent {
   branch?: string;
 }
 
+interface CommitResult {
+  sha: string;
+  owner: string;
+  repo: string;
+  files: { path: string; content: string }[];
+  message: string;
+}
+
 interface Props {
   activeProject: Project;
   onApplyToEditor: (code: string) => void;
@@ -22,21 +36,22 @@ interface Props {
   initialPrompt?: string;
 }
 
-
 export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPreview, initialPrompt }: Props) {
-  const [prompt, setPrompt]         = useState('');
-  const [running, setRunning]       = useState(false);
-  const [feed, setFeed]             = useState<AgentEvent[]>([]);
-  const [result, setResult]         = useState<AgentEvent | null>(null);
-  const [committing, setCommitting]         = useState(false);
-  const [commitSha, setCommitSha]           = useState('');
+  const [prompt, setPrompt]               = useState('');
+  const [running, setRunning]             = useState(false);
+  const [feed, setFeed]                   = useState<AgentEvent[]>([]);
+  const [result, setResult]               = useState<AgentEvent | null>(null);
+  const [committing, setCommitting]       = useState(false);
+  const [commitResult, setCommitResult]   = useState<CommitResult | null>(null);
   const [isGeneratingHtml, setIsGeneratingHtml] = useState(false);
   const previewTriggeredRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  const isBackend = isBackendProject(activeProject.name);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [feed, result]);
+  }, [feed, result, commitResult]);
 
   useEffect(() => {
     if (initialPrompt && initialPrompt.trim()) {
@@ -52,7 +67,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     setRunning(true);
     setFeed([]);
     setResult(null);
-    setCommitSha('');
+    setCommitResult(null);
     previewTriggeredRef.current = false;
 
     try {
@@ -69,8 +84,6 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
       const reader  = res.body!.getReader();
       const decoder = new TextDecoder();
-      // Buffer acumula entre reads — evita que eventos grandes (done ~10KB)
-      // queden partidos entre chunks y fallen el JSON.parse
       let buffer = '';
 
       const processBlock = (block: string) => {
@@ -99,25 +112,11 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
       while (true) {
         const { done, value } = await reader.read();
-
-        if (value) {
-          buffer += decoder.decode(value, { stream: !done });
-        }
-
-        // Partir por \n\n: cada bloque es un evento SSE completo
+        if (value) buffer += decoder.decode(value, { stream: !done });
         const blocks = buffer.split('\n\n');
-        // Si el stream terminó, procesar todos los bloques incluyendo el último
-        // Si no, el último puede estar incompleto — guardarlo para el próximo chunk
         buffer = done ? '' : (blocks.pop() ?? '');
-
-        for (const block of blocks) {
-          processBlock(block);
-        }
-        // Si el stream terminó y quedó algo en buffer (sin \n\n final), procesarlo también
-        if (done) {
-          if (buffer.trim()) processBlock(buffer);
-          break;
-        }
+        for (const block of blocks) processBlock(block);
+        if (done) { if (buffer.trim()) processBlock(buffer); break; }
       }
     } catch (err) {
       setFeed((prev) => [...prev, { event: 'error', text: err instanceof Error ? err.message : String(err) }]);
@@ -126,13 +125,13 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     }
   }
 
-  // Auto-dispara el preview cuando result llega con contenido
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Auto-trigger preview for UI projects only
   useEffect(() => {
-    if (result && !isGeneratingHtml && !previewTriggeredRef.current) {
+    if (result && !isBackend && !isGeneratingHtml && !previewTriggeredRef.current) {
       previewTriggeredRef.current = true;
       generateHtml();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result]);
 
   async function generateHtml() {
@@ -168,19 +167,31 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         body: JSON.stringify({
           files:   result.files,
           message: result.commitMessage,
-          repo:    result.repo,
-          branch:  result.branch,
+          repo:    result.repo ?? activeProject.repo,
+          branch:  result.branch ?? activeProject.branch,
         }),
       });
-      const data = await res.json() as { sha?: string; error?: string };
-      if (data.sha) setCommitSha(data.sha.slice(0, 7));
-      else throw new Error(data.error ?? 'Commit failed');
+      const data = await res.json() as { sha?: string; owner?: string; error?: string };
+      if (!data.sha) throw new Error(data.error ?? 'Commit failed');
+      setCommitResult({
+        sha:     data.sha,
+        owner:   data.owner ?? '',
+        repo:    result.repo ?? activeProject.repo,
+        files:   result.files ?? [],
+        message: result.commitMessage ?? '',
+      });
     } catch (err) {
       setFeed((prev) => [...prev, { event: 'error', text: err instanceof Error ? err.message : String(err) }]);
     } finally {
       setCommitting(false);
     }
   }
+
+  const shortSha = commitResult?.sha.slice(0, 7) ?? '';
+  const githubUrl = commitResult
+    ? `https://github.com/${commitResult.owner}/${commitResult.repo}/commit/${commitResult.sha}`
+    : '';
+  const railwayUrl = `https://railway.app/project/${activeProject.railwayProjectId}`;
 
   return (
     <div style={{
@@ -197,6 +208,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         </span>
         <span style={{ color: '#3a3a5c', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           — {activeProject.emoji} {activeProject.name}
+          {isBackend && (
+            <span style={{ color: '#f59e0b', marginLeft: 6 }}>backend</span>
+          )}
         </span>
       </div>
 
@@ -252,8 +266,129 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           </div>
         )}
 
-        {/* Result actions — aparecen cuando result está seteado y running es false */}
-        {result && !running && (
+        {/* ── BACKEND PROJECT: commit summary ─────────────────────────────── */}
+        {result && !running && isBackend && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+
+            {/* Files list */}
+            <div style={{
+              background: '#0a0a16', border: '1px solid #1e3f2a', borderRadius: 6,
+              padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 4,
+            }}>
+              <div style={{ color: '#00ff88', fontSize: 11, fontWeight: 700, marginBottom: 4, letterSpacing: '0.06em' }}>
+                ✅ {result.files?.length} archivo{result.files?.length !== 1 ? 's' : ''} generados
+              </div>
+              {result.files?.map((f, i) => (
+                <div key={i} style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  color: '#6b7280', fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
+                }}>
+                  <span style={{ color: '#1e3f2a' }}>▸</span>
+                  <span style={{ color: '#a0a0c0' }}>{f.path}</span>
+                </div>
+              ))}
+              {result.commitMessage && (
+                <div style={{
+                  marginTop: 6, paddingTop: 6, borderTop: '1px solid #1e1e3f',
+                  color: '#4b5563', fontSize: 10, fontFamily: 'JetBrains Mono, monospace',
+                }}>
+                  {result.commitMessage}
+                </div>
+              )}
+            </div>
+
+            {/* Commit SHA — shown after commit */}
+            {commitResult && (
+              <div style={{
+                background: 'rgba(0,255,136,0.05)', border: '1px solid #1e3f2a',
+                borderRadius: 6, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ color: '#00ff88', fontSize: 12 }}>✅</span>
+                  <span style={{ color: '#00ff88', fontSize: 11, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace' }}>
+                    Commit {shortSha}
+                  </span>
+                </div>
+
+                {/* File list with changes */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {commitResult.files.map((f, i) => (
+                    <div key={i} style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
+                    }}>
+                      <span style={{ color: '#22c55e', fontSize: 10 }}>M</span>
+                      <span style={{ color: '#a0a0c0' }}>{f.path}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Action buttons */}
+                <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                  {githubUrl && (
+                    <a
+                      href={githubUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                        background: 'rgba(30,30,63,0.8)', border: '1px solid #2d2d6b',
+                        borderRadius: 6, color: '#a0a0e0', fontSize: 11, fontWeight: 700,
+                        fontFamily: 'JetBrains Mono, monospace', padding: '7px 10px',
+                        textDecoration: 'none', letterSpacing: '0.04em',
+                        transition: 'background 0.15s',
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(50,50,100,0.8)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(30,30,63,0.8)'; }}
+                    >
+                      🔗 GitHub {shortSha}
+                    </a>
+                  )}
+                  <a
+                    href={railwayUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                      background: 'rgba(124,58,237,0.12)', border: '1px solid #4c1d95',
+                      borderRadius: 6, color: '#a78bfa', fontSize: 11, fontWeight: 700,
+                      fontFamily: 'JetBrains Mono, monospace', padding: '7px 10px',
+                      textDecoration: 'none', letterSpacing: '0.04em',
+                      transition: 'background 0.15s',
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(124,58,237,0.22)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(124,58,237,0.12)'; }}
+                  >
+                    🚀 Ver en Railway
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {/* Commit button — shown before commit */}
+            {!commitResult && (
+              <button
+                onClick={commitToGitHub}
+                disabled={committing}
+                style={{
+                  background: committing ? '#1e1e3f' : 'rgba(124,58,237,0.12)',
+                  border: `1px solid ${committing ? '#1e1e3f' : '#4c1d95'}`,
+                  borderRadius: 6, color: committing ? '#3a3a5c' : '#a78bfa',
+                  fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700,
+                  padding: '9px 12px', cursor: committing ? 'not-allowed' : 'pointer',
+                  letterSpacing: '0.04em', transition: 'background 0.15s', width: '100%',
+                }}
+                onMouseEnter={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(124,58,237,0.22)'; }}
+                onMouseLeave={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(124,58,237,0.12)'; }}
+              >
+                {committing ? '⟳ Committing…' : '⚡ Commit a GitHub'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* ── UI PROJECT: preview + commit ─────────────────────────────────── */}
+        {result && !running && !isBackend && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
             <div style={{
               background: 'rgba(0,255,136,0.06)', border: '1px solid #1e3f2a',
@@ -283,7 +418,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                 {isGeneratingHtml ? '⚡ Generando…' : '▶️ Ver Preview'}
               </button>
 
-              {!commitSha ? (
+              {!commitResult ? (
                 <button
                   onClick={commitToGitHub}
                   disabled={committing}
@@ -291,8 +426,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                     flex: 1,
                     background: committing ? '#1e1e3f' : 'rgba(124,58,237,0.12)',
                     border: `1px solid ${committing ? '#1e1e3f' : '#4c1d95'}`,
-                    borderRadius: 6,
-                    color: committing ? '#3a3a5c' : '#a78bfa',
+                    borderRadius: 6, color: committing ? '#3a3a5c' : '#a78bfa',
                     fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700,
                     padding: '8px 12px', cursor: committing ? 'not-allowed' : 'pointer',
                     letterSpacing: '0.04em', transition: 'background 0.15s',
@@ -303,17 +437,22 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                   {committing ? '⟳ Committing…' : '⚡ Commit a GitHub'}
                 </button>
               ) : (
-                <div style={{
-                  flex: 1, background: 'rgba(124,58,237,0.12)', border: '1px solid #4c1d95',
-                  borderRadius: 6, color: '#a78bfa', fontFamily: 'JetBrains Mono, monospace',
-                  fontSize: 11, fontWeight: 700, padding: '8px 12px', textAlign: 'center',
-                  letterSpacing: '0.04em',
-                }}>
-                  ✅ Commit {commitSha}
-                </div>
+                <a
+                  href={githubUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: 'rgba(124,58,237,0.12)', border: '1px solid #4c1d95',
+                    borderRadius: 6, color: '#a78bfa', fontFamily: 'JetBrains Mono, monospace',
+                    fontSize: 11, fontWeight: 700, padding: '8px 12px', textAlign: 'center',
+                    letterSpacing: '0.04em', textDecoration: 'none',
+                  }}
+                >
+                  ✅ Commit {shortSha}
+                </a>
               )}
             </div>
-
           </div>
         )}
 
