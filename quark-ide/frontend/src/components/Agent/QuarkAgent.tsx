@@ -316,7 +316,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         />
         <button
           className="quark-btn-primary"
-          onClick={generate}
+          onClick={() => generate()}
           disabled={running || !prompt.trim()}
           style={{ flexShrink: 0, fontSize: 11 }}
         >
