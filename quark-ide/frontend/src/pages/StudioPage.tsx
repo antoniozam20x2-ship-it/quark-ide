@@ -62,7 +62,10 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
         })
         const data = await res.json()
         updateAgent(role, { content: data.result, status: 'done' })
-        if (role === 'engineer') setEngineeredPrompt(data.result)
+        if (role === 'engineer') {
+          console.log('Engineer result:', data.result)
+          setEngineeredPrompt(data.result ?? '')
+        }
       } catch {
         updateAgent(role, { status: 'error', content: 'Error al analizar' })
       }
@@ -114,7 +117,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
               {agent.status === 'thinking' && <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>analizando...</span>}
               {agent.status === 'done' && <span style={{ fontSize: 10, color: agent.color }}>✓</span>}
             </div>
-            {agent.content && (
+            {(agent.status === 'done' || agent.status === 'error') && agent.content && (
               <div style={{ padding: '0 12px 12px', fontFamily: mono, fontSize: 11, color: '#94A3B8', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
                 {agent.content}
               </div>
@@ -123,9 +126,9 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
         ))}
 
         {/* Send to Agent button */}
-        {allDone && engineeredPrompt && onSendToAgent && (
+        {allDone && onSendToAgent && (
           <button
-            onClick={() => onSendToAgent(engineeredPrompt)}
+            onClick={() => onSendToAgent(engineeredPrompt || brief)}
             style={{ width: '100%', padding: '14px 16px', background: 'linear-gradient(135deg, #7C3AED, #6D28D9)', border: 'none', borderRadius: 10, color: '#fff', fontFamily: mono, fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
           >
             ⚡ Enviar al Agent → construir
