@@ -153,7 +153,8 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
   const [files, setFiles] = useState<FileEntry[]>(INITIAL_FILES);
   const [activeFile, setActiveFile] = useState<FileEntry>(INITIAL_FILES[0]);
   const [mobileTab, setMobileTab] = useState<'editor' | 'chat' | 'preview' | 'agent'>('editor');
-  const [panelTab, setPanelTab]   = useState<'chat' | 'agent'>('agent');
+  const [panelTab, setPanelTab]   = useState<'chat' | 'agent' | 'preview'>('agent');
+  const [agentHtml, setAgentHtml] = useState<string>('');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [treeKey, setTreeKey] = useState(0);
@@ -438,8 +439,31 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
             </div>
           )}
           {mobileTab === 'preview' && (
-            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', background: '#08080f' }}>
-              <SandpackPreview code={activeFile.content} language={activeFile.language} filename={activeFile.name} />
+            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', background: '#08080f', display: 'flex', flexDirection: 'column' }}>
+              {agentHtml ? (
+                <>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '4px 12px', background: '#0d0d1a', borderBottom: '1px solid #1e1e3f', flexShrink: 0,
+                  }}>
+                    <span style={{ color: '#00ff88', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700 }}>▶ PREVIEW — AGENT</span>
+                    <button
+                      onClick={() => { setAgentHtml(''); setMobileTab('agent'); }}
+                      style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 13, fontFamily: 'JetBrains Mono, monospace', padding: '2px 6px' }}
+                    >
+                      ✕ Cerrar
+                    </button>
+                  </div>
+                  <iframe
+                    srcDoc={agentHtml}
+                    style={{ flex: 1, border: 'none', background: '#0a0a0a', minHeight: 0 }}
+                    sandbox="allow-scripts allow-same-origin"
+                    title="Agent Preview"
+                  />
+                </>
+              ) : (
+                <SandpackPreview code={activeFile.content} language={activeFile.language} filename={activeFile.name} />
+              )}
             </div>
           )}
           {mobileTab === 'chat' && (
@@ -461,7 +485,7 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
               onApplyToEditor={(code) => {
                 updateFile(code);
               }}
-              onShowPreview={() => setMobileTab('preview')}
+              onShowPreview={(html) => { setAgentHtml(html); setMobileTab('preview'); }}
               initialPrompt={initialPrompt}
             />
           )}
@@ -526,8 +550,9 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
             display: 'flex', gap: 0, borderBottom: '1px solid #1e1e3f', flexShrink: 0,
           }}>
             {([
-              { key: 'chat',  label: '⚛ CHAT' },
-              { key: 'agent', label: '🤖 AGENT' },
+              { key: 'chat',    label: '⚛ CHAT' },
+              { key: 'agent',   label: '🤖 AGENT' },
+              { key: 'preview', label: '▶ PREVIEW' },
             ] as const).map((t) => (
               <button
                 key={t.key}
@@ -563,13 +588,36 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
                 onSendToStudio={onSendToStudio}
                 layout="panel"
               />
-            ) : (
+            ) : panelTab === 'agent' ? (
               <QuarkAgent
                 activeProject={activeProject}
                 onApplyToEditor={updateFile}
-                onShowPreview={() => setShowPreview(true)}
+                onShowPreview={(html) => { setAgentHtml(html); setPanelTab('preview'); }}
                 initialPrompt={initialPrompt}
               />
+            ) : (
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: '#08080f' }}>
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '4px 12px', background: '#0d0d1a', borderBottom: '1px solid #1e1e3f', flexShrink: 0,
+                }}>
+                  <span style={{ color: '#00ff88', fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700, letterSpacing: '0.06em' }}>
+                    ▶ PREVIEW — AGENT
+                  </span>
+                  <button
+                    onClick={() => setPanelTab('agent')}
+                    style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '2px 6px', fontFamily: 'JetBrains Mono, monospace' }}
+                  >
+                    ✕ Cerrar
+                  </button>
+                </div>
+                <iframe
+                  srcDoc={agentHtml}
+                  style={{ flex: 1, border: 'none', background: '#0a0a0a', minHeight: 0 }}
+                  sandbox="allow-scripts allow-same-origin"
+                  title="Agent Preview"
+                />
+              </div>
             )}
           </div>
         </div>

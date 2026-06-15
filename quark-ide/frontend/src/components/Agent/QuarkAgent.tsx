@@ -18,7 +18,7 @@ interface AgentEvent {
 interface Props {
   activeProject: Project;
   onApplyToEditor: (code: string) => void;
-  onShowPreview: () => void;
+  onShowPreview: (html: string) => void;
   initialPrompt?: string;
 }
 
@@ -30,8 +30,8 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   const [result, setResult]         = useState<AgentEvent | null>(null);
   const [committing, setCommitting]         = useState(false);
   const [commitSha, setCommitSha]           = useState('');
-  const [generatedHtml, setGeneratedHtml]   = useState<string>('');
   const [isGeneratingHtml, setIsGeneratingHtml] = useState(false);
+  const previewTriggeredRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -53,7 +53,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     setFeed([]);
     setResult(null);
     setCommitSha('');
-    setGeneratedHtml('');
+    previewTriggeredRef.current = false;
 
     try {
       const res = await fetch(`${API_BASE}/agent/generate`, {
@@ -129,14 +129,14 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   // Auto-dispara el preview cuando result llega con contenido
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (result && !generatedHtml && !isGeneratingHtml) {
+    if (result && !isGeneratingHtml && !previewTriggeredRef.current) {
+      previewTriggeredRef.current = true;
       generateHtml();
     }
   }, [result]);
 
   async function generateHtml() {
     if (!result) return;
-    if (generatedHtml) return;
     if (isGeneratingHtml) return;
     setIsGeneratingHtml(true);
     try {
@@ -150,7 +150,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
       });
       const data = await res.json() as { html?: string; success: boolean; error?: string };
       if (!data.success || !data.html) throw new Error(data.error ?? 'Sin HTML');
-      setGeneratedHtml(data.html);
+      onShowPreview(data.html);
     } catch (err) {
       setFeed((prev) => [...prev, { event: 'error', text: err instanceof Error ? err.message : String(err) }]);
     } finally {
@@ -264,26 +264,24 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
             </div>
 
             <div style={{ display: 'flex', gap: 8 }}>
-              {!generatedHtml && (
-                <button
-                  onClick={generateHtml}
-                  disabled={isGeneratingHtml}
-                  style={{
-                    flex: 1,
-                    background: isGeneratingHtml ? '#1e1e3f' : 'rgba(0,255,136,0.1)',
-                    border: '1px solid #1e3f2a',
-                    borderRadius: 6, color: isGeneratingHtml ? '#3a3a5c' : '#00ff88',
-                    fontFamily: 'JetBrains Mono, monospace',
-                    fontSize: 11, fontWeight: 700, padding: '8px 12px',
-                    cursor: isGeneratingHtml ? 'not-allowed' : 'pointer',
-                    letterSpacing: '0.04em', transition: 'background 0.15s',
-                  }}
-                  onMouseEnter={(e) => { if (!isGeneratingHtml) e.currentTarget.style.background = 'rgba(0,255,136,0.18)'; }}
-                  onMouseLeave={(e) => { if (!isGeneratingHtml) e.currentTarget.style.background = 'rgba(0,255,136,0.1)'; }}
-                >
-                  {isGeneratingHtml ? '⚡ Generando con Claude…' : '▶️ Ver Preview'}
-                </button>
-              )}
+              <button
+                onClick={generateHtml}
+                disabled={isGeneratingHtml}
+                style={{
+                  flex: 1,
+                  background: isGeneratingHtml ? '#1e1e3f' : 'rgba(0,255,136,0.1)',
+                  border: '1px solid #1e3f2a',
+                  borderRadius: 6, color: isGeneratingHtml ? '#3a3a5c' : '#00ff88',
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontSize: 11, fontWeight: 700, padding: '8px 12px',
+                  cursor: isGeneratingHtml ? 'not-allowed' : 'pointer',
+                  letterSpacing: '0.04em', transition: 'background 0.15s',
+                }}
+                onMouseEnter={(e) => { if (!isGeneratingHtml) e.currentTarget.style.background = 'rgba(0,255,136,0.18)'; }}
+                onMouseLeave={(e) => { if (!isGeneratingHtml) e.currentTarget.style.background = 'rgba(0,255,136,0.1)'; }}
+              >
+                {isGeneratingHtml ? '⚡ Generando…' : '▶️ Ver Preview'}
+              </button>
 
               {!commitSha ? (
                 <button
@@ -316,35 +314,6 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               )}
             </div>
 
-            {generatedHtml && (
-              <div style={{ marginTop: 8 }}>
-                <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#3a3a5c', marginBottom: 6 }}>
-                  // preview — Claude claude-sonnet-4-6
-                </div>
-                <iframe
-                  srcDoc={generatedHtml}
-                  style={{
-                    width: '100%',
-                    height: 600,
-                    border: 'none',
-                    borderRadius: 8,
-                    background: '#0a0a0a',
-                  }}
-                  sandbox="allow-scripts allow-same-origin"
-                  title="QUARK Preview"
-                />
-                <button
-                  onClick={() => setGeneratedHtml('')}
-                  style={{
-                    marginTop: 6, background: 'transparent', border: '1px solid #1e1e3f',
-                    borderRadius: 6, color: '#3a3a5c', fontFamily: 'JetBrains Mono, monospace',
-                    fontSize: 10, padding: '4px 10px', cursor: 'pointer',
-                  }}
-                >
-                  ✕ cerrar preview
-                </button>
-              </div>
-            )}
           </div>
         )}
 
