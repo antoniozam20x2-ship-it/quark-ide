@@ -88,7 +88,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt:      prompt.trim(),
+          prompt:      text,
           repo:        activeProject.repo,
           branch:      activeProject.branch,
           projectName: activeProject.name,
@@ -248,8 +248,14 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               {result.mainContent && (
                 <button
                   onClick={() => {
-                    onApplyToEditor(cleanCodeForPreview(result.mainContent!));
-                    onShowPreview();
+                    const cleaned = cleanCodeForPreview(result.mainContent!)
+                    if (cleaned.trim()) {
+                      onApplyToEditor(cleaned)
+                      onShowPreview()
+                    } else {
+                      onApplyToEditor(result.mainContent!)
+                      onShowPreview()
+                    }
                   }}
                   style={{
                     flex: 1, background: 'rgba(0,255,136,0.1)', border: '1px solid #1e3f2a',
