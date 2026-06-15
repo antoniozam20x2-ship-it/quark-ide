@@ -19,6 +19,28 @@ function isReactLang(language: string, filename?: string): boolean {
   return REACT_LANGS.has(language.toLowerCase());
 }
 
+function cleanForPreview(code: string): string {
+  return code
+    // Eliminar todos los imports
+    .split('\n')
+    .filter(line => !line.trim().startsWith('import'))
+    .join('\n')
+    // Eliminar tipos TypeScript
+    .replace(/:\s*(string|number|boolean|void|any|null|undefined|React\.FC|FC|ReactNode|React\.ReactNode)(\s*[=,\)\{>;])/g, '$2')
+    // Eliminar generics simples
+    .replace(/<(string|number|boolean|null|undefined|any)>/g, '')
+    // Eliminar React.FC
+    .replace(/:\s*React\.FC(\s*=)/g, '$1')
+    .replace(/:\s*FC(\s*=)/g, '$1')
+    // Eliminar interface y type blocks
+    .replace(/^(export\s+)?(interface|type)\s+\w+[^{]*\{[^}]*\}/gm, '')
+    // Eliminar export
+    .replace(/export default /g, '')
+    .replace(/export const /g, 'const ')
+    .replace(/export function /g, 'function ')
+    .trim();
+}
+
 export default function SandpackPreview({ code, language, filename }: Props) {
   if (!isReactLang(language, filename)) {
     return (
@@ -47,9 +69,11 @@ export default function SandpackPreview({ code, language, filename }: Props) {
     );
   }
 
+  const cleanCode = cleanForPreview(code);
+
   return (
     <div style={{ height: '100%', background: '#08080f', overflow: 'auto' }}>
-      <LiveProvider code={code} noInline={false}>
+      <LiveProvider code={cleanCode} noInline={false}>
         <div style={{
           background: '#0a0a0a',
           minHeight: 300,
