@@ -185,6 +185,22 @@ STRICT RULES:
 9. Color palette: respect what the brief specifies. If cyberpunk: use #0a0a0a background, neon green #00ff88 accents, monospace fonts.
 10. DO NOT generate a skeleton. Generate a COMPLETE, production-quality UI.`;
 
+function extractHtml(raw: string): string {
+  const fenceMatch = raw.match(/```(?:html)?\s*([\s\S]*?)```/i);
+  if (fenceMatch) return fenceMatch[1].trim();
+
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html')) return trimmed;
+
+  const doctypeStart = trimmed.indexOf('<!DOCTYPE');
+  if (doctypeStart !== -1) return trimmed.slice(doctypeStart);
+
+  const htmlTagStart = trimmed.indexOf('<html');
+  if (htmlTagStart !== -1) return trimmed.slice(htmlTagStart);
+
+  return trimmed;
+}
+
 router.post('/generate-html', async (req, res) => {
   const { prompt, projectName } = req.body as { prompt?: string; projectName?: string };
   if (!prompt) return res.status(400).json({ success: false, error: 'prompt requerido' });
@@ -211,10 +227,11 @@ router.post('/generate-html', async (req, res) => {
     const data = await response.json() as any;
     if (!response.ok) throw new Error(data?.error?.message ?? `OpenRouter ${response.status}`);
 
-    const html = data.choices?.[0]?.message?.content ?? '';
-    if (!html) throw new Error('OpenRouter no devolvió contenido');
+    const rawHtml = data.choices?.[0]?.message?.content ?? '';
+    if (!rawHtml) throw new Error('OpenRouter no devolvió contenido');
+    const cleanHtml = extractHtml(rawHtml);
 
-    res.json({ html, success: true });
+    res.json({ html: cleanHtml, success: true });
   } catch (err) {
     console.error('[generate-html] error:', err);
     res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
