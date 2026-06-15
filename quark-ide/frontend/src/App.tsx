@@ -65,7 +65,11 @@ export default function App() {
           <WarRoomPage
             initialBrief={boardBrief}
             onBriefConsumed={() => setBoardBrief('')}
-            onSendToAgent={(prompt) => {
+            onSendToAgent={(prompt, projectName) => {
+              if (projectName) {
+                const target = PROJECTS.find((p) => p.name === projectName);
+                if (target) setActiveProject(target);
+              }
               setPipelinePrompt(prompt);
               setPage('editor');
             }}

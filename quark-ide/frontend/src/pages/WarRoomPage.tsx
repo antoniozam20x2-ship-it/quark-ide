@@ -14,7 +14,7 @@ const TABS: { key: Tab; label: string; icon: string }[] = [
 interface Props {
   initialBrief?: string;
   onBriefConsumed?: () => void;
-  onSendToAgent?: (prompt: string) => void;
+  onSendToAgent?: (prompt: string, projectName?: string) => void;
 }
 
 export default function WarRoomPage({ initialBrief, onBriefConsumed, onSendToAgent }: Props) {

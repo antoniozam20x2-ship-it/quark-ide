@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import QuarkMarkdown from '../shared/QuarkMarkdown';
+import { PROJECTS } from '../../App';
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
 
@@ -7,21 +8,40 @@ type MemberKey = 'CEO' | 'CTO' | 'Designer' | 'QA';
 type MemberStatus = 'idle' | 'thinking' | 'done' | 'error';
 
 const MEMBERS: { key: MemberKey; icon: string; title: string; subtitle: string }[] = [
-  { key: 'CEO', icon: '👔', title: 'CEO', subtitle: 'Business Strategy' },
-  { key: 'CTO', icon: '🖥', title: 'CTO', subtitle: 'Tech Architecture' },
+  { key: 'CEO',      icon: '👔', title: 'CEO',      subtitle: 'Business Strategy' },
+  { key: 'CTO',      icon: '🖥',  title: 'CTO',      subtitle: 'Tech Architecture' },
   { key: 'Designer', icon: '🎨', title: 'DESIGNER', subtitle: 'UX & Brand' },
-  { key: 'QA', icon: '🛡', title: 'QA', subtitle: 'Risk & Testing' },
+  { key: 'QA',       icon: '🛡',  title: 'QA',       subtitle: 'Risk & Testing' },
 ];
+
+const PROJECT_NAMES = PROJECTS.map((p) => p.name);
 
 interface MemberResponse {
   role: MemberKey;
   response: string;
 }
 
+interface SavedSession {
+  challenge: string;
+  responses: MemberResponse[];
+  consensus: string;
+  timestamp: number;
+}
+
 interface Props {
   initialBrief?: string;
   onBriefConsumed?: () => void;
-  onSendToAgent?: (prompt: string) => void;
+  onSendToAgent?: (prompt: string, projectName?: string) => void;
+}
+
+function detectRepo(challenge: string): string | null {
+  const c = challenge.toLowerCase();
+  if (c.includes('sniper') || c.includes('snipe'))  return 'Sniper OS';
+  if (c.includes('signal'))                          return 'Signal OS';
+  if (c.includes('nexus'))                           return 'Nexus OS';
+  if (c.includes('core ai') || c.includes('core'))  return 'Core AI';
+  if (c.includes('quark'))                           return 'Quark IDE';
+  return null;
 }
 
 export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent }: Props) {
@@ -37,6 +57,14 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
   });
   const [swarmMode, setSwarmMode] = useState(true);
   const [processingTime, setProcessingTime] = useState<number | null>(null);
+  const [targetRepo, setTargetRepo] = useState('');
+  const [showRepoSelector, setShowRepoSelector] = useState(false);
+  const [savedSession, setSavedSession] = useState<SavedSession | null>(() => {
+    try {
+      const raw = localStorage.getItem('warroom_last_session');
+      return raw ? (JSON.parse(raw) as SavedSession) : null;
+    } catch { return null; }
+  });
 
   useEffect(() => {
     if (!initialBrief) return;
@@ -45,6 +73,23 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
     conveneSwarm(initialBrief);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialBrief]);
+
+  function persistSession(ch: string, res: MemberResponse[], con: string) {
+    const session: SavedSession = { challenge: ch, responses: res, consensus: con, timestamp: Date.now() };
+    localStorage.setItem('warroom_last_session', JSON.stringify(session));
+    setSavedSession(session);
+  }
+
+  function restoreSession() {
+    if (!savedSession) return;
+    setChallenge(savedSession.challenge);
+    setResponses(savedSession.responses);
+    setConsensus(savedSession.consensus);
+    setStatuses({ CEO: 'done', CTO: 'done', Designer: 'done', QA: 'done' });
+    setExpanded({ CEO: false, CTO: false, Designer: false, QA: false });
+    setTargetRepo('');
+    setShowRepoSelector(false);
+  }
 
   function setStatus(key: MemberKey, s: MemberStatus) {
     setStatuses((prev) => ({ ...prev, [key]: s }));
@@ -61,6 +106,8 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
     setResponses([]);
     setConsensus('');
     setProcessingTime(null);
+    setTargetRepo('');
+    setShowRepoSelector(false);
     setStatuses({ CEO: 'thinking', CTO: 'thinking', Designer: 'thinking', QA: 'thinking' });
     setExpanded({ CEO: false, CTO: false, Designer: false, QA: false });
 
@@ -71,20 +118,21 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
         body: JSON.stringify({ challenge: text }),
       });
       const data = await res.json();
-
       if (data.error) throw new Error(data.error);
 
       const collected: MemberResponse[] = [
-        { role: 'CEO', response: data.ceo ?? '' },
-        { role: 'CTO', response: data.cto ?? '' },
+        { role: 'CEO',      response: data.ceo      ?? '' },
+        { role: 'CTO',      response: data.cto      ?? '' },
         { role: 'Designer', response: data.designer ?? '' },
-        { role: 'QA', response: data.qa ?? '' },
+        { role: 'QA',       response: data.qa       ?? '' },
       ];
+      const con = data.consensus ?? '';
 
       setResponses(collected);
       setStatuses({ CEO: 'done', CTO: 'done', Designer: 'done', QA: 'done' });
-      setConsensus(data.consensus ?? '');
+      setConsensus(con);
       setProcessingTime(data.processingTime ?? null);
+      persistSession(text, collected, con);
     } catch {
       setStatuses({ CEO: 'error', CTO: 'error', Designer: 'error', QA: 'error' });
       setConsensus('⚠ Swarm encountered an error. Try sequential mode.');
@@ -100,11 +148,12 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
     setResponses([]);
     setConsensus('');
     setProcessingTime(null);
+    setTargetRepo('');
+    setShowRepoSelector(false);
     setStatuses({ CEO: 'idle', CTO: 'idle', Designer: 'idle', QA: 'idle' });
     setExpanded({ CEO: false, CTO: false, Designer: false, QA: false });
 
     const collected: MemberResponse[] = [];
-
     for (const member of MEMBERS) {
       setStatus(member.key, 'thinking');
       try {
@@ -121,8 +170,9 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
         await new Promise((r) => setTimeout(r, 300));
       } catch {
         setStatus(member.key, 'error');
-        collected.push({ role: member.key, response: '⚠ Error fetching response.' });
-        setResponses((prev) => [...prev, { role: member.key, response: '⚠ Error fetching response.' }]);
+        const mr = { role: member.key, response: '⚠ Error fetching response.' };
+        collected.push(mr);
+        setResponses((prev) => [...prev, mr]);
       }
     }
 
@@ -137,7 +187,9 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
         }),
       });
       const d = await summaryRes.json();
-      setConsensus(d.response ?? '');
+      const con = d.response ?? '';
+      setConsensus(con);
+      persistSession(text, collected, con);
     } catch {
       setConsensus('⚠ Could not generate consensus.');
     }
@@ -152,6 +204,13 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
   }
 
   const memberMap = Object.fromEntries(responses.map((r) => [r.role, r])) as Record<MemberKey, MemberResponse | undefined>;
+  const detectedRepo = challenge ? detectRepo(challenge) : null;
+  const effectiveRepo = targetRepo || detectedRepo || PROJECT_NAMES[0];
+
+  function handleSendToAgent() {
+    if (!onSendToAgent || !consensus || consensus === 'generating') return;
+    onSendToAgent(consensus, effectiveRepo);
+  }
 
   return (
     <>
@@ -163,39 +222,48 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
           width: 100%;
           min-width: 0;
         }
-        .board-members-grid > * {
-          min-width: 0;
-          overflow: hidden;
-        }
+        .board-members-grid > * { min-width: 0; overflow: hidden; }
         @media (max-width: 767px) {
-          .board-members-grid {
-            grid-template-columns: repeat(2, 1fr);
-            gap: 8px;
-          }
-        }
-        .member-response-body {
-          overflow: hidden;
-          transition: max-height 0.25s ease;
-        }
-        .member-response-body.collapsed {
-          max-height: 80px;
-          -webkit-mask-image: linear-gradient(to bottom, black 40%, transparent 100%);
-          mask-image: linear-gradient(to bottom, black 40%, transparent 100%);
-        }
-        .member-response-body.expanded {
-          max-height: 2000px;
-          -webkit-mask-image: none;
-          mask-image: none;
+          .board-members-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
         }
       `}</style>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }}>
+
+        {/* Restore session banner */}
+        {savedSession && responses.length === 0 && !running && (
+          <div style={{
+            background: 'rgba(124,58,237,0.08)', border: '1px solid #4c1d95',
+            borderRadius: 8, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10,
+          }}>
+            <span style={{ color: '#a78bfa', fontSize: 11, fontFamily: 'JetBrains Mono, monospace', flex: 1 }}>
+              💾 Sesión anterior:{' '}
+              <span style={{ color: '#e2e8f0' }}>
+                {savedSession.challenge.slice(0, 60)}{savedSession.challenge.length > 60 ? '…' : ''}
+              </span>
+              <span style={{ color: '#6b7280', marginLeft: 8 }}>
+                {new Date(savedSession.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </span>
+            <button
+              onClick={restoreSession}
+              style={{
+                background: 'rgba(124,58,237,0.15)', border: '1px solid #7c3aed',
+                borderRadius: 4, color: '#a78bfa', fontFamily: 'JetBrains Mono, monospace',
+                fontSize: 10, fontWeight: 700, padding: '4px 10px', cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Restaurar sesión
+            </button>
+          </div>
+        )}
+
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
           <p style={{ color: '#6b7280', fontSize: 13, margin: 0 }}>
             Present your challenge to the board. Each member analyzes from their perspective.
           </p>
-          {/* Mode toggle */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
             <button
               onClick={() => setSwarmMode(false)}
@@ -261,15 +329,15 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
           {MEMBERS.map((m) => {
             const status = statuses[m.key];
             const isActive = status === 'thinking';
-            const isDone = status === 'done';
-            const isError = status === 'error';
+            const isDone   = status === 'done';
+            const isError  = status === 'error';
             return (
               <div
                 key={m.key}
                 style={{
                   background: '#0d0d1a',
                   border: `1px solid ${isActive ? '#00ff88' : isDone ? '#1e3f2a' : isError ? '#3f1e1e' : '#1e1e3f'}`,
-                  borderRadius: 6, padding: '12px', transition: 'all 0.3s ease',
+                  borderRadius: 6, padding: 12, transition: 'all 0.3s ease',
                   boxShadow: isActive ? '0 0 12px rgba(0,255,136,0.15)' : 'none',
                 }}
               >
@@ -298,19 +366,13 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
 
         {/* Responses */}
         {responses.length > 0 && (
-          <div style={{
-            flex: 1,
-            overflowY: 'auto',
-            WebkitOverflowScrolling: 'touch' as any,
-            paddingBottom: '80px',
-          }}>
+          <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch' as any, paddingBottom: 80 }}>
             {MEMBERS.map((m) => {
               const r = memberMap[m.key];
               if (!r) return null;
               const isExpanded = expanded[m.key];
               return (
-                <div key={m.key} style={{ background: '#0d0d1a', border: '1px solid #1e1e3f', borderRadius: 6, overflow: 'hidden' }}>
-                  {/* Header — fully clickable toggle */}
+                <div key={m.key} style={{ background: '#0d0d1a', border: '1px solid #1e1e3f', borderRadius: 6, overflow: 'hidden', marginBottom: 8 }}>
                   <button
                     onClick={() => toggleExpanded(m.key)}
                     style={{
@@ -327,8 +389,6 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
                       {isExpanded ? '▲ Ver menos' : 'Ver respuesta ▼'}
                     </span>
                   </button>
-
-                  {/* Body — only rendered when expanded */}
                   {isExpanded && (
                     <div style={{ padding: '12px 14px' }}>
                       <QuarkMarkdown>{r.response}</QuarkMarkdown>
@@ -348,56 +408,105 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
             )}
 
             {consensus && consensus !== 'generating' && (
-              <div style={{
-                background: '#0a1a0f', border: '1px solid #1e3f2a', borderLeft: '4px solid #00ff88',
-                borderRadius: 6, overflow: 'hidden', boxShadow: '0 0 20px rgba(0,255,136,0.08)',
-              }}>
+              <>
+                {/* Consensus block */}
                 <div style={{
-                  padding: '10px 16px', background: 'rgba(0,255,136,0.06)',
-                  borderBottom: '1px solid #1e3f2a', display: 'flex', alignItems: 'center', gap: 10,
+                  background: '#0a1a0f', border: '1px solid #1e3f2a', borderLeft: '4px solid #00ff88',
+                  borderRadius: 6, overflow: 'hidden', boxShadow: '0 0 20px rgba(0,255,136,0.08)',
                 }}>
-                  <span style={{ color: '#00ff88', fontSize: 16 }}>⚛</span>
-                  <span style={{ color: '#00ff88', fontSize: 13, fontWeight: 700, letterSpacing: '0.08em' }}>CONSENSUS</span>
-                  <span style={{ color: '#6b7280', fontSize: 11 }}>— synthesized from all perspectives</span>
-                  {swarmMode && processingTime !== null && (
-                    <span style={{
-                      marginLeft: 'auto', background: 'rgba(0,255,136,0.1)', border: '1px solid #1e3f2a',
-                      borderRadius: 3, padding: '1px 6px', color: '#00ff88', fontSize: 10, fontWeight: 700,
-                      fontFamily: 'JetBrains Mono, monospace',
-                    }}>
-                      ⚡ {(processingTime / 1000).toFixed(1)}s parallel
-                    </span>
-                  )}
+                  <div style={{
+                    padding: '10px 16px', background: 'rgba(0,255,136,0.06)',
+                    borderBottom: '1px solid #1e3f2a', display: 'flex', alignItems: 'center', gap: 10,
+                  }}>
+                    <span style={{ color: '#00ff88', fontSize: 16 }}>⚛</span>
+                    <span style={{ color: '#00ff88', fontSize: 13, fontWeight: 700, letterSpacing: '0.08em' }}>CONSENSUS</span>
+                    <span style={{ color: '#6b7280', fontSize: 11 }}>— synthesized from all perspectives</span>
+                    {swarmMode && processingTime !== null && (
+                      <span style={{
+                        marginLeft: 'auto', background: 'rgba(0,255,136,0.1)', border: '1px solid #1e3f2a',
+                        borderRadius: 3, padding: '1px 6px', color: '#00ff88', fontSize: 10, fontWeight: 700,
+                        fontFamily: 'JetBrains Mono, monospace',
+                      }}>
+                        ⚡ {(processingTime / 1000).toFixed(1)}s parallel
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ padding: 16, whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
+                    <QuarkMarkdown>{consensus}</QuarkMarkdown>
+                  </div>
                 </div>
-                <div style={{ padding: 16, height: 'auto', whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
-                  <QuarkMarkdown>{consensus}</QuarkMarkdown>
-                </div>
-              </div>
-            )}
 
-            {consensus && consensus !== 'generating' && onSendToAgent && (
-              <button
-                onClick={() => onSendToAgent(consensus)}
-                style={{
-                  marginTop: 12,
-                  width: '100%',
-                  padding: '12px 16px',
-                  background: 'linear-gradient(135deg, #7C3AED, #6D28D9)',
-                  border: 'none',
-                  borderRadius: 8,
-                  color: '#fff',
-                  fontFamily: 'JetBrains Mono, monospace',
-                  fontSize: 13,
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8,
-                }}
-              >
-                ⚡ Enviar al Agent → construir
-              </button>
+                {/* Repo selector + Send button */}
+                {onSendToAgent && (
+                  <div style={{
+                    marginTop: 12, background: '#0d0d1a', border: '1px solid #1e1e3f',
+                    borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10,
+                  }}>
+                    {/* Repo row */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#6b7280' }}>
+                        // target repo
+                      </span>
+                      {!showRepoSelector && detectedRepo && !targetRepo ? (
+                        <>
+                          <span style={{ fontSize: 10, color: '#00ff88', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700 }}>
+                            🎯 {detectedRepo}
+                          </span>
+                          <button
+                            onClick={() => setShowRepoSelector(true)}
+                            style={{
+                              background: 'transparent', border: '1px solid #1e1e3f', borderRadius: 4,
+                              color: '#6b7280', fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                              padding: '2px 8px', cursor: 'pointer',
+                            }}
+                          >
+                            Cambiar
+                          </button>
+                        </>
+                      ) : (
+                        <select
+                          value={targetRepo || detectedRepo || PROJECT_NAMES[0]}
+                          onChange={(e) => { setTargetRepo(e.target.value); setShowRepoSelector(false); }}
+                          style={{
+                            background: '#12121A', border: '1px solid #1e1e3f', borderRadius: 4,
+                            color: '#e2e8f0', fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
+                            padding: '4px 8px', cursor: 'pointer', outline: 'none',
+                          }}
+                        >
+                          {PROJECT_NAMES.map((name) => (
+                            <option key={name} value={name}>{name}</option>
+                          ))}
+                        </select>
+                      )}
+                      {targetRepo && (
+                        <button
+                          onClick={() => { setTargetRepo(''); setShowRepoSelector(false); }}
+                          style={{
+                            background: 'transparent', border: 'none', color: '#6b7280',
+                            fontSize: 10, cursor: 'pointer', fontFamily: 'JetBrains Mono, monospace',
+                          }}
+                        >
+                          ✕ auto
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Send button */}
+                    <button
+                      onClick={handleSendToAgent}
+                      style={{
+                        width: '100%', padding: '12px 16px',
+                        background: 'linear-gradient(135deg, #7C3AED, #6D28D9)',
+                        border: 'none', borderRadius: 8, color: '#fff',
+                        fontFamily: 'JetBrains Mono, monospace', fontSize: 13, fontWeight: 700,
+                        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                      }}
+                    >
+                      ⚡ Enviar al Agent → {effectiveRepo}
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
