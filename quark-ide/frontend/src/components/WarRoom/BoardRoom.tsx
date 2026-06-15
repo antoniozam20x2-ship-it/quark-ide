@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import QuarkMarkdown from '../shared/QuarkMarkdown';
-import { PROJECTS } from '../../App';
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
 
@@ -14,7 +13,7 @@ const MEMBERS: { key: MemberKey; icon: string; title: string; subtitle: string }
   { key: 'QA',       icon: '🛡',  title: 'QA',       subtitle: 'Risk & Testing' },
 ];
 
-const PROJECT_NAMES = PROJECTS.map((p) => p.name);
+const PROJECT_NAMES = ['Quark IDE', 'Signal OS', 'Sniper OS', 'Nexus OS', 'Core AI'];
 
 interface MemberResponse {
   role: MemberKey;
