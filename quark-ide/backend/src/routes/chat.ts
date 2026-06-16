@@ -171,6 +171,13 @@ Usa este contexto para dar respuestas precisas y específicas al código real. C
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
+  // Hard timeout — close stream after 45s no matter what
+  const hardTimeout = setTimeout(() => {
+    res.write(`data: ${JSON.stringify({ error: 'Request timed out. Try again.' })}\n\n`);
+    res.write('data: [DONE]\n\n');
+    res.end();
+  }, 45_000);
+
   try {
     await streamChat(messages, systemPrompt, (chunk) => {
       res.write(`data: ${JSON.stringify({ text: chunk })}\n\n`);
@@ -178,8 +185,11 @@ Usa este contexto para dar respuestas precisas y específicas al código real. C
     res.write(`data: [DONE]\n\n`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
-    res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
+    console.error('[chat] streamChat error:', msg);
+    res.write(`data: ${JSON.stringify({ error: `Chat error: ${msg}` })}\n\n`);
+    res.write('data: [DONE]\n\n');
   } finally {
+    clearTimeout(hardTimeout);
     res.end();
   }
 });
