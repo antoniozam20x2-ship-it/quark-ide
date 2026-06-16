@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import QuarkMarkdown from '../shared/QuarkMarkdown';
+import type { BoardBrief } from '../../App';
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
 
@@ -28,7 +29,7 @@ interface SavedSession {
 }
 
 interface Props {
-  initialBrief?: string;
+  initialBrief?: BoardBrief | null;
   onBriefConsumed?: () => void;
   onSendToAgent?: (prompt: string, projectName?: string) => void;
 }
@@ -65,11 +66,17 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
     } catch { return null; }
   });
 
+  const repoContextRef = useRef<BoardBrief['repoContext'] | null>(null);
+  const appNameRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!initialBrief) return;
-    setChallenge(initialBrief);
+    const challengeText = initialBrief.challenge;
+    repoContextRef.current = initialBrief.repoContext ?? null;
+    appNameRef.current = initialBrief.appName ?? null;
+    setChallenge(challengeText);
     onBriefConsumed?.();
-    conveneSwarm(initialBrief);
+    conveneSwarm(challengeText);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialBrief]);
 
@@ -114,7 +121,11 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
       const res = await fetch(`${API_BASE}/api/warroom/swarm`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ challenge: text }),
+        body: JSON.stringify({
+          challenge: text,
+          appName: appNameRef.current ?? detectRepo(text) ?? undefined,
+          repoContext: repoContextRef.current ?? undefined,
+        }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -159,7 +170,12 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
         const res = await fetch(`${API_BASE}/api/warroom/board`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ challenge: text, member: member.key }),
+          body: JSON.stringify({
+            challenge: text,
+            member: member.key,
+            appName: appNameRef.current ?? detectRepo(text) ?? undefined,
+            repoContext: repoContextRef.current ?? undefined,
+          }),
         });
         const data = await res.json();
         const mr: MemberResponse = { role: member.key, response: data.response ?? data.error ?? '' };

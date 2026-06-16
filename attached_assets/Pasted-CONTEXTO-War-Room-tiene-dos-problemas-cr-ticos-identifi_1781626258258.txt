@@ -1,0 +1,199 @@
+CONTEXTO:
+War Room tiene dos problemas críticos identificados con el código real:
+1. JEFFERSON_CONTEXT hardcodeado con las 5 apps — los agentes se 
+   contaminan con información de apps irrelevantes al challenge
+2. El handoff Chat → War Room solo viaja con el string del challenge —
+   se pierde todo el contexto de repo y archivos que el Chat construyó
+
+TAREA: Dos cambios quirúrgicos en warroom.ts + BoardRoom.tsx
+NO tocar nada más.
+
+═══════════════════════════════════════
+CAMBIO 1 — BACKEND: warroom.ts
+Context dinámico por app
+═══════════════════════════════════════
+
+Actualmente JEFFERSON_CONTEXT es un bloque estático que incluye 
+las 5 apps. Reemplazarlo por una función que filtra según la app activa:
+
+1. Crear función buildContext(appName: string | null): string
+
+   Contexto base (siempre presente, para todos):
+   "Eres parte del War Room de Jefferson, trader especializado en 
+   crypto futures con metodología SMC/ICT operando en Bitget USDT-M.
+   Jefferson construye su ecosistema de apps en Railway con React/
+   TypeScript/Vite frontend + Node.js/Express backend + PostgreSQL.
+   Su filosofía: un cambio a la vez, calidad sobre cantidad."
+
+   Contexto por app (solo se agrega si appName coincide):
+   
+   "Signal OS" →
+   "App bajo análisis: Signal OS (repo: Ahorar)
+   Bot autónomo de crypto futures en Bitget USDT-M.
+   Stack: React/TypeScript frontend + Node.js/Express backend + PostgreSQL.
+   Features clave: scoring SMC/ICT, filtro CoinMarketCap 30 pares, 
+   trailing stops nativos Bitget, circuit breakers, streak protection 
+   (3 SL losses → 30min pause), bias engine BTC 1H multi-tier,
+   módulo de aprendizaje, análisis institucional (OI, LS ratio, funding).
+   Parámetros actuales: 0.5% risk/trade, 2% SL, 4.5% TP, 5x leverage, 
+   isolated margin, hedge mode.
+   ENFÓCATE EXCLUSIVAMENTE en Signal OS. No menciones otras apps."
+
+   "Sniper OS" →
+   "App bajo análisis: Sniper OS (repo: Trade-SnipeOS)
+   Bot de entradas precisas en Bitget USDT-M, señales server-side 24/7.
+   Stack: React/TypeScript frontend + Node.js/Express backend + PostgreSQL.
+   Features clave: entry logic signal-type-aware (P1-P4: S1 RVOL, 
+   S2 SMC, S6 FVG, S3/S5 pullback), TTL 30min en señales, gate precio 
+   ≤2%, CRON EXPIRED cada 60s, BaseRadarEngine S1-S6, Lightweight 
+   Charts v4.1.3, radar de mercado, heatmap, Intel tab.
+   Parámetros: 0.5% risk/trade, 2% SL, 4.5% TP, 5x leverage, 
+   trailing stop nativo Bitget (rangeRate 2.0).
+   ENFÓCATE EXCLUSIVAMENTE en Sniper OS. No menciones otras apps."
+
+   "Nexus OS" →
+   "App bajo análisis: Nexus OS (repo: NEXUS-OS-app)
+   Bot spot trading en OKX.
+   Stack: React/TypeScript frontend + Node.js/Express backend + PostgreSQL.
+   Features clave: CoinMarketCap/CoinGecko asset discovery, 
+   conviction-based position sizing, DCA support.
+   ENFÓCATE EXCLUSIVAMENTE en Nexus OS. No menciones otras apps."
+
+   "Core AI" →
+   "App bajo análisis: Core AI (repo: Code-Coretest)
+   Multi-agent boardroom con 7 agentes: ATLAS, HELIX, VEGA, TECHNO, 
+   CIPHER, SIGMA, ORACLE. 4 modos de sesión (weekly audit, project 
+   analysis, due diligence, Intel briefing).
+   Proveedores: Groq, Gemini, Mistral, SambaNova, DeepSeek R1, OpenRouter.
+   ENFÓCATE EXCLUSIVAMENTE en Core AI. No menciones otras apps."
+
+   "Quark IDE" →
+   "App bajo análisis: Quark IDE (repo: quark-ide)
+   IDE propio con IA. React/TypeScript/Vite + Node.js/Express + PostgreSQL.
+   Features clave: Chat inteligente con contexto de repos, Studio 4 agentes,
+   War Room SWARM paralelo, Quark Agent con diff visual GitHub, 
+   Debugger Railway logs, Preview automático, router 6 APIs.
+   ENFÓCATE EXCLUSIVAMENTE en Quark IDE. No menciones otras apps."
+
+   Si appName es null (no se detectó app):
+   Solo usar el contexto base — no inventar app activa.
+
+2. Modificar callBoardMember() para recibir appName y repoContext:
+   
+   Firma actual:
+   callBoardMember(role, challenge)
+   
+   Nueva firma:
+   callBoardMember(role, challenge, appName, repoContext?)
+   
+   Donde repoContext es opcional:
+   { tree: string[], keyFiles: { path: string, content: string }[] }
+
+3. En el system prompt de cada agente, reemplazar JEFFERSON_CONTEXT por:
+   buildContext(appName)
+   
+   Y si repoContext viene, agregar DESPUÉS del contexto de app:
+   "Código real del repositorio:
+   
+   Estructura de archivos:
+   {repoContext.tree.join('\n')}
+   
+   Archivos clave:
+   {repoContext.keyFiles.map(f => 
+     '--- ' + f.path + ' ---\n' + f.content
+   ).join('\n\n')}"
+
+4. Actualizar los endpoints /swarm y /board para recibir el nuevo payload:
+   
+   Payload actual:  { challenge: string }
+   Nuevo payload:   { 
+     challenge: string, 
+     appName?: string,
+     repoContext?: { tree: string[], keyFiles: [...] }
+   }
+   
+   Pasar appName y repoContext a cada callBoardMember()
+   Si no vienen en el payload → null y undefined respectivamente
+   (backward compatibility — War Room sigue funcionando sin ellos)
+
+═══════════════════════════════════════
+CAMBIO 2 — FRONTEND: BoardRoom.tsx
+Pipeline preserva contexto del Chat
+═══════════════════════════════════════
+
+Actualmente el handoff Chat → War Room viaja solo con el string 
+del challenge. Necesitamos preservar el contexto que el Chat construyó.
+
+1. Cambiar el tipo de initialBrief:
+   
+   Tipo actual:   initialBrief?: string
+   Nuevo tipo:    initialBrief?: {
+     challenge: string,
+     appName?: string,
+     repoContext?: { tree: string[], keyFiles: [...] }
+   }
+   
+   Backward compatible: si initialBrief es string, tratarlo como 
+   { challenge: initialBrief } sin appName ni repoContext.
+
+2. En conveneSwarm(), pasar appName y repoContext al payload:
+   
+   Payload actual:
+   body: JSON.stringify({ challenge })
+   
+   Nuevo payload:
+   body: JSON.stringify({ 
+     challenge, 
+     appName: appName || detectRepo(challenge),
+     repoContext: repoContextRef.current 
+   })
+   
+   Donde repoContextRef es un useRef que almacena el repoContext 
+   que llegó con initialBrief (si existe).
+
+3. Actualizar el botón "Enviar al Agent" al final del swarm:
+   Actualmente detecta el repo del texto con detectRepo().
+   Ahora usar appName del contexto si está disponible — 
+   detectRepo() como fallback.
+
+═══════════════════════════════════════
+CAMBIO 3 — FRONTEND: ClaudeChat.tsx
+Enriquecer el handoff al presionar "Enviar al Board"
+═══════════════════════════════════════
+
+Actualmente onSendToBoard(msg.content) solo envía el texto del mensaje.
+
+Cambiar a:
+onSendToBoard({
+  challenge: msg.content,
+  appName: loadedContext,          // el repo que el Chat detectó
+  repoContext: contextDataRef.current  // los archivos que ya leyó
+})
+
+Así War Room arranca con el mismo contexto que el Chat ya construyó —
+sin hacer un segundo fetch a GitHub.
+
+═══════════════════════════════════════
+RESTRICCIONES:
+═══════════════════════════════════════
+
+- NO modificar los modelos asignados a cada agente (CEO/Gemini, 
+  CTO/Groq, Designer/Groq, QA/Mistral)
+- NO tocar DeepSearch.tsx ni WarRoomPanel.tsx
+- NO cambiar el flujo de consensus — solo el contexto que reciben 
+  los agentes
+- El DEBUGGER que existe en backend pero no en frontend: 
+  dejarlo como está, no activarlo en esta iteración
+- Si appName no coincide exactamente con los 5 nombres definidos,
+  usar solo el contexto base (no crashear)
+
+RESULTADO ESPERADO:
+Usuario en Chat: "auditar Signal OS — el win rate bajó esta semana"
+→ Chat tiene loadedContext="Ahorar" y archivos de Signal OS
+→ Presiona "Enviar al Board"  
+→ War Room recibe: challenge + appName="Signal OS" + archivos reales
+→ CEO analiza SOLO Signal OS con su contexto específico
+→ CTO ve el código real de routes/ y schema de Signal OS
+→ QA revisa los circuit breakers y streak protection específicos
+→ Ningún agente menciona Nexus OS, Sniper OS, ni Pine Script
+→ Consensus enfocado 100% en el problema real con datos de código

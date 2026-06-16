@@ -140,7 +140,7 @@ function FileTree({
 interface EditorPageProps {
   activeProject: Project;
   onProjectChange: (p: Project) => void;
-  onSendToBoard: (brief: string) => void;
+  onSendToBoard: (brief: import('../App').BoardBrief) => void;
   onSendToStudio?: (brief: string) => void;
   autoShowPreview?: boolean;
   onPreviewShown?: () => void;
