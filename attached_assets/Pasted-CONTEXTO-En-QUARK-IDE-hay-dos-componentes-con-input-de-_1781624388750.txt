@@ -1,0 +1,74 @@
+CONTEXTO:
+En QUARK IDE hay dos componentes con input de texto que necesitan 
+ser expandibles: el textarea del Chat (ClaudeChat.tsx) y el textarea 
+del Quark Agent (QuarkAgent.tsx). Actualmente ambos tienen altura fija 
+lo que limita escribir prompts largos.
+
+TAREA: Hacer ambos textareas auto-expandibles — cambio puramente de UX.
+
+═══════════════════════════════════════
+CAMBIO EN AMBOS COMPONENTES:
+ClaudeChat.tsx y QuarkAgent.tsx
+═══════════════════════════════════════
+
+Para CADA textarea, aplicar el mismo patrón:
+
+1. Cambiar el elemento:
+   - De: <textarea rows={1} ...> o altura fija en style/className
+   - A: textarea con ref + auto-resize por contenido
+
+2. Agregar el ref y el efecto:
+   const textareaRef = useRef<HTMLTextAreaElement>(null)
+   
+   useEffect(() => {
+     if (textareaRef.current) {
+       textareaRef.current.style.height = 'auto'
+       textareaRef.current.style.height = 
+         Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+     }
+   }, [inputValue]) 
+   // usar el nombre del estado actual del input en cada componente
+
+3. Aplicar al textarea:
+   ref={textareaRef}
+   style={{ 
+     minHeight: '44px',
+     maxHeight: '200px', 
+     resize: 'none',
+     overflowY: 'auto'
+   }}
+
+4. Comportamiento en Enter:
+   - Enter solo → envía el mensaje (comportamiento actual, no cambiar)
+   - Shift+Enter → salto de línea (agregar si no existe)
+   
+   onKeyDown={(e) => {
+     if (e.key === 'Enter' && !e.shiftKey) {
+       e.preventDefault()
+       handleSend() // usar el nombre de la función actual
+     }
+   }}
+
+5. Al enviar el mensaje (en handleSend o equivalente):
+   - Resetear altura: 
+     if (textareaRef.current) {
+       textareaRef.current.style.height = '44px'
+     }
+
+═══════════════════════════════════════
+RESTRICCIONES:
+═══════════════════════════════════════
+
+- NO cambiar estilos visuales existentes (colores, borders, padding)
+- NO tocar ninguna lógica de envío, detección de contexto, 
+  ni el nuevo sistema de repo-context recién implementado
+- Solo modificar el comportamiento de altura del textarea
+- Máximo de 200px — después scroll interno, no seguir creciendo
+- El cambio es idéntico en ambos componentes
+
+RESULTADO ESPERADO:
+- El textarea empieza en 1 línea (44px)
+- Crece automáticamente línea a línea mientras el usuario escribe
+- Se detiene en 200px y activa scroll interno
+- Al enviar, vuelve a 44px
+- Shift+Enter crea salto de línea sin enviar

@@ -113,9 +113,16 @@ export default function ClaudeChat({
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const projectsRef = useRef<HTMLDivElement>(null);
   const contextDataRef = useRef<RepoContextData | null>(null);
+
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+  }, [input]);
 
   async function loadRepoContext(repo: string, label: string) {
     if (loadedContext === repo) return;
@@ -225,6 +232,7 @@ export default function ClaudeChat({
     setMessages(newMessages);
     setInput('');
     setCustomOptionInput('');
+    if (inputRef.current) inputRef.current.style.height = '44px';
     setLoading(true);
 
     const assistantMsg: Message = {
@@ -654,15 +662,20 @@ export default function ClaudeChat({
             )}
           </div>
         )}
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+          <textarea
             ref={inputRef}
             className="quark-input"
-            style={{ flex: 1, height: 36, minWidth: 0 }}
+            style={{ flex: 1, minWidth: 0, minHeight: 44, maxHeight: 200, resize: 'none', overflowY: 'auto' }}
             placeholder="Ask QUARK about this code..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+              }
+            }}
             disabled={loading || contextLoading}
           />
           <button
