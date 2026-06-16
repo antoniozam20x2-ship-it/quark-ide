@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '')
 
@@ -32,6 +32,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
   const [designPrototype, setDesignPrototype] = useState<string>('')
   const [studioHtml, setStudioHtml] = useState<string>('')
   const [buildLoading, setBuildLoading] = useState(false)
+  const previewRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (initialBrief) {
@@ -86,58 +87,51 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
     setRunning(false)
   }
 
-  // /api/agent/generate streams SSE — read until the 'done' event to get mainContent
+  // Skip /api/agent/generate (requires a real GitHub repo).
+  // Send engineeredPrompt directly to generate-html Path B — generates
+  // standalone HTML from a design prompt without needing a repo at all.
   async function buildAndPreview() {
     if (!engineeredPrompt) return
+    console.log('[Studio] BUILD START — engineeredPrompt:', engineeredPrompt.slice(0, 100))
     setBuildLoading(true)
     setStudioHtml('')
 
+    const ERROR_HTML = (msg: string) =>
+      `<html><body style="color:#f87171;padding:20px;background:#1a1a1a;font-family:monospace;font-size:13px">` +
+      `<b>Error:</b> ${msg}<br><br>Revisa la consola del navegador para más detalles.</body></html>`
+
     try {
-      const genRes = await fetch(`${API_BASE}/api/agent/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: engineeredPrompt, repo: 'none' })
-      })
-
-      if (!genRes.body) throw new Error('No response body from /api/agent/generate')
-
-      const reader  = genRes.body.getReader()
-      const decoder = new TextDecoder()
-      let buf = ''
-      let generatedCode = ''
-
-      outer: while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buf += decoder.decode(value, { stream: true })
-        const lines = buf.split('\n')
-        buf = lines.pop() ?? ''
-        for (const line of lines) {
-          const trimmed = line.trim()
-          if (!trimmed.startsWith('data:')) continue
-          const raw = trimmed.slice(5).trim()
-          try {
-            const json = JSON.parse(raw)
-            if (json.event === 'done') {
-              generatedCode = json.mainContent ?? ''
-              break outer
-            }
-          } catch { /* ignore malformed SSE lines */ }
-        }
-      }
-
-      if (!generatedCode) throw new Error('El Agent no generó código (mainContent vacío)')
-
       const htmlRes = await fetch(`${API_BASE}/api/agent/generate-html`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: generatedCode })
+        body: JSON.stringify({ prompt: engineeredPrompt }),
       })
+
+      if (!htmlRes.ok) {
+        const errText = await htmlRes.text()
+        console.error('[Studio] generate-html HTTP error:', htmlRes.status, errText)
+        setStudioHtml(ERROR_HTML(`HTTP ${htmlRes.status} — ${errText.slice(0, 200)}`))
+        return
+      }
+
       const htmlData = await htmlRes.json() as { html?: string; success: boolean; error?: string }
-      if (!htmlData.success) throw new Error(htmlData.error ?? 'generate-html falló')
-      setStudioHtml(htmlData.html ?? '')
+      console.log('[Studio] generate-html success:', htmlData.success, '— html length:', htmlData.html?.length ?? 0)
+      console.log('[Studio] HTML preview:', htmlData.html?.slice(0, 200))
+
+      const html = htmlData.html ?? ''
+
+      if (!html) {
+        console.warn('[Studio] html vacío — error del backend:', htmlData.error)
+        setStudioHtml(ERROR_HTML(htmlData.error ?? 'No se generó HTML. Intenta de nuevo.'))
+        return
+      }
+
+      setStudioHtml(html)
+      setTimeout(() => previewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
     } catch (err) {
-      console.error('[Studio] buildAndPreview error:', err)
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error('[Studio] buildAndPreview error:', msg)
+      setStudioHtml(ERROR_HTML(msg))
     } finally {
       setBuildLoading(false)
     }
@@ -245,7 +239,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
 
         {/* Studio Preview */}
         {studioHtml && (
-          <div style={{
+          <div ref={previewRef} style={{
             marginTop: 4,
             borderRadius: 8,
             overflow: 'hidden',

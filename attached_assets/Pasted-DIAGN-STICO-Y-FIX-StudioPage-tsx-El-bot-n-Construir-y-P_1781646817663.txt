@@ -1,0 +1,68 @@
+DIAGNÓSTICO Y FIX — StudioPage.tsx
+
+El botón "Construir y Previsualizar" no muestra nada al presionarlo.
+Necesito que:
+1. Identifiques por qué buildAndPreview() falla silenciosamente
+2. Agregues console.logs de diagnóstico en cada paso
+3. Corrijas el problema y confirmes que el preview aparece 
+   dentro de Studio con scroll automático
+
+VERIFICAR EN ORDEN:
+
+1. ¿buildLoading cambia a true cuando se presiona el botón?
+   Si no cambia, el onClick no está conectado correctamente.
+
+2. En buildAndPreview(), agregar console.logs:
+   console.log('BUILD START — engineeredPrompt:', engineeredPrompt?.slice(0, 100))
+   
+   Después del SSE stream:
+   console.log('SSE mainContent recibido:', generatedCode?.slice(0, 100))
+   
+   Después de generate-html:
+   console.log('HTML generado length:', html?.length)
+   console.log('setStudioHtml llamado con:', html?.slice(0, 200))
+
+3. ¿El bloque {studioHtml && <iframe...>} está dentro del 
+   return JSX del componente? Verificar que no esté fuera 
+   del div contenedor principal.
+
+4. ¿allDone está en true cuando aparece el botón?
+   Si engineeredPrompt existe pero allDone es false,
+   el botón puede estar disabled sin indicarlo visualmente.
+
+FIXES REQUERIDOS:
+
+A) Scroll automático al preview cuando termina:
+   Agregar un ref al div del preview:
+   const previewRef = useRef<HTMLDivElement>(null)
+   
+   En buildAndPreview(), después de setStudioHtml(html):
+   setTimeout(() => {
+     previewRef.current?.scrollIntoView({ 
+       behavior: 'smooth', 
+       block: 'start' 
+     })
+   }, 100)
+
+B) Estado visual del botón mientras construye:
+   Cuando buildLoading es true:
+   - Texto: "⚡ Construyendo..." 
+   - Opacity: 0.7
+   - Cursor: not-allowed
+   Así el usuario sabe que está procesando.
+
+C) Si html llega vacío o undefined:
+   Mostrar mensaje de error dentro del preview div:
+   setStudioHtml('<html><body style="color:white;padding:20px;
+   background:#1a1a1a;font-family:monospace">
+   Error: no se pudo generar el preview. 
+   Revisa la consola para más detalles.</body></html>')
+
+RESULTADO ESPERADO:
+1. Usuario presiona "⚡ Construir y Previsualizar"
+2. Botón cambia a "⚡ Construyendo..." con opacity reducida
+3. SSE stream procesa el código del Engineer
+4. generate-html convierte a HTML ejecutable  
+5. Preview aparece debajo del botón con scroll automático
+6. Botón ✕ permite cerrar el preview
+7. Todo dentro de Studio — sin navegación a otra pestaña
