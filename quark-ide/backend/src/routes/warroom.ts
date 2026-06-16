@@ -5,11 +5,18 @@ const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
 const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
 const MISTRAL_MODEL = 'mistral-small-latest';
+const PROVIDER_TIMEOUT_MS = 25_000;
+
+function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...init, signal: ctrl.signal }).finally(() => clearTimeout(timer));
+}
 
 async function callGroq(prompt: string, systemPrompt: string, maxTokens = 1024): Promise<string> {
   const token = process.env.GROQ_API_KEY;
   if (!token) throw new Error('GROQ_API_KEY is not set');
-  const res = await fetch(GROQ_URL, {
+  const res = await fetchWithTimeout(GROQ_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
     body: JSON.stringify({
@@ -20,7 +27,7 @@ async function callGroq(prompt: string, systemPrompt: string, maxTokens = 1024):
         { role: 'user', content: prompt },
       ],
     }),
-  });
+  }, PROVIDER_TIMEOUT_MS);
   if (!res.ok) throw new Error(`Groq API error: ${res.status} ${res.statusText}`);
   const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
   return json.choices?.[0]?.message?.content ?? '';
@@ -29,7 +36,7 @@ async function callGroq(prompt: string, systemPrompt: string, maxTokens = 1024):
 async function callMistral(prompt: string, systemPrompt: string, maxTokens = 1024): Promise<string> {
   const token = process.env.MISTRAL_API_KEY;
   if (!token) throw new Error('MISTRAL_API_KEY is not set');
-  const res = await fetch(MISTRAL_URL, {
+  const res = await fetchWithTimeout(MISTRAL_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
     body: JSON.stringify({
@@ -40,10 +47,23 @@ async function callMistral(prompt: string, systemPrompt: string, maxTokens = 102
         { role: 'user', content: prompt },
       ],
     }),
-  });
+  }, PROVIDER_TIMEOUT_MS);
   if (!res.ok) throw new Error(`Mistral API error: ${res.status} ${res.statusText}`);
   const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
   return json.choices?.[0]?.message?.content ?? '';
+}
+
+async function withFallback(
+  primary: () => Promise<string>,
+  fallback: () => Promise<string>,
+  label: string
+): Promise<string> {
+  try {
+    return await primary();
+  } catch (primaryErr) {
+    console.warn(`[warroom] ${label} primary failed (${(primaryErr as Error).message}), trying fallback…`);
+    return fallback();
+  }
 }
 
 const router = Router();
@@ -146,15 +166,41 @@ async function callBoardMember(
 
   switch (member) {
     case 'CEO':
-      return generateContent(challenge, systemPrompt, 1024, `/api/warroom/board/${member}`);
+      return withFallback(
+        () => generateContent(challenge, systemPrompt, 1024, `/api/warroom/board/CEO`),
+        () => callGroq(challenge, systemPrompt, 1024),
+        'CEO(Gemini→Groq)',
+      );
     case 'CTO':
+      return withFallback(
+        () => callGroq(challenge, systemPrompt, 1024),
+        () => generateContent(challenge, systemPrompt, 1024, `/api/warroom/board/CTO`),
+        'CTO(Groq→Gemini)',
+      );
     case 'Designer':
-    case 'DEBUGGER':
-      return callGroq(challenge, systemPrompt, 1024);
+      return withFallback(
+        () => callGroq(challenge, systemPrompt, 1024),
+        () => callMistral(challenge, systemPrompt, 1024),
+        'Designer(Groq→Mistral)',
+      );
     case 'QA':
-      return callMistral(challenge, systemPrompt, 1024);
+      return withFallback(
+        () => callMistral(challenge, systemPrompt, 1024),
+        () => callGroq(challenge, systemPrompt, 1024),
+        'QA(Mistral→Groq)',
+      );
+    case 'DEBUGGER':
+      return withFallback(
+        () => callGroq(challenge, systemPrompt, 1024),
+        () => generateContent(challenge, systemPrompt, 1024, `/api/warroom/board/DEBUGGER`),
+        'DEBUGGER(Groq→Gemini)',
+      );
     default:
-      return generateContent(challenge, systemPrompt, 1024, `/api/warroom/board/${member}`);
+      return withFallback(
+        () => generateContent(challenge, systemPrompt, 1024, `/api/warroom/board/${member}`),
+        () => callGroq(challenge, systemPrompt, 1024),
+        `${member}(Gemini→Groq)`,
+      );
   }
 }
 
