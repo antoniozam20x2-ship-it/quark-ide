@@ -69,12 +69,12 @@ app.get('/github/file', async (req, res) => {
 });
 
 app.put('/github/file', async (req, res) => {
-  const { path, content, message } = req.body as { path: string; content: string; message: string };
-  if (!path || content === undefined || !message) {
-    res.status(400).json({ error: 'path, content, and message are required' }); return;
+  const { path, content, message, repo, branch } = req.body as { path: string; content: string; message: string; repo?: string; branch?: string };
+  if (!path || content === undefined || !message || !repo) {
+    res.status(400).json({ error: 'path, content, message, and repo are required' }); return;
   }
   try {
-    await createOrUpdateFile(path, content, message);
+    await createOrUpdateFile(path, content, message, repo, branch);
     res.json({ ok: true, path });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
@@ -82,12 +82,12 @@ app.put('/github/file', async (req, res) => {
 });
 
 app.delete('/github/file', async (req, res) => {
-  const { path, message } = req.body as { path: string; message: string };
-  if (!path || !message) {
-    res.status(400).json({ error: 'path and message are required' }); return;
+  const { path, message, repo, branch } = req.body as { path: string; message: string; repo?: string; branch?: string };
+  if (!path || !message || !repo) {
+    res.status(400).json({ error: 'path, message, and repo are required' }); return;
   }
   try {
-    await deleteFile(path, message);
+    await deleteFile(path, message, repo, branch);
     res.json({ ok: true, path });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
