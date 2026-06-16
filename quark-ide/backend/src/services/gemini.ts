@@ -1,7 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { recordCall, recordEstimated } from './costTracker.js';
 
-const GEMINI_MODEL = 'gemini-2.0-flash-lite';
+const GEMINI_MODEL = 'gemini-1.5-flash';
 const TIMEOUT_MS = 30_000;
 
 // ── Auth-error detection ──────────────────────────────────────────────────────
