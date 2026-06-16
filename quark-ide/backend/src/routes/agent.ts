@@ -351,7 +351,7 @@ router.post('/generate-html', async (req, res) => {
   }
 });
 
-// ── /fix — Claude reads real file and returns corrected version ──────────────
+// ── /fix — AI returns search/replace patch; backend applies it ───────────────
 router.post('/fix', async (req, res) => {
   const { repo, branch = 'main', filePath, errorDescription } = req.body as {
     repo?: string;
@@ -368,17 +368,54 @@ router.post('/fix', async (req, res) => {
   try {
     const originalContent = await getFileContent(filePath, repo);
 
-    const fixedContent = (await callAI(
+    const raw = (await callAI(
       'fix',
       `Error/Problema: ${errorDescription}\n\nArchivo ${filePath}:\n${originalContent}`,
       `Eres un engineer senior experto en TypeScript/Node.js.
 Recibes un archivo con un error y una descripción del problema.
-Devuelve SOLO el archivo completo corregido, sin explicaciones, sin markdown, sin backticks.
-Empieza directamente con el código del archivo.`,
+Devuelve SOLO un objeto JSON con este formato exacto, sin markdown, sin backticks, sin explicaciones:
+{"search":"texto exacto a buscar en el archivo","replace":"texto de reemplazo"}
+El campo "search" debe ser una cadena que exista literalmente en el archivo.
+El campo "replace" es el texto que lo sustituirá.
+Si necesitas múltiples cambios, devuelve un array: [{"search":"...","replace":"..."},{"search":"...","replace":"..."}]`,
     )).trim();
-    if (!fixedContent) throw new Error('Sin contenido del fix');
 
-    res.json({ fixedContent, originalContent, filePath, branch });
+    if (!raw) throw new Error('Sin respuesta del AI');
+
+    // Parse the patch(es)
+    const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
+    let patches: { search: string; replace: string }[];
+    try {
+      const parsed = JSON.parse(cleaned);
+      patches = Array.isArray(parsed) ? parsed : [parsed];
+    } catch {
+      throw new Error(`No se pudo parsear el patch JSON: ${cleaned.slice(0, 200)}`);
+    }
+
+    // Apply all patches to the original file content
+    let fixedContent = originalContent;
+    const applied: { search: string; applied: boolean }[] = [];
+
+    for (const patch of patches) {
+      if (typeof patch.search !== 'string' || typeof patch.replace !== 'string') {
+        applied.push({ search: String(patch.search), applied: false });
+        continue;
+      }
+      if (fixedContent.includes(patch.search)) {
+        fixedContent = fixedContent.split(patch.search).join(patch.replace);
+        applied.push({ search: patch.search, applied: true });
+      } else {
+        console.warn(`[/fix] search string not found in file: ${patch.search.slice(0, 80)}`);
+        applied.push({ search: patch.search, applied: false });
+      }
+    }
+
+    const anyApplied = applied.some((a) => a.applied);
+    if (!anyApplied) {
+      throw new Error('Ningún patch coincidió con el contenido del archivo. El AI generó search strings incorrectos.');
+    }
+
+    res.json({ fixedContent, originalContent, filePath, branch, patches: applied });
   } catch (err) {
     console.error('[/fix] error:', err);
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
