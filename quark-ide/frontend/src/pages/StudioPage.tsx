@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '')
 
@@ -30,9 +30,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
   const [running, setRunning] = useState(false)
   const [engineeredPrompt, setEngineeredPrompt] = useState('')
   const [designPrototype, setDesignPrototype] = useState<string>('')
-  const [studioHtml, setStudioHtml] = useState<string>('')
-  const [buildLoading, setBuildLoading] = useState(false)
-  const previewRef = useRef<HTMLDivElement>(null)
+  const [fullscreenPreview, setFullscreenPreview] = useState(false)
 
   useEffect(() => {
     if (initialBrief) {
@@ -52,7 +50,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
     if (!input || running) return
     setRunning(true)
     setEngineeredPrompt('')
-    setStudioHtml('')
+    setDesignPrototype('')
     setAgents(AGENTS.map(a => ({ ...a, content: '', status: 'idle' })))
 
     const roles = ['architect', 'designer', 'engineer', 'qa']
@@ -74,12 +72,8 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
         const data = await res.json()
         results[role] = data.result ?? ''
         updateAgent(role, { content: data.result, status: 'done' })
-        if (role === 'designer') {
-          setDesignPrototype(data.result ?? '')
-        }
-        if (role === 'engineer') {
-          setEngineeredPrompt(data.result ?? '')
-        }
+        if (role === 'designer') setDesignPrototype(data.result ?? '')
+        if (role === 'engineer') setEngineeredPrompt(data.result ?? '')
       } catch {
         updateAgent(role, { status: 'error', content: 'Error al analizar' })
       }
@@ -87,58 +81,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
     setRunning(false)
   }
 
-  // Skip /api/agent/generate (requires a real GitHub repo).
-  // Send engineeredPrompt directly to generate-html Path B — generates
-  // standalone HTML from a design prompt without needing a repo at all.
-  async function buildAndPreview() {
-    if (!engineeredPrompt) return
-    console.log('[Studio] BUILD START — engineeredPrompt:', engineeredPrompt.slice(0, 100))
-    setBuildLoading(true)
-    setStudioHtml('')
-
-    const ERROR_HTML = (msg: string) =>
-      `<html><body style="color:#f87171;padding:20px;background:#1a1a1a;font-family:monospace;font-size:13px">` +
-      `<b>Error:</b> ${msg}<br><br>Revisa la consola del navegador para más detalles.</body></html>`
-
-    try {
-      const htmlRes = await fetch(`${API_BASE}/api/agent/generate-html`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: engineeredPrompt }),
-      })
-
-      if (!htmlRes.ok) {
-        const errText = await htmlRes.text()
-        console.error('[Studio] generate-html HTTP error:', htmlRes.status, errText)
-        setStudioHtml(ERROR_HTML(`HTTP ${htmlRes.status} — ${errText.slice(0, 200)}`))
-        return
-      }
-
-      const htmlData = await htmlRes.json() as { html?: string; success: boolean; error?: string }
-      console.log('[Studio] generate-html success:', htmlData.success, '— html length:', htmlData.html?.length ?? 0)
-      console.log('[Studio] HTML preview:', htmlData.html?.slice(0, 200))
-
-      const html = htmlData.html ?? ''
-
-      if (!html) {
-        console.warn('[Studio] html vacío — error del backend:', htmlData.error)
-        setStudioHtml(ERROR_HTML(htmlData.error ?? 'No se generó HTML. Intenta de nuevo.'))
-        return
-      }
-
-      setStudioHtml(html)
-      setTimeout(() => previewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error('[Studio] buildAndPreview error:', msg)
-      setStudioHtml(ERROR_HTML(msg))
-    } finally {
-      setBuildLoading(false)
-    }
-  }
-
   const mono = 'JetBrains Mono, monospace'
-  const allDone = agents.every(a => a.status === 'done' || a.status === 'error')
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#0A0A0F' }}>
@@ -188,12 +131,29 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
                     <div style={{ fontFamily: mono, fontSize: 10, color: '#64748B', marginBottom: 8 }}>
                       // prototipo visual
                     </div>
-                    <iframe
-                      srcDoc={designPrototype}
-                      style={{ width: '100%', height: 320, border: '1px solid #1E1E2E', borderRadius: 8, background: '#000' }}
-                      sandbox="allow-scripts"
-                      title="Design Prototype"
-                    />
+                    {/* Wrapper clickeable — abre fullscreen */}
+                    <div
+                      style={{ position: 'relative', cursor: 'pointer' }}
+                      onClick={() => setFullscreenPreview(true)}
+                      title="Ver en pantalla completa"
+                    >
+                      <iframe
+                        srcDoc={designPrototype}
+                        style={{ width: '100%', height: 320, border: '1px solid #1E1E2E', borderRadius: 8, background: '#000', pointerEvents: 'none' }}
+                        sandbox="allow-scripts"
+                        title="Design Prototype"
+                      />
+                      <div style={{
+                        position: 'absolute', top: 8, right: 8,
+                        background: 'rgba(0,0,0,0.6)',
+                        borderRadius: 4, padding: '4px 8px',
+                        fontSize: 11, color: '#aaa',
+                        fontFamily: mono,
+                        pointerEvents: 'none',
+                      }}>
+                        ⛶ expandir
+                      </div>
+                    </div>
                     <button
                       onClick={() => setDesignPrototype('')}
                       style={{ marginTop: 8, background: 'transparent', border: '1px solid #1E1E2E', borderRadius: 6, color: '#64748B', fontFamily: mono, fontSize: 10, padding: '4px 10px', cursor: 'pointer' }}
@@ -210,74 +170,58 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
             )}
           </div>
         ))}
-
-        {/* Build & Preview button */}
-        {allDone && engineeredPrompt && (
-          <button
-            onClick={buildAndPreview}
-            disabled={buildLoading}
-            style={{
-              width: '100%',
-              padding: '14px 16px',
-              background: buildLoading ? '#1E1E2E' : 'linear-gradient(135deg, #7C3AED, #6D28D9)',
-              border: 'none',
-              borderRadius: 10,
-              color: buildLoading ? '#64748B' : '#fff',
-              fontFamily: mono,
-              fontSize: 13,
-              fontWeight: 700,
-              cursor: buildLoading ? 'not-allowed' : 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-            }}
-          >
-            {buildLoading ? '⚡ Construyendo...' : '⚡ Construir y Previsualizar'}
-          </button>
-        )}
-
-        {/* Studio Preview */}
-        {studioHtml && (
-          <div ref={previewRef} style={{
-            marginTop: 4,
-            borderRadius: 8,
-            overflow: 'hidden',
-            border: '1px solid rgba(255,255,255,0.1)',
-          }}>
-            <div style={{
-              padding: '8px 12px',
-              fontSize: 11,
-              fontFamily: mono,
-              color: '#64748B',
-              borderBottom: '1px solid rgba(255,255,255,0.08)',
-              background: '#12121A',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-            }}>
-              <span>// preview</span>
-              <button
-                onClick={() => setStudioHtml('')}
-                style={{ background: 'transparent', border: 'none', color: '#3a3a5c', fontFamily: mono, fontSize: 10, cursor: 'pointer', padding: '2px 6px' }}
-              >
-                ✕ cerrar
-              </button>
-            </div>
-            <iframe
-              srcDoc={studioHtml}
-              style={{ width: '100%', height: 500, border: 'none' }}
-              sandbox="allow-scripts"
-              title="Studio Preview"
-            />
-          </div>
-        )}
       </div>
 
       {/* Footer */}
       <div style={{ padding: '10px 14px', borderTop: '1px solid #1E1E2E', background: '#12121A', fontFamily: mono, fontSize: 10, color: '#64748B', textAlign: 'center' }}>
         Chat → Studio → Agent → Preview → Commit
       </div>
+
+      {/* Fullscreen modal — fixed overlay outside normal flow */}
+      {fullscreenPreview && (
+        <div style={{
+          position: 'fixed',
+          top: 0, left: 0, right: 0, bottom: 0,
+          zIndex: 9999,
+          background: '#000',
+          display: 'flex',
+          flexDirection: 'column',
+        }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: '12px 16px',
+            borderBottom: '1px solid rgba(255,255,255,0.1)',
+            background: '#0a0a0a',
+          }}>
+            <span style={{ color: '#888', fontSize: 12, fontFamily: mono }}>
+              // preview — Designer
+            </span>
+            <button
+              onClick={() => setFullscreenPreview(false)}
+              style={{
+                background: 'none',
+                border: '1px solid rgba(255,255,255,0.2)',
+                color: '#fff',
+                borderRadius: 4,
+                padding: '4px 12px',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontFamily: mono,
+              }}
+            >
+              ✕ cerrar
+            </button>
+          </div>
+          <iframe
+            srcDoc={designPrototype}
+            style={{ flex: 1, border: 'none', width: '100%' }}
+            sandbox="allow-scripts"
+            title="Studio Preview Fullscreen"
+          />
+        </div>
+      )}
     </div>
   )
 }

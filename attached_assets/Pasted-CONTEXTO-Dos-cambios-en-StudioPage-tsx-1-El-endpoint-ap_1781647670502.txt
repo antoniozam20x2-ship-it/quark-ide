@@ -1,0 +1,130 @@
+CONTEXTO:
+Dos cambios en StudioPage.tsx:
+
+1. El endpoint /api/agent/generate-html no existe — 
+   el approach actual es incorrecto. Lo reemplazamos 
+   por una solución más simple.
+
+2. El Designer ya genera un prototipo visual (designPrototype).
+   En lugar de crear un preview nuevo debajo, queremos que 
+   al hacer tap en el prototipo del Designer se abra en 
+   pantalla completa con un botón ✕ para cerrar.
+
+═══════════════════════════════════════
+CAMBIO 1 — Eliminar buildAndPreview() actual
+═══════════════════════════════════════
+
+Eliminar toda la función buildAndPreview() y los estados:
+- studioHtml
+- buildLoading
+
+Eliminar también el div del preview que muestra el error 404.
+
+El botón "⚡ Construir y Previsualizar" también se elimina 
+por ahora — Studio ya tiene su preview en el Designer.
+
+═══════════════════════════════════════
+CAMBIO 2 — Designer expandible a pantalla completa
+═══════════════════════════════════════
+
+Actualmente el prototipo del Designer se muestra en un 
+iframe pequeño inline dentro de la tarjeta del Designer.
+
+Agregar:
+
+1. Estado nuevo:
+   const [fullscreenPreview, setFullscreenPreview] = useState(false)
+
+2. Sobre el iframe existente del Designer, agregar un overlay 
+   clickeable con cursor pointer y tooltip "Ver en pantalla completa":
+   
+   <div 
+     style={{ position: 'relative', cursor: 'pointer' }}
+     onClick={() => setFullscreenPreview(true)}
+     title="Ver en pantalla completa"
+   >
+     {/* iframe del Designer existente — no modificar */}
+     <div style={{
+       position: 'absolute', top: 8, right: 8,
+       background: 'rgba(0,0,0,0.6)',
+       borderRadius: '4px', padding: '4px 8px',
+       fontSize: '11px', color: '#aaa'
+     }}>
+       ⛶ expandir
+     </div>
+   </div>
+
+3. Modal de pantalla completa — renderizar FUERA del flujo 
+   normal, como último elemento antes del cierre del return:
+   
+   {fullscreenPreview && (
+     <div style={{
+       position: 'fixed',
+       top: 0, left: 0, right: 0, bottom: 0,
+       zIndex: 9999,
+       background: '#000',
+       display: 'flex',
+       flexDirection: 'column'
+     }}>
+       {/* Header del modal */}
+       <div style={{
+         display: 'flex',
+         justifyContent: 'space-between',
+         alignItems: 'center',
+         padding: '12px 16px',
+         borderBottom: '1px solid rgba(255,255,255,0.1)',
+         background: '#0a0a0a'
+       }}>
+         <span style={{ 
+           color: '#888', 
+           fontSize: '12px',
+           fontFamily: 'monospace'
+         }}>
+           // preview — Designer
+         </span>
+         <button
+           onClick={() => setFullscreenPreview(false)}
+           style={{
+             background: 'none',
+             border: '1px solid rgba(255,255,255,0.2)',
+             color: '#fff',
+             borderRadius: '4px',
+             padding: '4px 12px',
+             cursor: 'pointer',
+             fontSize: '12px'
+           }}
+         >
+           ✕ cerrar
+         </button>
+       </div>
+       
+       {/* iframe a pantalla completa */}
+       <iframe
+         srcDoc={designPrototype}
+         style={{ 
+           flex: 1, 
+           border: 'none',
+           width: '100%'
+         }}
+         sandbox="allow-scripts"
+         title="Studio Preview Fullscreen"
+       />
+     </div>
+   )}
+
+═══════════════════════════════════════
+RESTRICCIONES:
+═══════════════════════════════════════
+
+- NO modificar el iframe del Designer existente — 
+  solo envolverlo en el div clickeable
+- NO tocar el flujo de los agentes (Architect, Engineer, QA)
+- NO tocar App.tsx ni ningún otro archivo
+- El designPrototype ya existe como estado — usar ese mismo
+
+RESULTADO ESPERADO:
+1. Designer genera el prototipo visual (igual que ahora)
+2. Usuario ve "⛶ expandir" sobre el prototipo
+3. Tap → abre modal pantalla completa con el prototipo
+4. Botón "✕ cerrar" regresa a Studio
+5. Sin endpoints nuevos, sin complejidad extra
