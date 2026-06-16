@@ -1,8 +1,55 @@
 import { Router, Request, Response } from 'express';
 import { streamChat } from '../services/gemini.js';
 import { searchMemory } from '../services/rufloMemory.js';
+import { getFileTree, getFileContent } from '../services/github.js';
 
 const router = Router();
+
+const APP_REPOS: Record<string, string> = {
+  'signal os':  'Ahorar',
+  'sniper os':  'Trade-SnipeOS',
+  'nexus os':   'NEXUS-OS-app',
+  'core ia':    'Code-Coretest',
+  'quark ide':  'quark-ide',
+};
+
+async function fetchRepoContext(repoName: string): Promise<string> {
+  const results = await Promise.allSettled([
+    getFileTree(repoName, 'main'),
+    getFileContent('README.md', repoName, 'main'),
+  ]);
+
+  const treeResult   = results[0];
+  const readmeResult = results[1];
+
+  const fileTree = treeResult.status === 'fulfilled'
+    ? treeResult.value
+        .filter((f) => f.type === 'blob')
+        .map((f) => f.path)
+        .slice(0, 60)
+        .join('\n')
+    : '(no disponible)';
+
+  const readmeContent = readmeResult.status === 'fulfilled'
+    ? readmeResult.value.slice(0, 3000)
+    : '(README no encontrado)';
+
+  return `
+=== CONTEXTO DE APP: ${repoName} ===
+Archivos principales:
+${fileTree}
+
+README:
+${readmeContent}
+=== FIN CONTEXTO ===`;
+}
+
+function detectMentionedApps(text: string): string[] {
+  const lower = text.toLowerCase();
+  return Object.entries(APP_REPOS)
+    .filter(([appName]) => lower.includes(appName))
+    .map(([, repo]) => repo);
+}
 
 type ProjectType = 'trading' | 'ecommerce' | 'dashboard' | 'landing' | 'app';
 
@@ -85,7 +132,20 @@ Tipo detectado: ${projectType}
 Referencias visuales para sugerencias: ${refs}`;
   }
 
-  const systemPrompt = `${JEFFERSON_CONTEXT}${projectContext}${memoryContext}`;
+  // Contexto real de repos mencionados en el mensaje
+  let repoContext = '';
+  if (process.env.GITHUB_TOKEN && process.env.GITHUB_OWNER) {
+    const mentionedRepos = detectMentionedApps(lastUserMessage);
+    if (mentionedRepos.length > 0) {
+      const contexts = await Promise.allSettled(mentionedRepos.map(fetchRepoContext));
+      repoContext = contexts
+        .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled')
+        .map((r) => r.value)
+        .join('\n');
+    }
+  }
+
+  const systemPrompt = `${JEFFERSON_CONTEXT}${projectContext}${repoContext}${memoryContext}`;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
