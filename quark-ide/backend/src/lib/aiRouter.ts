@@ -15,16 +15,25 @@ let groqIndex   = 0;
 let geminiIndex = 0;
 
 export async function callAI(
-  task: 'fix' | 'generate' | 'analyze' | 'html' | 'warroom',
+  task: 'fix' | 'generate' | 'analyze' | 'html' | 'designer' | 'warroom',
   prompt: string,
   systemPrompt?: string,
 ): Promise<string> {
   switch (task) {
+    case 'html':
+    case 'designer':
+      return tryProviders([
+        () => callOpenRouter(prompt, systemPrompt),
+        () => callGitHubModels(prompt, systemPrompt, 'gpt-4o'),
+        () => callGemini(prompt, systemPrompt),
+      ]);
+
     case 'fix':
       return tryProviders([
         () => callDeepSeek(prompt, systemPrompt),
         () => callGroq(prompt, systemPrompt),
         () => callGemini(prompt, systemPrompt),
+        () => callGitHubModels(prompt, systemPrompt, 'gpt-4o'),
       ]);
 
     case 'generate':
@@ -35,22 +44,11 @@ export async function callAI(
       ]);
 
     case 'analyze':
-      return tryProviders([
-        () => callGroq(prompt, systemPrompt),
-        () => callGemini(prompt, systemPrompt),
-      ]);
-
-    case 'html':
-      return tryProviders([
-        () => callGitHubModels(prompt, systemPrompt, 'gpt-4o'),
-        () => callGemini(prompt, systemPrompt),
-        () => callGroq(prompt, systemPrompt),
-      ]);
-
     case 'warroom':
       return tryProviders([
         () => callGroq(prompt, systemPrompt),
         () => callGemini(prompt, systemPrompt),
+        () => callDeepSeek(prompt, systemPrompt),
       ]);
   }
 }
@@ -69,6 +67,31 @@ async function tryProviders(providers: (() => Promise<string>)[]): Promise<strin
     }
   }
   throw new Error(`Todos los proveedores fallaron:\n${errors.join('\n')}`);
+}
+
+async function callOpenRouter(prompt: string, system?: string): Promise<string> {
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) throw new Error('OPENROUTER_API_KEY not set');
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://quark-ide.railway.app',
+      'X-Title': 'QUARK IDE',
+    },
+    body: JSON.stringify({
+      model: 'anthropic/claude-sonnet-4-6',
+      max_tokens: 8192,
+      messages: [
+        ...(system ? [{ role: 'system', content: system }] : []),
+        { role: 'user', content: prompt },
+      ],
+    }),
+  });
+  const data = await res.json() as any;
+  if (!res.ok) throw Object.assign(new Error(data?.error?.message ?? `OpenRouter ${res.status}`), { status: res.status });
+  return data.choices?.[0]?.message?.content ?? '';
 }
 
 async function callGroq(prompt: string, system?: string): Promise<string> {
