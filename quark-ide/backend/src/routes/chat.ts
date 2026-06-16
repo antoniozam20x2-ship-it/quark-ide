@@ -103,11 +103,12 @@ RESPONSE RULES:
 - Never use markdown code blocks — you don't write code`;
 
 router.post('/', async (req: Request, res: Response) => {
-  const { messages, fileContent, fileName, activeProject } = req.body as {
+  const { messages, fileContent, fileName, activeProject, contextData } = req.body as {
     messages: { role: string; content: string }[];
     fileContent?: string;
     fileName?: string;
     activeProject?: { name: string; repo: string };
+    contextData?: { repo: string; tree: string[]; keyFiles: { path: string; content: string }[] };
   };
 
   const lastUserMessage = messages.filter((m) => m.role === 'user').at(-1)?.content ?? '';
@@ -145,7 +146,25 @@ Referencias visuales para sugerencias: ${refs}`;
     }
   }
 
-  const systemPrompt = `${JEFFERSON_CONTEXT}${projectContext}${repoContext}${memoryContext}`;
+  // Contexto enriquecido enviado desde el frontend (ya resuelto por /repo-context)
+  let enrichedContext = '';
+  if (contextData && (contextData.tree.length > 0 || contextData.keyFiles.length > 0)) {
+    const treeStr = contextData.tree.slice(0, 80).join('\n');
+    const filesStr = contextData.keyFiles
+      .map((f) => `--- ${f.path} ---\n${f.content}`)
+      .join('\n\n');
+    enrichedContext = `\n\nTienes acceso al contexto real del repositorio ${contextData.repo}.
+
+Estructura del proyecto:
+${treeStr}
+
+Archivos clave:
+${filesStr}
+
+Usa este contexto para dar respuestas precisas y específicas al código real. Cuando sugieras cambios, referencia los archivos exactos.`;
+  }
+
+  const systemPrompt = `${JEFFERSON_CONTEXT}${projectContext}${enrichedContext}${repoContext}${memoryContext}`;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');

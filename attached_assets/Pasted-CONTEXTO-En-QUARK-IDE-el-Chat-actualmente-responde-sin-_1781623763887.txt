@@ -1,0 +1,142 @@
+CONTEXTO:
+En QUARK IDE, el Chat actualmente responde sin conocimiento real del 
+código de ninguna app. Necesitamos que detecte automáticamente cuando 
+el usuario menciona una app específica y cargue su contexto estructural 
+de GitHub antes de responder.
+
+TAREA: Implementar contexto automático de repos en el Chat — dos capas:
+detección en frontend + enriquecimiento de prompt en backend.
+
+APPS Y SUS REPOS (owner: antoniozam20x2-ship-it):
+- Signal OS → repo: "Ahorar" → keywords: signal, ahorar, pnl, bias, 
+  circuit breaker, trailing, streak, funding, bot
+- Sniper OS → repo: "Trade-SnipeOS" → keywords: sniper, señales, 
+  heatmap, radar, ttl, entry, p1, p2, p3, p4
+- QUARK IDE → repo: "quark-ide" → keywords: quark, agent, war room, 
+  studio, debugger, preview
+- Nexus OS → repo: "NEXUS-OS-app" → keywords: nexus, okx, spot, dca, 
+  conviction
+- Core AI → repo: "Code-Coretest" → keywords: core ai, boardroom, 
+  atlas, oracle, helix, vega
+
+═══════════════════════════════════════
+CAMBIO 1 — BACKEND: nuevo endpoint en src/routes/agent.ts
+═══════════════════════════════════════
+
+Crear endpoint GET /repo-context?repo=REPO_NAME que:
+
+1. Llama a GitHub API para obtener el árbol de archivos:
+   GET https://api.github.com/repos/antoniozam20x2-ship-it/{repo}/git/trees/main?recursive=1
+   Headers: Authorization: Bearer process.env.GITHUB_TOKEN
+
+2. Filtra el árbol para quedarse solo con archivos relevantes:
+   - package.json (raíz)
+   - Cualquier archivo en src/routes/
+   - Cualquier archivo en src/components/ (solo .tsx)
+   - Cualquier archivo que se llame schema, types, db o config
+   - Máximo 8 archivos en total (priorizar routes > components > config)
+
+3. Para cada archivo filtrado, fetch su contenido:
+   GET https://api.github.com/repos/antoniozam20x2-ship-it/{repo}/contents/{path}
+   Decodifica base64 → texto plano
+   Trunca a 150 líneas máximo por archivo
+
+4. Retorna JSON:
+{
+  repo: string,
+  tree: string[],          // lista completa de paths del repo
+  keyFiles: [
+    { path: string, content: string }
+  ]
+}
+
+5. Manejo de errores:
+   - Si el repo no existe o falla GitHub API → retorna { repo, tree: [], keyFiles: [] }
+   - No lanzar excepción, el Chat debe seguir funcionando aunque falle el contexto
+
+═══════════════════════════════════════
+CAMBIO 2 — BACKEND: enriquecer el endpoint de Chat
+═══════════════════════════════════════
+
+En el endpoint que procesa los mensajes del Chat (identificarlo en el 
+código actual), modificar el system prompt cuando viene contextData:
+
+El body del request ahora puede incluir:
+{ message: string, contextData?: { repo, tree, keyFiles } }
+
+Si contextData viene, anteponer al system prompt existente:
+
+"Tienes acceso al contexto real del repositorio {repo}.
+
+Estructura del proyecto:
+{tree.join('\n')}
+
+Archivos clave:
+{para cada keyFile: '--- {path} ---\n{content}\n'}
+
+Usa este contexto para dar respuestas precisas y específicas al código 
+real. Cuando sugieras cambios, referencia los archivos exactos."
+
+El resto del system prompt existente se mantiene intacto.
+
+═══════════════════════════════════════
+CAMBIO 3 — FRONTEND: detección y carga automática
+═══════════════════════════════════════
+
+En el componente del Chat (identificar el archivo correcto), agregar:
+
+1. Estado: 
+   const [loadedContext, setLoadedContext] = useState<string | null>(null)
+   const [contextLoading, setContextLoading] = useState(false)
+
+2. Función detectApp(message: string): string | null
+   Compara el mensaje (lowercase) contra las keywords de cada app.
+   Retorna el repo name si hay match, null si no.
+   Ejemplo: "podemos mejorar las señales de sniper os" → "Trade-SnipeOS"
+
+3. Función loadRepoContext(repo: string):
+   - Si loadedContext === repo → skip (ya está cargado, no repetir fetch)
+   - setContextLoading(true)
+   - Fetch GET /api/agent/repo-context?repo={repo}
+   - Guarda el resultado en un ref (useRef) para incluirlo en el 
+     siguiente request
+   - setLoadedContext(repo)
+   - setContextLoading(false)
+
+4. En la función handleSend (o equivalente, antes de hacer el fetch 
+   al endpoint de Chat):
+   - const detectedRepo = detectApp(message)
+   - if (detectedRepo && detectedRepo !== loadedContext) 
+       await loadRepoContext(detectedRepo)
+   - Incluir contextData en el body del request al Chat si existe
+
+5. Indicador visual sutil:
+   - Mientras contextLoading === true: mostrar debajo del input un 
+     texto pequeño en color del tema: "⚡ Cargando contexto de {appName}..."
+   - Cuando loadedContext tiene valor: mostrar badge pequeño: 
+     "📁 {appName}" junto al input para que el usuario sepa qué 
+     contexto está activo
+   - Si el usuario escribe sobre otra app diferente, el badge cambia 
+     automáticamente al nuevo contexto
+
+═══════════════════════════════════════
+RESTRICCIONES IMPORTANTES:
+═══════════════════════════════════════
+
+- NO modificar la lógica de envío de mensajes existente, solo 
+  enriquecerla con el contexto antes del fetch
+- NO bloquear el envío si el contexto falla — el Chat debe responder 
+  aunque GitHub API falle
+- NO cargar contexto si el mensaje no menciona ninguna app conocida
+- El GITHUB_TOKEN ya existe en process.env — usarlo directamente
+- Respetar el router de APIs existente — no cambiar qué modelo 
+  responde al Chat
+
+RESULTADO ESPERADO:
+Usuario escribe: "podemos mejorar la lógica de señales en sniper os"
+→ Chat detecta "Trade-SnipeOS", muestra "⚡ Cargando contexto..."
+→ Lee árbol + routes + components de ese repo en GitHub
+→ Responde con conocimiento real de los archivos, rutas y lógica actual
+→ Badge "📁 Sniper OS" queda activo para el resto de la conversación
+→ Si el usuario pregunta sobre Signal OS en el siguiente mensaje, 
+  cambia automáticamente al contexto de "Ahorar"
