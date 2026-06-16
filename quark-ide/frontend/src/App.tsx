@@ -8,6 +8,12 @@ import StudioPage from './pages/StudioPage';
 
 export type Page = 'agent' | 'editor' | 'warroom' | 'debugger' | 'studio';
 
+export interface BoardBrief {
+  challenge: string;
+  appName?: string;
+  repoContext?: { tree: string[]; keyFiles: { path: string; content: string }[] };
+}
+
 export interface Project {
   name: string;
   emoji: string;
@@ -27,7 +33,7 @@ export const PROJECTS: Project[] = [
 export default function App() {
   const [page, setPage]                   = useState<Page>('agent');
   const [activeProject, setActiveProject] = useState<Project>(PROJECTS[0]);
-  const [boardBrief, setBoardBrief]       = useState<string>('');
+  const [boardBrief, setBoardBrief]       = useState<BoardBrief | null>(null);
   const [agentPreviewPending, setAgentPreviewPending] = useState(false);
   const [pipelinePrompt, setPipelinePrompt] = useState<string>('');
   const [studioBrief, setStudioBrief] = useState<string>('');
@@ -55,6 +61,7 @@ export default function App() {
             activeProject={activeProject}
             onProjectChange={setActiveProject}
             onSendToBoard={(brief) => { setBoardBrief(brief); setPage('warroom'); }}
+
             onSendToStudio={(brief) => { setStudioBrief(brief); setPage('studio'); }}
             autoShowPreview={agentPreviewPending}
             onPreviewShown={() => setAgentPreviewPending(false)}
@@ -65,7 +72,7 @@ export default function App() {
         {page === 'warroom' && (
           <WarRoomPage
             initialBrief={boardBrief}
-            onBriefConsumed={() => setBoardBrief('')}
+            onBriefConsumed={() => setBoardBrief(null)}
             onSendToAgent={(prompt, projectName) => {
               if (projectName) {
                 const target = PROJECTS.find((p) => p.name === projectName);

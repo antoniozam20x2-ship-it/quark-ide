@@ -2,6 +2,7 @@ import { useState } from 'react';
 import WarRoomPanel from '../components/WarRoom/WarRoomPanel';
 import DeepSearch from '../components/WarRoom/DeepSearch';
 import BoardRoom from '../components/WarRoom/BoardRoom';
+import type { BoardBrief } from '../App';
 
 type Tab = 'think' | 'search' | 'board';
 
@@ -12,7 +13,7 @@ const TABS: { key: Tab; label: string; icon: string }[] = [
 ];
 
 interface Props {
-  initialBrief?: string;
+  initialBrief?: BoardBrief | null;
   onBriefConsumed?: () => void;
   onSendToAgent?: (prompt: string, projectName?: string) => void;
 }

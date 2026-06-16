@@ -38,7 +38,7 @@ interface Props {
   fileContent: string;
   fileName: string;
   onApplyToEditor: (code: string) => void;
-  onSendToBoard?: (brief: string) => void;
+  onSendToBoard?: (brief: import('../../App').BoardBrief) => void;
   onSendToStudio?: (brief: string) => void;
   layout?: 'panel' | 'fullscreen';
   activeProject?: Project;
@@ -480,7 +480,11 @@ export default function ClaudeChat({
               {/* Acciones del último mensaje del asistente */}
               {isLastAssistant && onSendToBoard && msg.content && (
                 <button
-                  onClick={() => onSendToBoard(msg.content)}
+                  onClick={() => onSendToBoard({
+                    challenge: msg.content,
+                    appName: loadedContext ?? undefined,
+                    repoContext: contextDataRef.current ?? undefined,
+                  })}
                   style={{
                     marginTop: 8,
                     background: 'rgba(124,58,237,0.12)',
