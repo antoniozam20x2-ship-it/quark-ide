@@ -7,7 +7,7 @@ const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
 const MISTRAL_MODEL = 'mistral-small-latest';
 const PROVIDER_TIMEOUT_MS = 25_000;
 
-function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<globalThis.Response> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ms);
   return fetch(url, { ...init, signal: ctrl.signal }).finally(() => clearTimeout(timer));
