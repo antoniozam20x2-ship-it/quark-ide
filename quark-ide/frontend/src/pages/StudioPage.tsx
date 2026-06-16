@@ -30,6 +30,8 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
   const [running, setRunning] = useState(false)
   const [engineeredPrompt, setEngineeredPrompt] = useState('')
   const [designPrototype, setDesignPrototype] = useState<string>('')
+  const [studioHtml, setStudioHtml] = useState<string>('')
+  const [buildLoading, setBuildLoading] = useState(false)
 
   useEffect(() => {
     if (initialBrief) {
@@ -49,6 +51,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
     if (!input || running) return
     setRunning(true)
     setEngineeredPrompt('')
+    setStudioHtml('')
     setAgents(AGENTS.map(a => ({ ...a, content: '', status: 'idle' })))
 
     const roles = ['architect', 'designer', 'engineer', 'qa']
@@ -74,7 +77,6 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
           setDesignPrototype(data.result ?? '')
         }
         if (role === 'engineer') {
-          console.log('Engineer result:', data.result)
           setEngineeredPrompt(data.result ?? '')
         }
       } catch {
@@ -82,6 +84,63 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
       }
     }
     setRunning(false)
+  }
+
+  // /api/agent/generate streams SSE — read until the 'done' event to get mainContent
+  async function buildAndPreview() {
+    if (!engineeredPrompt) return
+    setBuildLoading(true)
+    setStudioHtml('')
+
+    try {
+      const genRes = await fetch(`${API_BASE}/api/agent/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: engineeredPrompt, repo: 'none' })
+      })
+
+      if (!genRes.body) throw new Error('No response body from /api/agent/generate')
+
+      const reader  = genRes.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      let generatedCode = ''
+
+      outer: while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() ?? ''
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed.startsWith('data:')) continue
+          const raw = trimmed.slice(5).trim()
+          try {
+            const json = JSON.parse(raw)
+            if (json.event === 'done') {
+              generatedCode = json.mainContent ?? ''
+              break outer
+            }
+          } catch { /* ignore malformed SSE lines */ }
+        }
+      }
+
+      if (!generatedCode) throw new Error('El Agent no generó código (mainContent vacío)')
+
+      const htmlRes = await fetch(`${API_BASE}/api/agent/generate-html`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: generatedCode })
+      })
+      const htmlData = await htmlRes.json() as { html?: string; success: boolean; error?: string }
+      if (!htmlData.success) throw new Error(htmlData.error ?? 'generate-html falló')
+      setStudioHtml(htmlData.html ?? '')
+    } catch (err) {
+      console.error('[Studio] buildAndPreview error:', err)
+    } finally {
+      setBuildLoading(false)
+    }
   }
 
   const mono = 'JetBrains Mono, monospace'
@@ -137,13 +196,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
                     </div>
                     <iframe
                       srcDoc={designPrototype}
-                      style={{
-                        width: '100%',
-                        height: 320,
-                        border: '1px solid #1E1E2E',
-                        borderRadius: 8,
-                        background: '#000',
-                      }}
+                      style={{ width: '100%', height: 320, border: '1px solid #1E1E2E', borderRadius: 8, background: '#000' }}
                       sandbox="allow-scripts"
                       title="Design Prototype"
                     />
@@ -164,14 +217,66 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
           </div>
         ))}
 
-        {/* Send to Agent button */}
-        {allDone && onSendToAgent && (
+        {/* Build & Preview button */}
+        {allDone && engineeredPrompt && (
           <button
-            onClick={() => onSendToAgent(engineeredPrompt || brief)}
-            style={{ width: '100%', padding: '14px 16px', background: 'linear-gradient(135deg, #7C3AED, #6D28D9)', border: 'none', borderRadius: 10, color: '#fff', fontFamily: mono, fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+            onClick={buildAndPreview}
+            disabled={buildLoading}
+            style={{
+              width: '100%',
+              padding: '14px 16px',
+              background: buildLoading ? '#1E1E2E' : 'linear-gradient(135deg, #7C3AED, #6D28D9)',
+              border: 'none',
+              borderRadius: 10,
+              color: buildLoading ? '#64748B' : '#fff',
+              fontFamily: mono,
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: buildLoading ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+            }}
           >
-            ⚡ Enviar al Agent → construir
+            {buildLoading ? '⚡ Construyendo...' : '⚡ Construir y Previsualizar'}
           </button>
+        )}
+
+        {/* Studio Preview */}
+        {studioHtml && (
+          <div style={{
+            marginTop: 4,
+            borderRadius: 8,
+            overflow: 'hidden',
+            border: '1px solid rgba(255,255,255,0.1)',
+          }}>
+            <div style={{
+              padding: '8px 12px',
+              fontSize: 11,
+              fontFamily: mono,
+              color: '#64748B',
+              borderBottom: '1px solid rgba(255,255,255,0.08)',
+              background: '#12121A',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}>
+              <span>// preview</span>
+              <button
+                onClick={() => setStudioHtml('')}
+                style={{ background: 'transparent', border: 'none', color: '#3a3a5c', fontFamily: mono, fontSize: 10, cursor: 'pointer', padding: '2px 6px' }}
+              >
+                ✕ cerrar
+              </button>
+            </div>
+            <iframe
+              srcDoc={studioHtml}
+              style={{ width: '100%', height: 500, border: 'none' }}
+              sandbox="allow-scripts"
+              title="Studio Preview"
+            />
+          </div>
         )}
       </div>
 

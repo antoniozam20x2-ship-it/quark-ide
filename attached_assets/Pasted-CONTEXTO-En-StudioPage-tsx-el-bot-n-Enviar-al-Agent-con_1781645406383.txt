@@ -1,0 +1,128 @@
+CONTEXTO:
+En StudioPage.tsx, el botón "⚡ Enviar al Agent → construir" 
+actualmente delega a QuarkAgent via App.tsx para generar y 
+previsualizar código. Necesitamos que Studio lo haga de forma 
+autónoma — sin salir del componente.
+
+Ya existe en StudioPage.tsx:
+- engineeredPrompt (useState) — output del Engineer con la 
+  especificación técnica completa
+- Un iframe inline para el Designer (designPrototype)
+- El endpoint POST /api/agent/generate-html ya existe en el backend
+
+TAREA: Un solo cambio quirúrgico en StudioPage.tsx únicamente.
+
+═══════════════════════════════════════
+CAMBIO — StudioPage.tsx
+═══════════════════════════════════════
+
+1. Agregar dos estados nuevos:
+   const [studioHtml, setStudioHtml] = useState<string>('')
+   const [buildLoading, setBuildLoading] = useState(false)
+
+2. Crear función buildAndPreview():
+   
+   async function buildAndPreview() {
+     if (!engineeredPrompt) return
+     setBuildLoading(true)
+     
+     try {
+       // Primero genera el código completo con /generate
+       const genRes = await fetch('/api/agent/generate', {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({
+           prompt: engineeredPrompt,
+           repo: 'none'  // sin repo — creación libre
+         })
+       })
+       const genData = await genRes.json()
+       const generatedCode = genData.code || genData.result || ''
+       
+       // Luego convierte a HTML ejecutable
+       const htmlRes = await fetch('/api/agent/generate-html', {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ code: generatedCode })
+       })
+       const htmlData = await htmlRes.json()
+       const html = htmlData.html || htmlData.result || ''
+       
+       setStudioHtml(html)
+     } catch (err) {
+       console.error('buildAndPreview error:', err)
+     } finally {
+       setBuildLoading(false)
+     }
+   }
+
+3. Reemplazar el botón actual:
+   
+   DE:
+   <button onClick={() => onSendToAgent(engineeredPrompt || brief)}>
+     ⚡ Enviar al Agent → construir
+   </button>
+   
+   A:
+   <button 
+     onClick={buildAndPreview}
+     disabled={buildLoading || !engineeredPrompt}
+   >
+     {buildLoading ? '⚡ Construyendo...' : '⚡ Construir y Previsualizar'}
+   </button>
+
+4. Agregar el preview DEBAJO del botón, 
+   solo cuando studioHtml tenga contenido:
+   
+   {studioHtml && (
+     <div style={{ 
+       marginTop: '16px',
+       borderRadius: '8px',
+       overflow: 'hidden',
+       border: '1px solid rgba(255,255,255,0.1)'
+     }}>
+       <div style={{ 
+         padding: '8px 12px', 
+         fontSize: '11px',
+         color: '#888',
+         borderBottom: '1px solid rgba(255,255,255,0.1)'
+       }}>
+         // preview
+       </div>
+       <iframe
+         srcDoc={studioHtml}
+         style={{ width: '100%', height: '500px', border: 'none' }}
+         sandbox="allow-scripts"
+         title="Studio Preview"
+       />
+     </div>
+   )}
+
+═══════════════════════════════════════
+RESTRICCIONES:
+═══════════════════════════════════════
+
+- NO eliminar el prop onSendToAgent — dejarlo en la firma del 
+  componente para backward compatibility con App.tsx
+- NO tocar App.tsx, AgentPage.tsx, ni QuarkAgent.tsx
+- NO tocar el iframe del Designer (designPrototype) — es 
+  independiente y sigue igual
+- NO modificar ningún endpoint del backend
+- Solo StudioPage.tsx
+
+VERIFICAR antes de implementar:
+- ¿Cuál es el campo exacto que retorna /api/agent/generate? 
+  ¿code, result, content, o generatedCode?
+- ¿Cuál es el campo exacto que retorna /api/agent/generate-html?
+  ¿html, result, o content?
+  Usar esos nombres exactos en buildAndPreview() — 
+  no asumir nombres.
+
+RESULTADO ESPERADO:
+1. Usuario describe "Crea un calendario lunar chino" en Studio
+2. Los 4 agentes analizan (flujo actual sin cambios)
+3. Engineer genera la especificación técnica → engineeredPrompt
+4. Usuario presiona "⚡ Construir y Previsualizar"
+5. Studio llama directamente al backend sin salir del componente
+6. Preview aparece debajo del botón dentro de Studio
+7. Quark Agent no interviene en ningún momento
