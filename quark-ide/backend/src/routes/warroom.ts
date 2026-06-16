@@ -1,11 +1,15 @@
 import { Router, Request, Response } from 'express';
 import { generateContent, GeminiAuthError } from '../services/gemini.js';
 
-const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODEL = 'llama-3.3-70b-versatile';
-const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
-const MISTRAL_MODEL = 'mistral-small-latest';
+// ── Provider constants ────────────────────────────────────────────────────────
+
+const GROQ_URL      = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_MODEL    = 'llama-3.3-70b-versatile';
+const DEEPSEEK_URL  = 'https://api.deepseek.com/v1/chat/completions';
+const DEEPSEEK_MODEL = 'deepseek-chat';
 const PROVIDER_TIMEOUT_MS = 25_000;
+
+// ── HTTP helper ───────────────────────────────────────────────────────────────
 
 function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<globalThis.Response> {
   const ctrl = new AbortController();
@@ -13,66 +17,114 @@ function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<g
   return fetch(url, { ...init, signal: ctrl.signal }).finally(() => clearTimeout(timer));
 }
 
-async function callGroq(prompt: string, systemPrompt: string, maxTokens = 1024): Promise<string> {
-  const token = process.env.GROQ_API_KEY;
-  if (!token) throw new Error('GROQ_API_KEY is not set');
+// ── Groq — rotates across up to 3 keys ───────────────────────────────────────
+
+function getGroqKeys(): string[] {
+  return [
+    process.env.GROQ_API_KEY,
+    process.env.GROQ_API_KEY_2,
+    process.env.GROQ_API_KEY_3,
+  ].filter((k): k is string => Boolean(k));
+}
+
+async function callGroqWithKey(
+  key: string,
+  prompt: string,
+  systemPrompt: string,
+  maxTokens = 1024,
+): Promise<string> {
   const res = await fetchWithTimeout(GROQ_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
     body: JSON.stringify({
       model: GROQ_MODEL,
       max_tokens: maxTokens,
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: prompt },
+        { role: 'user',   content: prompt },
       ],
     }),
   }, PROVIDER_TIMEOUT_MS);
-  if (!res.ok) throw new Error(`Groq API error: ${res.status} ${res.statusText}`);
+  if (!res.ok) throw new Error(`Groq error: ${res.status} ${res.statusText}`);
   const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
   return json.choices?.[0]?.message?.content ?? '';
 }
 
-async function callMistral(prompt: string, systemPrompt: string, maxTokens = 1024): Promise<string> {
-  const token = process.env.MISTRAL_API_KEY;
-  if (!token) throw new Error('MISTRAL_API_KEY is not set');
-  const res = await fetchWithTimeout(MISTRAL_URL, {
+/** Try Groq keys in order (GROQ_API_KEY → GROQ_API_KEY_2 → GROQ_API_KEY_3). */
+async function callGroqRotated(
+  prompt: string,
+  systemPrompt: string,
+  maxTokens = 1024,
+): Promise<string> {
+  const keys = getGroqKeys();
+  if (keys.length === 0) throw new Error('No GROQ_API_KEY configured');
+
+  let lastErr: Error = new Error('No Groq keys available');
+  for (const key of keys) {
+    try {
+      return await callGroqWithKey(key, prompt, systemPrompt, maxTokens);
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err));
+      console.warn(`[warroom] Groq key …${key.slice(-4)} failed: ${lastErr.message}`);
+    }
+  }
+  throw lastErr;
+}
+
+// ── DeepSeek ──────────────────────────────────────────────────────────────────
+
+async function callDeepSeek(
+  prompt: string,
+  systemPrompt: string,
+  maxTokens = 1024,
+): Promise<string> {
+  const token = process.env.DEEPSEEK_API_KEY;
+  if (!token) throw new Error('DEEPSEEK_API_KEY is not set');
+  const res = await fetchWithTimeout(DEEPSEEK_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({
-      model: MISTRAL_MODEL,
+      model: DEEPSEEK_MODEL,
       max_tokens: maxTokens,
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: prompt },
+        { role: 'user',   content: prompt },
       ],
     }),
   }, PROVIDER_TIMEOUT_MS);
-  if (!res.ok) throw new Error(`Mistral API error: ${res.status} ${res.statusText}`);
+  if (!res.ok) throw new Error(`DeepSeek error: ${res.status} ${res.statusText}`);
   const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
   return json.choices?.[0]?.message?.content ?? '';
 }
 
-async function withFallback(
-  primary: () => Promise<string>,
-  fallback: () => Promise<string>,
-  label: string
+// ── Fallback chain ────────────────────────────────────────────────────────────
+
+/** Run providers in order, stopping at the first success.
+ *  GeminiAuthError on a provider skips it immediately (no retry). */
+async function withFallbackChain(
+  providers: Array<{ fn: () => Promise<string>; label: string }>,
 ): Promise<string> {
-  try {
-    return await primary();
-  } catch (primaryErr) {
-    if (primaryErr instanceof GeminiAuthError) {
-      console.error(`[warroom] ${label} — Gemini key invalid (401), switching to fallback immediately`);
-    } else {
-      console.warn(`[warroom] ${label} primary failed (${(primaryErr as Error).message}), trying fallback…`);
+  let lastErr: Error = new Error('All providers failed');
+  for (const { fn, label } of providers) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof GeminiAuthError) {
+        console.error(`[warroom] ${label} — Gemini 401 (key invalid), skipping immediately`);
+      } else {
+        console.warn(`[warroom] ${label} failed: ${(err as Error).message}`);
+      }
+      lastErr = err instanceof Error ? err : new Error(String(err));
     }
-    return fallback();
   }
+  throw lastErr;
 }
+
+// ── Router ────────────────────────────────────────────────────────────────────
 
 const router = Router();
 
-// ── Dynamic context builder ──────────────────────────────────────────────────
+// ── Context builder ───────────────────────────────────────────────────────────
 
 const BASE_CONTEXT = `Eres parte del War Room de Jefferson, trader especializado en crypto futures con metodología SMC/ICT operando en Bitget USDT-M.
 Jefferson construye su ecosistema de apps en Railway con React/TypeScript/Vite frontend + Node.js/Express backend + PostgreSQL.
@@ -133,7 +185,7 @@ function buildContext(appName: string | null, repoContext?: RepoContextPayload):
   return BASE_CONTEXT + appCtx + repoCtx;
 }
 
-// ── Board role descriptions (no context embedded) ────────────────────────────
+// ── Board roles ───────────────────────────────────────────────────────────────
 
 const BOARD_ROLES: Record<string, string> = {
   CEO: `You are a decisive business strategist and the CEO advisor on Jefferson's personal board of directors.
@@ -158,6 +210,32 @@ ${BASE_CONTEXT}
 
 When Jefferson brings you a project idea or technical challenge, analyze it with full knowledge of his existing ecosystem. Default to his established stack unless there is a strong reason to deviate — and if you deviate, explain why explicitly. Format your response with clear sections using these exact headers: ## Project Overview, ## Recommended Architecture, ## Database Design, ## UI/UX Recommendations, ## Development Phases, ## Potential Challenges. Be specific, technical, and actionable. Provide production-ready guidance that fits seamlessly into his Railway monorepo workflow.`;
 
+// ── Provider chain: Groq (rotated) → DeepSeek → Gemini ───────────────────────
+
+function buildProviderChain(
+  prompt: string,
+  systemPrompt: string,
+  maxTokens: number,
+  geminiEndpoint: string,
+): Array<{ fn: () => Promise<string>; label: string }> {
+  return [
+    {
+      label: 'Groq(rotated)',
+      fn: () => callGroqRotated(prompt, systemPrompt, maxTokens),
+    },
+    {
+      label: 'DeepSeek',
+      fn: () => callDeepSeek(prompt, systemPrompt, maxTokens),
+    },
+    {
+      label: 'Gemini(last-resort)',
+      fn: () => generateContent(prompt, systemPrompt, maxTokens, geminiEndpoint),
+    },
+  ];
+}
+
+// ── Board member dispatch ─────────────────────────────────────────────────────
+
 async function callBoardMember(
   member: string,
   challenge: string,
@@ -168,49 +246,16 @@ async function callBoardMember(
   if (!roleDesc) throw new Error(`Invalid member: ${member}`);
   const systemPrompt = `${roleDesc}\n\n${buildContext(appName, repoContext)}`;
 
-  switch (member) {
-    case 'CEO':
-      return withFallback(
-        () => generateContent(challenge, systemPrompt, 1024, `/api/warroom/board/CEO`),
-        () => callGroq(challenge, systemPrompt, 1024),
-        'CEO(Gemini→Groq)',
-      );
-    case 'CTO':
-      return withFallback(
-        () => callGroq(challenge, systemPrompt, 1024),
-        () => generateContent(challenge, systemPrompt, 1024, `/api/warroom/board/CTO`),
-        'CTO(Groq→Gemini)',
-      );
-    case 'Designer':
-      return withFallback(
-        () => callGroq(challenge, systemPrompt, 1024),
-        () => callMistral(challenge, systemPrompt, 1024),
-        'Designer(Groq→Mistral)',
-      );
-    case 'QA':
-      return withFallback(
-        () => callMistral(challenge, systemPrompt, 1024),
-        () => callGroq(challenge, systemPrompt, 1024),
-        'QA(Mistral→Groq)',
-      );
-    case 'DEBUGGER':
-      return withFallback(
-        () => callGroq(challenge, systemPrompt, 1024),
-        () => generateContent(challenge, systemPrompt, 1024, `/api/warroom/board/DEBUGGER`),
-        'DEBUGGER(Groq→Gemini)',
-      );
-    default:
-      return withFallback(
-        () => generateContent(challenge, systemPrompt, 1024, `/api/warroom/board/${member}`),
-        () => callGroq(challenge, systemPrompt, 1024),
-        `${member}(Gemini→Groq)`,
-      );
-  }
+  return withFallbackChain(
+    buildProviderChain(challenge, systemPrompt, 1024, `/api/warroom/board/${member}`)
+  );
 }
+
+// ── Consensus synthesis ───────────────────────────────────────────────────────
 
 async function generateConsensus(
   challenge: string,
-  responses: Record<string, string>
+  responses: Record<string, string>,
 ): Promise<string> {
   const synthesis = `Original challenge: ${challenge}
 
@@ -225,8 +270,13 @@ QA: ${responses.QA}
 
 Synthesize all four perspectives into 3-5 clear, actionable consensus items. Be decisive and specific. Reference the actual content from each board member's input. Jefferson needs a clear action plan.`;
 
-  return generateContent(synthesis, `${BOARD_ROLES.CEO}\n\n${BASE_CONTEXT}`, 1024, '/api/warroom/consensus');
+  const systemPrompt = `${BOARD_ROLES.CEO}\n\n${BASE_CONTEXT}`;
+  return withFallbackChain(
+    buildProviderChain(synthesis, systemPrompt, 1024, '/api/warroom/consensus')
+  );
 }
+
+// ── Routes ────────────────────────────────────────────────────────────────────
 
 router.post('/think', async (req: Request, res: Response) => {
   const { idea, options } = req.body as {
@@ -242,8 +292,8 @@ router.post('/think', async (req: Request, res: Response) => {
   const modeNote = options?.mode ? `\n\nAnalysis mode: ${options.mode}.` : '';
   const extras = [
     options?.includeTechStack && 'Include detailed tech stack recommendations that align with his existing Railway/TypeScript/React ecosystem.',
-    options?.includeDatabase && 'Include detailed PostgreSQL schema design consistent with his existing database patterns.',
-    options?.includeUX && 'Include detailed UI/UX recommendations that match his cyberpunk neon green/black aesthetic.',
+    options?.includeDatabase  && 'Include detailed PostgreSQL schema design consistent with his existing database patterns.',
+    options?.includeUX        && 'Include detailed UI/UX recommendations that match his cyberpunk neon green/black aesthetic.',
   ]
     .filter(Boolean)
     .join(' ');
@@ -251,7 +301,9 @@ router.post('/think', async (req: Request, res: Response) => {
   const prompt = `${idea}${modeNote}${extras ? '\n\n' + extras : ''}`;
 
   try {
-    const result = await generateContent(prompt, THINK_SYSTEM, 4096, '/api/warroom/think');
+    const result = await withFallbackChain(
+      buildProviderChain(prompt, THINK_SYSTEM, 4096, '/api/warroom/think')
+    );
     res.json({ result });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -296,10 +348,10 @@ router.post('/swarm', async (req: Request, res: Response) => {
   const start = Date.now();
   try {
     const [ceo, cto, designer, qa] = await Promise.all([
-      callBoardMember('CEO', challenge, resolvedApp, repoContext),
-      callBoardMember('CTO', challenge, resolvedApp, repoContext),
+      callBoardMember('CEO',      challenge, resolvedApp, repoContext),
+      callBoardMember('CTO',      challenge, resolvedApp, repoContext),
       callBoardMember('Designer', challenge, resolvedApp, repoContext),
-      callBoardMember('QA', challenge, resolvedApp, repoContext),
+      callBoardMember('QA',       challenge, resolvedApp, repoContext),
     ]);
 
     const consensus = await generateConsensus(challenge, { CEO: ceo, CTO: cto, Designer: designer, QA: qa });
@@ -328,7 +380,9 @@ ${BASE_CONTEXT}
 When Jefferson searches for something, answer with full context of his ecosystem. If the query relates to his projects, reference specific implementation details. If it's a general technical question, frame the answer in terms of how it applies to his Railway/TypeScript/React/PostgreSQL stack. Be thorough, specific, and immediately actionable.`;
 
   try {
-    const result = await generateContent(query, searchSystem, 2048, '/api/warroom/search');
+    const result = await withFallbackChain(
+      buildProviderChain(query, searchSystem, 2048, '/api/warroom/search')
+    );
     res.json({ result });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
