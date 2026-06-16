@@ -1,24 +1,7 @@
 import { Router } from 'express'
-import { GoogleGenAI } from '@google/genai'
+import { callAI } from '../lib/aiRouter.js'
 
 const router = Router()
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! })
-
-async function callGeminiWithRetry(fn: () => Promise<any>, maxRetries = 3, delayMs = 3000) {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn()
-    } catch (err: any) {
-      const is503 = err?.status === 503 || err?.message?.includes('503') || err?.message?.includes('UNAVAILABLE')
-      if (is503 && attempt < maxRetries) {
-        console.log(`Gemini 503 — reintento ${attempt}/${maxRetries} en ${delayMs}ms`)
-        await new Promise(r => setTimeout(r, delayMs))
-        continue
-      }
-      throw err
-    }
-  }
-}
 
 const SYSTEM_PROMPTS: Record<string, string> = {
   architect: `Eres un arquitecto de software senior. Dado un brief de producto, define en máximo 8 líneas:
@@ -76,38 +59,21 @@ router.post('/analyze', async (req, res) => {
     const systemPrompt = SYSTEM_PROMPTS[role]
     if (!systemPrompt) return res.status(400).json({ error: 'role inválido' })
 
-    // Engineer usa Claude via OpenRouter — entiende mejor el contexto visual y genera prompts más precisos
+    let userPrompt: string
+    let task: 'html' | 'analyze'
+
     if (role === 'engineer') {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://quark-ide.railway.app',
-          'X-Title': 'QUARK IDE',
-        },
-        body: JSON.stringify({
-          model: 'anthropic/claude-sonnet-4-6',
-          max_tokens: 500,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: `BRIEF: ${brief}\n\nARQUITECTURA: ${architectResult ?? ''}\n\nDISEÑO: ${designerResult ?? ''}` },
-          ],
-        }),
-      })
-      const data = await response.json() as any
-      if (!response.ok) throw new Error(data?.error?.message ?? `OpenRouter ${response.status}`)
-      const text = data.choices?.[0]?.message?.content ?? ''
-      return res.json({ result: text, role })
+      userPrompt = `BRIEF: ${brief}\n\nARQUITECTURA: ${architectResult ?? ''}\n\nDISEÑO: ${designerResult ?? ''}`
+      task = 'analyze'
+    } else if (role === 'designer') {
+      userPrompt = `BRIEF: ${brief}`
+      task = 'html'
+    } else {
+      userPrompt = `BRIEF: ${brief}`
+      task = 'analyze'
     }
 
-    // Resto de roles usan Gemini
-    const result = await callGeminiWithRetry(() => ai.models.generateContent({
-      model: 'gemini-2.0-flash-lite',
-      contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\nBRIEF: ${brief}` }] }],
-    }))
-    const text = result.text ?? ''
-
+    const text = await callAI(task, userPrompt, systemPrompt)
     res.json({ result: text, role })
   } catch (err) {
     console.error('studio/analyze error:', err)

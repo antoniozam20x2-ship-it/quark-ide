@@ -1,0 +1,152 @@
+// Groq — rotación automática entre 3 keys (se renueva cada 24h)
+const GROQ_KEYS = [
+  process.env.GROQ_API_KEY,
+  process.env.GROQ_API_KEY_2,
+  process.env.GROQ_API_KEY_3,
+].filter(Boolean) as string[];
+
+// Gemini — rotación entre 2 keys
+const GEMINI_KEYS = [
+  process.env.GEMINI_API_KEY,
+  process.env.GEMINI_API_KEY_2,
+].filter(Boolean) as string[];
+
+let groqIndex = 0;
+let geminiIndex = 0;
+
+// Función principal — elige el mejor modelo según la tarea
+export async function callAI(task: 'fix' | 'generate' | 'analyze' | 'html' | 'warroom', prompt: string, systemPrompt?: string) {
+  
+  switch(task) {
+    case 'fix':
+      // Fix de código → DeepSeek primero, Groq como fallback
+      return await tryProviders([
+        () => callDeepSeek(prompt, systemPrompt),
+        () => callGroq(prompt, systemPrompt),
+        () => callGemini(prompt, systemPrompt),
+      ]);
+    
+    case 'generate':
+      // Generación TSX → Gemini primero
+      return await tryProviders([
+        () => callGemini(prompt, systemPrompt),
+        () => callGroq(prompt, systemPrompt),
+        () => callDeepSeek(prompt, systemPrompt),
+      ]);
+    
+    case 'analyze':
+      // War Room análisis → Groq (rápido)
+      return await tryProviders([
+        () => callGroq(prompt, systemPrompt),
+        () => callGemini(prompt, systemPrompt),
+      ]);
+    
+    case 'html':
+      // Preview HTML → GitHub Models GPT-4o
+      return await tryProviders([
+        () => callGitHubModels(prompt, systemPrompt, 'gpt-4o'),
+        () => callGemini(prompt, systemPrompt),
+        () => callGroq(prompt, systemPrompt),
+      ]);
+
+    case 'warroom':
+      // War Room → Groq rotación entre 3 keys
+      return await tryProviders([
+        () => callGroq(prompt, systemPrompt),
+        () => callGemini(prompt, systemPrompt),
+      ]);
+  }
+}
+
+// tryProviders — intenta cada proveedor en orden hasta que uno funcione
+async function tryProviders(providers: (() => Promise<string>)[]): Promise<string> {
+  for (const provider of providers) {
+    try {
+      const result = await provider();
+      if (result) return result;
+    } catch (err: any) {
+      const is429 = err?.status === 429 || String(err).includes('429');
+      console.warn(`[AI Router] Provider failed${is429 ? ' (429)' : ''}:`, err?.message ?? err);
+      continue;
+    }
+  }
+  throw new Error('Todos los proveedores fallaron');
+}
+
+// Groq — rota entre las 3 keys automáticamente
+async function callGroq(prompt: string, system?: string): Promise<string> {
+  const key = GROQ_KEYS[groqIndex % GROQ_KEYS.length];
+  groqIndex++;
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 8192,
+      messages: [
+        ...(system ? [{ role: 'system', content: system }] : []),
+        { role: 'user', content: prompt }
+      ]
+    })
+  });
+  const data = await res.json() as any;
+  if (!res.ok) throw Object.assign(new Error(data?.error?.message), { status: res.status });
+  return data.choices?.[0]?.message?.content ?? '';
+}
+
+// Gemini — rota entre 2 keys
+async function callGemini(prompt: string, system?: string): Promise<string> {
+  const key = GEMINI_KEYS[geminiIndex % GEMINI_KEYS.length];
+  geminiIndex++;
+  const ai = new GoogleGenAI({ apiKey: key });
+  const response = await ai.models.generateContent({
+    model: 'gemini-3.1-flash-lite',
+    contents: [{ role: 'user', parts: [{ text: (system ? system + '\n\n' : '') + prompt }] }],
+    config: { maxOutputTokens: 8192 }
+  });
+  return response.text ?? '';
+}
+
+// DeepSeek — especialista en código
+async function callDeepSeek(prompt: string, system?: string): Promise<string> {
+  const res = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: { 
+      'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      max_tokens: 8192,
+      messages: [
+        ...(system ? [{ role: 'system', content: system }] : []),
+        { role: 'user', content: prompt }
+      ]
+    })
+  });
+  const data = await res.json() as any;
+  if (!res.ok) throw Object.assign(new Error(data?.error?.message), { status: res.status });
+  return data.choices?.[0]?.message?.content ?? '';
+}
+
+// GitHub Models — GPT-4o gratis
+async function callGitHubModels(prompt: string, system?: string, model = 'gpt-4o'): Promise<string> {
+  const res = await fetch('https://models.inference.ai.azure.com/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 4096,
+      messages: [
+        ...(system ? [{ role: 'system', content: system }] : []),
+        { role: 'user', content: prompt }
+      ]
+    })
+  });
+  const data = await res.json() as any;
+  if (!res.ok) throw Object.assign(new Error(data?.error?.message), { status: res.status });
+  return data.choices?.[0]?.message?.content ?? '';
+}

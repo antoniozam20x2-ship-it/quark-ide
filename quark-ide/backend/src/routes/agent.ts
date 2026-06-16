@@ -1,58 +1,23 @@
 import { Router } from 'express';
-import { GoogleGenAI } from '@google/genai';
 import { getFileTree, getFileContent } from '../services/github.js';
+import { callAI } from '../lib/aiRouter.js';
 
 const router = Router();
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
-async function callGeminiWithRetry(fn: () => Promise<any>, maxRetries = 3, delayMs = 3000) {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err: any) {
-      const is503 = err?.status === 503 || err?.message?.includes('503') || err?.message?.includes('UNAVAILABLE');
-      if (is503 && attempt < maxRetries) {
-        console.log(`Gemini 503 — reintento ${attempt}/${maxRetries} en ${delayMs}ms`);
-        await new Promise(r => setTimeout(r, delayMs));
-        continue;
-      }
-      throw err;
-    }
-  }
-}
-
-async function repairWithClaude(rawResponse: string, originalPrompt: string): Promise<any> {
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'https://quark-ide.railway.app',
-      'X-Title': 'QUARK IDE',
-    },
-    body: JSON.stringify({
-      model: 'anthropic/claude-sonnet-4-6',
-      max_tokens: 8192,
-      messages: [
-        {
-          role: 'system',
-          content: `Eres un agente de reparación de JSON.
-Recibes una respuesta malformada de Gemini y debes devolver JSON válido.
+const REPAIR_SYSTEM = `Eres un agente de reparación de JSON.
+Recibes una respuesta malformada y debes devolver JSON válido.
 REGLAS:
 - Devuelve SOLO el JSON, sin markdown ni explicaciones
 - El JSON debe tener exactamente: { "files": [{"path": string, "content": string}], "commitMessage": string, "mainComponent": string }
 - En el campo content, escapa correctamente: comillas → \\" , saltos de línea → \\n, backticks → \`
-- Si el contenido tiene SVG o HTML dentro del TSX, escápalo correctamente como string`,
-        },
-        {
-          role: 'user',
-          content: `Prompt original: ${originalPrompt}\n\nRespuesta rota de Gemini:\n${rawResponse.slice(0, 6000)}\n\nRepara el JSON y devuélvelo válido.`,
-        },
-      ],
-    }),
-  });
-  const data = await response.json() as any;
-  const text = data.choices?.[0]?.message?.content ?? '';
+- Si el contenido tiene SVG o HTML dentro del TSX, escápalo correctamente como string`;
+
+async function repairJSON(rawResponse: string, originalPrompt: string): Promise<any> {
+  const text = await callAI(
+    'fix',
+    `Prompt original: ${originalPrompt}\n\nRespuesta rota:\n${rawResponse.slice(0, 6000)}\n\nRepara el JSON y devuélvelo válido.`,
+    REPAIR_SYSTEM,
+  );
   return JSON.parse(text.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim());
 }
 
@@ -81,14 +46,8 @@ ${filePaths}
 
 Responde SOLO con un JSON array de strings, sin markdown ni explicaciones. Ejemplo: ["src/server.ts","src/db.ts"]`;
 
-  const resp = await callGeminiWithRetry(() => ai.models.generateContent({
-    model: 'gemini-3.1-flash-lite',
-    contents: [{ role: 'user', parts: [{ text: identifyPrompt }] }],
-    config: { maxOutputTokens: 512 },
-  }));
-
-  const raw = (resp.text ?? '').trim()
-    .replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
+  const raw = (await callAI('analyze', identifyPrompt))
+    .trim().replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
 
   try {
     const paths = JSON.parse(raw) as string[];
@@ -249,13 +208,7 @@ NUNCA uses comillas simples en property names ni values.
 NUNCA incluyas comentarios dentro del JSON.
 El campo content de cada archivo debe ser un string JSON válido con caracteres escapados correctamente.`;
 
-    const response = await callGeminiWithRetry(() => ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
-      contents: [{ role: 'user', parts: [{ text: systemPrompt + '\n\nTAREA: ' + prompt }] }],
-      config: { maxOutputTokens: 8192 },
-    }));
-
-    const raw = (response.text ?? '').trim();
+    const raw = (await callAI('generate', systemPrompt + '\n\nTAREA: ' + prompt)).trim();
 
     console.log('[Agent] Raw length:', raw.length);
     console.log('[Agent] Raw preview:', raw.slice(0, 300));
@@ -286,9 +239,9 @@ El campo content de cada archivo debe ser un string JSON válido con caracteres 
             throw new Error('no match');
           }
         } catch {
-          // Último recurso — Claude repara el JSON roto
-          send('action', { text: '🔧 Reparando respuesta con Claude...' });
-          parsed = await repairWithClaude(raw, prompt);
+          // Último recurso — AI repara el JSON roto
+          send('action', { text: '🔧 Reparando respuesta...' });
+          parsed = await repairJSON(raw, prompt);
         }
       }
     }
@@ -374,14 +327,8 @@ router.post('/generate-html', async (req, res) => {
 
       const geminiPrompt = `Convierte este componente React/TSX a HTML puro standalone (sin imports, sin build step, usando CDN de React desde unpkg).${filesContext}\n\nComponente principal:\n${code}\n\nResponde SOLO con el HTML completo, sin markdown ni backticks. Empieza con <!DOCTYPE html>.`;
 
-      const response = await callGeminiWithRetry(() => ai.models.generateContent({
-        model: 'gemini-3.1-flash-lite',
-        contents: [{ role: 'user', parts: [{ text: geminiPrompt }] }],
-        config: { maxOutputTokens: 8192 },
-      }));
-
-      const rawHtml = (response.text ?? '').trim();
-      if (!rawHtml) throw new Error('Gemini no devolvió contenido');
+      const rawHtml = (await callAI('html', geminiPrompt)).trim();
+      if (!rawHtml) throw new Error('Sin contenido HTML generado');
       const cleanHtml = extractHtml(rawHtml);
       return res.json({ html: cleanHtml, success: true });
     } catch (err) {
@@ -390,35 +337,13 @@ router.post('/generate-html', async (req, res) => {
     }
   }
 
-  // Path B: genera HTML desde design prompt con Claude (OpenRouter)
+  // Path B: genera HTML desde design prompt (GitHub Models GPT-4o → Gemini)
   if (!prompt) return res.status(400).json({ success: false, error: 'prompt o code requerido' });
 
   try {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://quark-ide.railway.app',
-        'X-Title': 'QUARK IDE',
-      },
-      body: JSON.stringify({
-        model: 'anthropic/claude-sonnet-4-6',
-        max_tokens: 4000,
-        messages: [
-          { role: 'system', content: GENERATE_HTML_SYSTEM_PROMPT },
-          { role: 'user', content: prompt },
-        ],
-      }),
-    });
-
-    const data = await response.json() as any;
-    if (!response.ok) throw new Error(data?.error?.message ?? `OpenRouter ${response.status}`);
-
-    const rawHtml = data.choices?.[0]?.message?.content ?? '';
-    if (!rawHtml) throw new Error('OpenRouter no devolvió contenido');
+    const rawHtml = (await callAI('html', prompt, GENERATE_HTML_SYSTEM_PROMPT)).trim();
+    if (!rawHtml) throw new Error('Sin contenido HTML generado');
     const cleanHtml = extractHtml(rawHtml);
-
     res.json({ html: cleanHtml, success: true });
   } catch (err) {
     console.error('[generate-html] error:', err);
@@ -443,36 +368,15 @@ router.post('/fix', async (req, res) => {
   try {
     const originalContent = await getFileContent(filePath, repo);
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://quark-ide.railway.app',
-        'X-Title': 'QUARK IDE',
-      },
-      body: JSON.stringify({
-        model: 'anthropic/claude-sonnet-4-6',
-        max_tokens: 8192,
-        messages: [
-          {
-            role: 'system',
-            content: `Eres un engineer senior experto en TypeScript/Node.js.
+    const fixedContent = (await callAI(
+      'fix',
+      `Error/Problema: ${errorDescription}\n\nArchivo ${filePath}:\n${originalContent}`,
+      `Eres un engineer senior experto en TypeScript/Node.js.
 Recibes un archivo con un error y una descripción del problema.
 Devuelve SOLO el archivo completo corregido, sin explicaciones, sin markdown, sin backticks.
 Empieza directamente con el código del archivo.`,
-          },
-          {
-            role: 'user',
-            content: `Error/Problema: ${errorDescription}\n\nArchivo ${filePath}:\n${originalContent}`,
-          },
-        ],
-      }),
-    });
-
-    const data = await response.json() as any;
-    const fixedContent = (data.choices?.[0]?.message?.content ?? '').trim();
-    if (!fixedContent) throw new Error('Claude no devolvió contenido');
+    )).trim();
+    if (!fixedContent) throw new Error('Sin contenido del fix');
 
     res.json({ fixedContent, originalContent, filePath, branch });
   } catch (err) {
