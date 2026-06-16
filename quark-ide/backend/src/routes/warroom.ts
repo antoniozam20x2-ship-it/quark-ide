@@ -120,6 +120,22 @@ async function withFallbackChain(
   throw lastErr;
 }
 
+// ── Signal OS report fetch ────────────────────────────────────────────────────
+
+async function fetchSignalOSReport(): Promise<string | null> {
+  try {
+    const res = await fetch(
+      'https://workspaceapi-server-production-f248.up.railway.app/api/stats/daily-report',
+      { signal: AbortSignal.timeout(5000) },
+    );
+    const data = await res.json() as { status?: string; report?: string };
+    if (data.status === 'no_report' || !data.report) return null;
+    return data.report;
+  } catch {
+    return null;
+  }
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 const router = Router();
@@ -172,7 +188,11 @@ interface RepoContextPayload {
   keyFiles: { path: string; content: string }[];
 }
 
-function buildContext(appName: string | null, repoContext?: RepoContextPayload): string {
+function buildContext(
+  appName: string | null,
+  repoContext?: RepoContextPayload,
+  signalReport?: string | null,
+): string {
   const appCtx = appName ? (APP_CONTEXTS[appName] ?? '') : '';
   let repoCtx = '';
   if (repoContext && (repoContext.tree.length > 0 || repoContext.keyFiles.length > 0)) {
@@ -182,7 +202,11 @@ function buildContext(appName: string | null, repoContext?: RepoContextPayload):
       .join('\n\n');
     repoCtx = `\n\nCódigo real del repositorio:\n\nEstructura de archivos:\n${treeStr}\n\nArchivos clave:\n${filesStr}`;
   }
-  return BASE_CONTEXT + appCtx + repoCtx;
+  let reportCtx = '';
+  if (appName === 'Signal OS' && signalReport) {
+    reportCtx = `\n\nREPORTE DE TRADING HOY (datos reales):\n${signalReport}\n\nUsa estos datos reales para dar un diagnóstico preciso. No inventes métricas — usa exactamente los números del reporte.`;
+  }
+  return BASE_CONTEXT + appCtx + repoCtx + reportCtx;
 }
 
 // ── Board roles ───────────────────────────────────────────────────────────────
@@ -241,10 +265,11 @@ async function callBoardMember(
   challenge: string,
   appName: string | null,
   repoContext?: RepoContextPayload,
+  signalReport?: string | null,
 ): Promise<string> {
   const roleDesc = BOARD_ROLES[member];
   if (!roleDesc) throw new Error(`Invalid member: ${member}`);
-  const systemPrompt = `${roleDesc}\n\n${buildContext(appName, repoContext)}`;
+  const systemPrompt = `${roleDesc}\n\n${buildContext(appName, repoContext, signalReport)}`;
 
   return withFallbackChain(
     buildProviderChain(challenge, systemPrompt, 1024, `/api/warroom/board/${member}`)
@@ -347,11 +372,16 @@ router.post('/swarm', async (req: Request, res: Response) => {
   const resolvedApp = appName ?? null;
   const start = Date.now();
   try {
+    let signalReport: string | null = null;
+    if (resolvedApp === 'Signal OS') {
+      signalReport = await fetchSignalOSReport();
+    }
+
     const [ceo, cto, designer, qa] = await Promise.all([
-      callBoardMember('CEO',      challenge, resolvedApp, repoContext),
-      callBoardMember('CTO',      challenge, resolvedApp, repoContext),
-      callBoardMember('Designer', challenge, resolvedApp, repoContext),
-      callBoardMember('QA',       challenge, resolvedApp, repoContext),
+      callBoardMember('CEO',      challenge, resolvedApp, repoContext, signalReport),
+      callBoardMember('CTO',      challenge, resolvedApp, repoContext, signalReport),
+      callBoardMember('Designer', challenge, resolvedApp, repoContext, signalReport),
+      callBoardMember('QA',       challenge, resolvedApp, repoContext, signalReport),
     ]);
 
     const consensus = await generateConsensus(challenge, { CEO: ceo, CTO: cto, Designer: designer, QA: qa });

@@ -1,0 +1,128 @@
+CONTEXTO:
+War Room necesita consultar el reporte diario de Signal OS 
+antes de lanzar el swarm de agentes, para que CEO y QA 
+tengan datos reales de trading (PnL, win rate, régimen) 
+además del contexto de código.
+
+Signal OS está en Railway:
+URL: https://workspaceapi-server-production-f248.up.railway.app
+Endpoint: GET /api/stats/daily-report
+Respuesta: { report: string, generatedAt: string, 
+             date: string, totalTrades: number }
+             o { status: "no_report" } si no hay reporte
+
+TAREA: Dos cambios quirúrgicos en warroom.ts y BoardRoom.tsx
+
+═══════════════════════════════════════
+CAMBIO 1 — BACKEND: warroom.ts
+Fetch del reporte antes del swarm
+═══════════════════════════════════════
+
+1. Crear función fetchSignalOSReport():
+   
+   async function fetchSignalOSReport(): 
+     Promise<string | null> {
+     try {
+       const res = await fetch(
+         'https://workspaceapi-server-production-f248.up.railway.app
+          /api/stats/daily-report',
+         { signal: AbortSignal.timeout(5000) }
+       )
+       const data = await res.json()
+       if (data.status === 'no_report' || !data.report) 
+         return null
+       return data.report  // texto plano con emojis
+     } catch {
+       return null  // nunca bloquear el swarm si falla
+     }
+   }
+
+2. En el endpoint POST /api/warroom/swarm, 
+   cuando appName === 'Signal OS':
+   
+   // ANTES de Promise.all de los agentes
+   let signalReport: string | null = null
+   if (appName === 'Signal OS') {
+     signalReport = await fetchSignalOSReport()
+   }
+
+3. En buildContext(), cuando appName === 'Signal OS',
+   agregar el reporte AL FINAL del bloque de Signal OS
+   si existe:
+   
+   Cambiar la firma: 
+   buildContext(appName, signalReport?)
+   
+   En el bloque de Signal OS, después de los parámetros:
+   
+   if (signalReport) {
+     context += `\n\nREPORTE DE TRADING HOY (datos reales):
+   ${signalReport}
+   
+   Usa estos datos reales para dar un diagnóstico 
+   preciso. No inventes métricas — usa exactamente 
+   los números del reporte.`
+   }
+
+4. Pasar signalReport a callBoardMember():
+   Actualizar buildContext() para recibirlo:
+   buildContext(appName, repoContext, signalReport)
+   
+   Y pasarlo en cada callBoardMember():
+   const systemPrompt = buildContext(
+     appName, repoContext, signalReport
+   )
+
+═══════════════════════════════════════
+CAMBIO 2 — FRONTEND: BoardRoom.tsx
+Indicador visual de datos vivos
+═══════════════════════════════════════
+
+Cuando appName === 'Signal OS' y el swarm termina,
+mostrar un badge pequeño encima de las respuestas:
+
+{appName === 'Signal OS' && (
+  <div style={{
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '4px 10px',
+    borderRadius: '4px',
+    background: 'rgba(0, 255, 136, 0.1)',
+    border: '1px solid rgba(0, 255, 136, 0.3)',
+    fontSize: '11px',
+    color: '#00ff88',
+    marginBottom: '12px',
+    fontFamily: 'monospace'
+  }}>
+    📊 Reporte de hoy incluido en el análisis
+  </div>
+)}
+
+Mostrar solo cuando agents.length > 0 (cuando ya 
+hay respuestas del swarm).
+
+═══════════════════════════════════════
+RESTRICCIONES:
+═══════════════════════════════════════
+
+- Timeout de 5 segundos en el fetch — si Signal OS 
+  no responde, el swarm continúa sin el reporte
+- Si fetchSignalOSReport() retorna null, buildContext() 
+  funciona exactamente igual que antes (sin reporte)
+- NO modificar los endpoints /board ni /think
+- NO tocar ningún otro archivo fuera de warroom.ts 
+  y BoardRoom.tsx
+- El badge solo aparece para Signal OS — 
+  no para otras apps
+
+RESULTADO ESPERADO:
+Usuario en War Room: "auditar signal os, win rate bajó"
+→ Backend detecta appName = "Signal OS"
+→ Fetch a Signal OS Railway en paralelo con la preparación
+→ Reporte de hoy llega: "7 trades, 1 ganador, 6 perdedores, 
+  PnL -0.60 USDT, régimen RANGING 49%"
+→ CEO, CTO, QA reciben: contexto de código + reporte real
+→ Diagnóstico basado en datos reales, no suposiciones
+→ Badge "📊 Reporte de hoy incluido en el análisis" visible
+→ Si Signal OS está caído → swarm corre igual sin el reporte
