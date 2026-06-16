@@ -38,6 +38,15 @@ interface CommitResult {
   message: string;
 }
 
+interface FixResult {
+  filePath: string;
+  fixedContent: string;
+  originalContent: string;
+  branch: string;
+}
+
+const FIX_KEYWORDS = /\b(corrige|corrígeme|fix|arregla|repara|soluciona)\b/i;
+
 interface Props {
   activeProject: Project;
   onApplyToEditor: (code: string) => void;
@@ -53,6 +62,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   const [committing, setCommitting]       = useState(false);
   const [commitResult, setCommitResult]   = useState<CommitResult | null>(null);
   const [isGeneratingHtml, setIsGeneratingHtml] = useState(false);
+  const [fixResult, setFixResult]               = useState<FixResult | null>(null);
   const previewTriggeredRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -73,14 +83,92 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPrompt]);
 
+  async function callFix(errorDescription: string, filePath: string) {
+    setRunning(true);
+    setFeed([{ event: 'action', text: `🔧 Leyendo ${filePath} y analizando con Claude...` }]);
+    setResult(null);
+    setFixResult(null);
+    setCommitResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/agent/fix`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repo:             activeProject.repo,
+          branch:           activeProject.branch,
+          filePath,
+          errorDescription,
+        }),
+      });
+      const data = await res.json() as {
+        fixedContent?: string;
+        originalContent?: string;
+        filePath?: string;
+        branch?: string;
+        error?: string;
+      };
+      if (data.error || !data.fixedContent) throw new Error(data.error ?? 'Sin respuesta de Claude');
+      setFixResult({
+        filePath:        data.filePath!,
+        fixedContent:    data.fixedContent,
+        originalContent: data.originalContent ?? '',
+        branch:          data.branch ?? activeProject.branch,
+      });
+      setFeed((prev) => [...prev, { event: 'action', text: '✅ Corrección lista — revisa el diff antes de hacer commit' }]);
+    } catch (err) {
+      setFeed((prev) => [...prev, { event: 'error', text: err instanceof Error ? err.message : String(err) }]);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function commitFix() {
+    if (!fixResult || committing) return;
+    setCommitting(true);
+    try {
+      const res = await fetch(`${API_BASE}/github/commit-multiple`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          files:   [{ path: fixResult.filePath, content: fixResult.fixedContent }],
+          message: `fix: ${fixResult.filePath}`,
+          repo:    activeProject.repo,
+          branch:  fixResult.branch,
+        }),
+      });
+      const data = await res.json() as { sha?: string; owner?: string; error?: string };
+      if (!data.sha) throw new Error(data.error ?? 'Commit failed');
+      setCommitResult({
+        sha:     data.sha,
+        owner:   data.owner ?? '',
+        repo:    activeProject.repo,
+        files:   [{ path: fixResult.filePath, content: fixResult.fixedContent }],
+        message: `fix: ${fixResult.filePath}`,
+      });
+    } catch (err) {
+      setFeed((prev) => [...prev, { event: 'error', text: err instanceof Error ? err.message : String(err) }]);
+    } finally {
+      setCommitting(false);
+    }
+  }
+
   async function generate(promptOverride?: string) {
     const text = (promptOverride ?? prompt).trim();
     if (!text || running) return;
     setRunning(true);
     setFeed([]);
     setResult(null);
+    setFixResult(null);
     setCommitResult(null);
     previewTriggeredRef.current = false;
+
+    // ── FIX PATH — route to callFix when fix keyword + filename detected ──────
+    const fileInPrompt = text.match(/[\w/\-\.]+\.(ts|tsx|js|jsx|json|py|md|yml|yaml)/);
+    if (FIX_KEYWORDS.test(text) && fileInPrompt) {
+      setRunning(false); // callFix manages its own running state
+      await callFix(text, fileInPrompt[0]);
+      return;
+    }
 
     try {
       const res = await fetch(`${API_BASE}/agent/generate`, {
@@ -344,6 +432,87 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
             </span>
           </div>
         )}
+
+        {/* ── FIX DIFF PANEL ───────────────────────────────────────────────── */}
+        {fixResult && !running && !commitResult && (() => {
+          const origLines  = fixResult.originalContent.split('\n');
+          const fixedLines = fixResult.fixedContent.split('\n');
+          const added   = fixedLines.filter((l) => !origLines.includes(l)).length;
+          const removed = origLines.filter((l) => !fixedLines.includes(l)).length;
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+              {/* stat bar */}
+              <div style={{
+                background: 'rgba(245,158,11,0.06)', border: '1px solid #3f2e1e',
+                borderRadius: 6, padding: '6px 12px',
+                display: 'flex', alignItems: 'center', gap: 10,
+                fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
+              }}>
+                <span style={{ color: '#f59e0b', fontWeight: 700 }}>🔧 {fixResult.filePath}</span>
+                <span style={{ color: '#22c55e' }}>+{added}</span>
+                <span style={{ color: '#ef4444' }}>−{removed}</span>
+              </div>
+              {/* diff columns */}
+              <div style={{ display: 'flex', gap: 4, minHeight: 0 }}>
+                {/* original */}
+                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <div style={{ color: '#6b7280', fontSize: 10, fontFamily: 'JetBrains Mono, monospace', padding: '2px 6px' }}>
+                    ANTES
+                  </div>
+                  <div style={{
+                    background: '#0a0a16', border: '1px solid #2d1515', borderRadius: 4,
+                    fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#a0a0c0',
+                    whiteSpace: 'pre-wrap', overflowX: 'auto', maxHeight: 280, overflowY: 'auto',
+                    lineHeight: 1.6, padding: '8px 10px',
+                  }}>
+                    {origLines.map((line, i) => (
+                      <div key={i} style={{
+                        background: !fixedLines.includes(line) ? 'rgba(239,68,68,0.12)' : 'transparent',
+                        color: !fixedLines.includes(line) ? '#fca5a5' : '#a0a0c0',
+                      }}>{line || ' '}</div>
+                    ))}
+                  </div>
+                </div>
+                {/* fixed */}
+                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <div style={{ color: '#6b7280', fontSize: 10, fontFamily: 'JetBrains Mono, monospace', padding: '2px 6px' }}>
+                    DESPUÉS
+                  </div>
+                  <div style={{
+                    background: '#0a0a16', border: '1px solid #153015', borderRadius: 4,
+                    fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#a0a0c0',
+                    whiteSpace: 'pre-wrap', overflowX: 'auto', maxHeight: 280, overflowY: 'auto',
+                    lineHeight: 1.6, padding: '8px 10px',
+                  }}>
+                    {fixedLines.map((line, i) => (
+                      <div key={i} style={{
+                        background: !origLines.includes(line) ? 'rgba(34,197,94,0.1)' : 'transparent',
+                        color: !origLines.includes(line) ? '#86efac' : '#a0a0c0',
+                      }}>{line || ' '}</div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              {/* commit button */}
+              <button
+                onClick={commitFix}
+                disabled={committing}
+                style={{
+                  background: committing ? '#1e1e3f' : 'rgba(245,158,11,0.1)',
+                  border: `1px solid ${committing ? '#1e1e3f' : '#78350f'}`,
+                  borderRadius: 6, color: committing ? '#3a3a5c' : '#fbbf24',
+                  fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700,
+                  padding: '9px 12px', cursor: committing ? 'not-allowed' : 'pointer',
+                  letterSpacing: '0.04em', transition: 'background 0.15s', width: '100%',
+                }}
+                onMouseEnter={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(245,158,11,0.18)'; }}
+                onMouseLeave={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(245,158,11,0.1)'; }}
+              >
+                {committing ? '⟳ Committing fix…' : `⚡ Commit fix → ${fixResult.filePath}`}
+              </button>
+            </div>
+          );
+        })()}
 
         {/* ── BACKEND PROJECT result panel ──────────────────────────────────── */}
         {result && !running && isBackend && (

@@ -426,4 +426,59 @@ router.post('/generate-html', async (req, res) => {
   }
 });
 
+// ── /fix — Claude reads real file and returns corrected version ──────────────
+router.post('/fix', async (req, res) => {
+  const { repo, branch = 'main', filePath, errorDescription } = req.body as {
+    repo?: string;
+    branch?: string;
+    filePath?: string;
+    errorDescription?: string;
+  };
+
+  if (!repo || !filePath || !errorDescription) {
+    res.status(400).json({ error: 'repo, filePath and errorDescription are required' });
+    return;
+  }
+
+  try {
+    const originalContent = await getFileContent(filePath, repo);
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://quark-ide.railway.app',
+        'X-Title': 'QUARK IDE',
+      },
+      body: JSON.stringify({
+        model: 'anthropic/claude-sonnet-4-6',
+        max_tokens: 8192,
+        messages: [
+          {
+            role: 'system',
+            content: `Eres un engineer senior experto en TypeScript/Node.js.
+Recibes un archivo con un error y una descripción del problema.
+Devuelve SOLO el archivo completo corregido, sin explicaciones, sin markdown, sin backticks.
+Empieza directamente con el código del archivo.`,
+          },
+          {
+            role: 'user',
+            content: `Error/Problema: ${errorDescription}\n\nArchivo ${filePath}:\n${originalContent}`,
+          },
+        ],
+      }),
+    });
+
+    const data = await response.json() as any;
+    const fixedContent = (data.choices?.[0]?.message?.content ?? '').trim();
+    if (!fixedContent) throw new Error('Claude no devolvió contenido');
+
+    res.json({ fixedContent, originalContent, filePath, branch });
+  } catch (err) {
+    console.error('[/fix] error:', err);
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 export default router;
