@@ -246,7 +246,7 @@ export default function TopBar({ fileName, language, onLanguageChange, onRun, on
 
             <div style={{ padding: '8px 16px', borderTop: '1px solid #1e1e3f' }}>
               <span style={{ color: '#3a3a5c', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
-                Model: gemini-3.1-flash-lite · Pricing: $0.075/1M in · $0.30/1M out · Tokens estimated for streaming
+                Model: gemini-2.0-flash-lite · Pricing: $0.075/1M in · $0.30/1M out · Tokens estimated for streaming
               </span>
             </div>
           </div>
