@@ -185,11 +185,12 @@ async function generateAndApplyFix(
   affectedFile: string,
   errorMessage: string,
   suggestedFix: string,
+  repo?: string,
 ): Promise<{ commitMessage: string; fix: string }> {
   const token = process.env.OPENROUTER_API_KEY;
   if (!token) throw new Error('OPENROUTER_API_KEY is not set');
 
-  const fileContent = await getFileContent(affectedFile);
+  const fileContent = await getFileContent(affectedFile, repo);
 
   const res = await fetch(OPENROUTER_URL, {
     method: 'POST',
@@ -278,24 +279,34 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function runDebugger(projectId: string, projectName = 'Unknown'): Promise<DebugLoop> {
+export async function runDebugger(projectId: string, projectName = 'Unknown', repo?: string): Promise<DebugLoop> {
   const commits: string[] = [];
   let lastError: string | undefined;
+  let rawLogs: string | undefined;
 
   await sendTelegram(
-    `🔍 <b>QUARK DEBUGGER</b>\nProyecto: <b>${projectName}</b>\nHora: ${new Date().toLocaleTimeString('es-ES')}\nLeyendo logs de Railway...`
+    `🔍 <b>QUARK DEBUGGER</b>\nProyecto: <b>${projectName}</b>\nRepo: <code>${repo ?? 'default'}</code>\nHora: ${new Date().toLocaleTimeString('es-ES')}\nLeyendo logs de Railway...`
   );
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     const deploymentId = await getLatestDeploymentId(projectId);
-    const logs = await fetchDeploymentLogs(deploymentId);
-    const analysis = await analyzeLogsWithAI(logs);
+    rawLogs = await fetchDeploymentLogs(deploymentId);
+    const analysis = await analyzeLogsWithAI(rawLogs);
 
     if (!analysis.hasError) {
+      // Bug fix: logs look clean — only claim "fixed" if we actually committed something
+      const fixed = commits.length > 0;
       await sendTelegram(
-        `✨ <b>Logs limpios</b>\nProyecto: <b>${projectName}</b>\nNo se detectaron errores en Railway`
+        fixed
+          ? `✅ Quark Debugger — Fix aplicado en ${commits.length} intento(s)\nRepo: ${repo ?? projectName}\nCommit: ${commits[0] ?? 'N/A'}`
+          : `✅ Quark Debugger — Logs limpios, sin errores detectados\nRepo: ${repo ?? projectName}\nNo se requirió ningún fix`
       );
-      return { fixed: true, attempts: attempt, commits };
+      return {
+        fixed,
+        attempts: attempt,
+        commits,
+        lastError: fixed ? undefined : 'Logs sin errores detectados — no se aplicó ningún commit',
+      };
     }
 
     lastError = analysis.errorMessage;
@@ -306,7 +317,7 @@ export async function runDebugger(projectId: string, projectName = 'Unknown'): P
       continue;
     }
 
-    const code = await getFileContent(analysis.affectedFile);
+    const code = await getFileContent(analysis.affectedFile, repo);
     const fixedCode = await generateFixWithGroq(
       analysis.affectedFile,
       analysis.errorMessage,
@@ -314,20 +325,21 @@ export async function runDebugger(projectId: string, projectName = 'Unknown'): P
     );
 
     const commitMessage = `fix(auto): attempt ${attempt} — ${analysis.errorMessage.slice(0, 72)}`;
-    await createOrUpdateFile(analysis.affectedFile, fixedCode, commitMessage);
+    await createOrUpdateFile(analysis.affectedFile, fixedCode, commitMessage, repo);
     commits.push(commitMessage);
-
-    await sendTelegram(
-      `✅ <b>Fix aplicado</b>\nProyecto: <b>${projectName}</b>\nIntento: ${attempt}/3\nError detectado: <code>${lastError?.slice(0, 100) ?? 'N/A'}</code>\nCommit: <code>${commitMessage}</code>`
-    );
 
     if (attempt < MAX_RETRIES) {
       await wait(30_000);
     }
   }
 
+  // Final notification — single summary after all attempts
+  const fixed = commits.length > 0;
   await sendTelegram(
-    `❌ <b>Sin solución</b>\nProyecto: <b>${projectName}</b>\nDespués de 3 intentos no se pudo auto-fix\nÚltimo error: <code>${lastError?.slice(0, 150) ?? 'desconocido'}</code>`
+    fixed
+      ? `✅ Quark Debugger — Fix aplicado en ${commits.length} intento(s)\nRepo: ${repo ?? projectName}\nCommit: ${commits[0] ?? 'N/A'}`
+      : `⚠️ Quark Debugger — No se pudo aplicar fix automático\nRepo: ${repo ?? projectName}\nÚltimo error: ${lastError?.slice(0, 120) ?? 'desconocido'}\nRevisa los logs manualmente`
   );
-  return { fixed: false, attempts: MAX_RETRIES, lastError, commits };
+
+  return { fixed, attempts: MAX_RETRIES, lastError, commits };
 }

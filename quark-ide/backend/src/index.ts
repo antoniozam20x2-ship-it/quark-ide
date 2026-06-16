@@ -124,12 +124,12 @@ app.post('/github/commit-multiple', async (req, res) => {
 });
 
 app.post('/debugger/run', async (req, res) => {
-  const { projectId, projectName } = req.body as { projectId?: string; projectName?: string };
+  const { projectId, projectName, repo } = req.body as { projectId?: string; projectName?: string; repo?: string };
   if (!projectId) {
     res.status(400).json({ error: 'projectId is required' }); return;
   }
   try {
-    const result = await runDebugger(projectId, projectName ?? 'Unknown');
+    const result = await runDebugger(projectId, projectName ?? 'Unknown', repo);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });

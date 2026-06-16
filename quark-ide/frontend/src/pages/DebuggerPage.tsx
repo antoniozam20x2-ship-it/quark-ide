@@ -15,9 +15,10 @@ type Status = 'idle' | 'analyzing' | 'done' | 'error';
 interface Props {
   railwayProjectId: string;
   projectName: string;
+  repo: string;
 }
 
-export default function DebuggerPage({ railwayProjectId, projectName }: Props) {
+export default function DebuggerPage({ railwayProjectId, projectName, repo }: Props) {
   const [status, setStatus] = useState<Status>('idle');
   const [result, setResult] = useState<DebugResult | null>(null);
 
@@ -30,7 +31,7 @@ export default function DebuggerPage({ railwayProjectId, projectName }: Props) {
       const res = await fetch(`${API_BASE}/debugger/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: railwayProjectId, projectName }),
+        body: JSON.stringify({ projectId: railwayProjectId, projectName, repo }),
       });
 
       const data = (await res.json()) as DebugResult;

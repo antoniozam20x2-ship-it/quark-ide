@@ -80,6 +80,7 @@ export default function App() {
           <DebuggerPage
             railwayProjectId={activeProject.railwayProjectId}
             projectName={activeProject.name}
+            repo={activeProject.repo}
           />
         )}
         {page === 'studio' && (
