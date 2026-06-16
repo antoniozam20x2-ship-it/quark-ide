@@ -28,13 +28,30 @@ export async function callAI(
         () => callGemini(prompt, systemPrompt),
       ]);
 
-    case 'fix':
+    case 'fix': {
+      const lines = prompt.split('\n');
+      const errorLineMatch = systemPrompt?.match(/línea (\d+)/);
+      const errorLine = errorLineMatch ? parseInt(errorLineMatch[1]) : null;
+
+      let optimizedPrompt = prompt;
+      if (lines.length > 500 && errorLine) {
+        const start = Math.max(0, errorLine - 150);
+        const end = Math.min(lines.length, errorLine + 150);
+        const snippet = lines.slice(start, end)
+          .map((l, i) => `L${start + i + 1}: ${l}`)
+          .join('\n');
+        optimizedPrompt = prompt.replace(
+          /Archivo[^:]*:\n[\s\S]*/,
+          `Archivo (líneas ${start}-${end}):\n${snippet}`,
+        );
+      }
+
       return tryProviders([
-        () => callDeepSeek(prompt, systemPrompt),
-        () => callGroq(prompt, systemPrompt),
-        () => callGemini(prompt, systemPrompt),
-        () => callGitHubModels(prompt, systemPrompt, 'gpt-4o'),
+        () => callDeepSeek(optimizedPrompt, systemPrompt),
+        () => callGroq(optimizedPrompt, systemPrompt),
+        () => callGemini(optimizedPrompt, systemPrompt),
       ]);
+    }
 
     case 'generate':
       return tryProviders([
@@ -121,7 +138,7 @@ async function callGemini(prompt: string, system?: string): Promise<string> {
   geminiIndex++;
   const ai = new GoogleGenAI({ apiKey: key });
   const response = await ai.models.generateContent({
-    model: 'gemini-2.0-flash-lite',
+    model: 'gemini-3.1-flash-lite',
     contents: [{ role: 'user', parts: [{ text: (system ? system + '\n\n' : '') + prompt }] }],
     config: { maxOutputTokens: 8192 },
   });
