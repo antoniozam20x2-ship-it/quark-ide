@@ -2,6 +2,29 @@ import { useState, useRef, useEffect } from 'react';
 import QuarkMarkdown from '../shared/QuarkMarkdown';
 import type { Project } from '../../App';
 
+// App → repo + keywords mapping for auto-detection
+const APP_MAP: { label: string; repo: string; keywords: string[] }[] = [
+  { label: 'Signal OS',  repo: 'Ahorar',         keywords: ['signal', 'ahorar', 'pnl', 'bias', 'circuit breaker', 'trailing', 'streak', 'funding', 'bot'] },
+  { label: 'Sniper OS',  repo: 'Trade-SnipeOS',   keywords: ['sniper', 'señales', 'heatmap', 'radar', 'ttl', 'entry', 'p1', 'p2', 'p3', 'p4'] },
+  { label: 'QUARK IDE',  repo: 'quark-ide',       keywords: ['quark', 'agent', 'war room', 'studio', 'debugger', 'preview'] },
+  { label: 'Nexus OS',   repo: 'NEXUS-OS-app',    keywords: ['nexus', 'okx', 'spot', 'dca', 'conviction'] },
+  { label: 'Core AI',    repo: 'Code-Coretest',   keywords: ['core ai', 'boardroom', 'atlas', 'oracle', 'helix', 'vega'] },
+];
+
+function detectApp(message: string): { label: string; repo: string } | null {
+  const lower = message.toLowerCase();
+  for (const app of APP_MAP) {
+    if (app.keywords.some((kw) => lower.includes(kw))) return app;
+  }
+  return null;
+}
+
+interface RepoContextData {
+  repo: string;
+  tree: string[];
+  keyFiles: { path: string; content: string }[];
+}
+
 interface Message {
   role: 'user' | 'assistant';
   content: string;
@@ -83,11 +106,35 @@ export default function ClaudeChat({
   const [showProjects, setShowProjects] = useState(false);
   const [saving, setSaving] = useState(false);
   const [customOptionInput, setCustomOptionInput] = useState('');
+  const [loadedContext, setLoadedContext] = useState<string | null>(null);
+  const [loadedContextLabel, setLoadedContextLabel] = useState<string | null>(null);
+  const [contextLoading, setContextLoading] = useState(false);
+  const [contextLoadingLabel, setContextLoadingLabel] = useState('');
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const projectsRef = useRef<HTMLDivElement>(null);
+  const contextDataRef = useRef<RepoContextData | null>(null);
+
+  async function loadRepoContext(repo: string, label: string) {
+    if (loadedContext === repo) return;
+    setContextLoading(true);
+    setContextLoadingLabel(label);
+    try {
+      const res = await fetch(`${API_BASE}/api/agent/repo-context?repo=${encodeURIComponent(repo)}`);
+      if (res.ok) {
+        const data: RepoContextData = await res.json();
+        contextDataRef.current = data;
+        setLoadedContext(repo);
+        setLoadedContextLabel(label);
+      }
+    } catch {
+      // fail silently — chat continues without context
+    } finally {
+      setContextLoading(false);
+    }
+  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -163,6 +210,12 @@ export default function ClaudeChat({
     const text = (overrideInput ?? input).trim();
     if (!text || loading) return;
 
+    // Auto-detect app and load repo context before sending
+    const detected = detectApp(text);
+    if (detected && detected.repo !== loadedContext) {
+      await loadRepoContext(detected.repo, detected.label);
+    }
+
     const userMsg: Message = {
       role: 'user',
       content: text,
@@ -193,6 +246,7 @@ export default function ClaudeChat({
           fileContent,
           fileName,
           activeProject: activeProject ? { name: activeProject.name, repo: activeProject.repo } : undefined,
+          contextData: contextDataRef.current ?? undefined,
         }),
       });
 
@@ -575,27 +629,51 @@ export default function ClaudeChat({
 
       {/* Input bar */}
       <div style={{
-        display: 'flex', gap: 8, padding: '8px 12px',
+        display: 'flex', flexDirection: 'column', gap: 4, padding: '8px 12px',
         borderTop: '1px solid #1e1e3f', flexShrink: 0, background: '#0d0d1a',
       }}>
-        <input
-          ref={inputRef}
-          className="quark-input"
-          style={{ flex: 1, height: 36, minWidth: 0 }}
-          placeholder="Ask QUARK about this code..."
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-          disabled={loading}
-        />
-        <button
-          className="quark-btn-primary"
-          onClick={() => sendMessage()}
-          disabled={loading || !input.trim()}
-          style={{ flexShrink: 0 }}
-        >
-          SEND
-        </button>
+        {/* Context status row */}
+        {(contextLoading || loadedContextLabel) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 16 }}>
+            {contextLoading && (
+              <span style={{
+                fontSize: 10, color: '#00ff88', fontFamily: 'JetBrains Mono, monospace',
+                opacity: 0.8, letterSpacing: '0.03em',
+              }}>
+                ⚡ Cargando contexto de {contextLoadingLabel}...
+              </span>
+            )}
+            {!contextLoading && loadedContextLabel && (
+              <span style={{
+                fontSize: 10, color: '#7C3AED', fontFamily: 'JetBrains Mono, monospace',
+                background: 'rgba(124,58,237,0.12)', border: '1px solid rgba(124,58,237,0.3)',
+                borderRadius: 4, padding: '1px 7px', fontWeight: 700, letterSpacing: '0.03em',
+              }}>
+                📁 {loadedContextLabel}
+              </span>
+            )}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            ref={inputRef}
+            className="quark-input"
+            style={{ flex: 1, height: 36, minWidth: 0 }}
+            placeholder="Ask QUARK about this code..."
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+            disabled={loading || contextLoading}
+          />
+          <button
+            className="quark-btn-primary"
+            onClick={() => sendMessage()}
+            disabled={loading || contextLoading || !input.trim()}
+            style={{ flexShrink: 0 }}
+          >
+            SEND
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -426,4 +426,79 @@ Si necesitas múltiples cambios, devuelve un array: [{"search":"...","replace":"
   }
 });
 
+// ── GET /repo-context ────────────────────────────────────────────────────────
+router.get('/repo-context', async (req, res) => {
+  const repo = (req.query.repo as string | undefined)?.trim();
+  if (!repo) {
+    res.status(400).json({ error: 'repo query param required' });
+    return;
+  }
+
+  const owner = process.env.GITHUB_OWNER ?? 'antoniozam20x2-ship-it';
+  const token = process.env.GITHUB_TOKEN;
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github+json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+
+  try {
+    // 1. Fetch full tree
+    const treeRes = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=1`,
+      { headers },
+    );
+    if (!treeRes.ok) {
+      res.json({ repo, tree: [], keyFiles: [] });
+      return;
+    }
+    const treeData = await treeRes.json() as { tree: { path: string; type: string }[] };
+    const allPaths = treeData.tree
+      .filter((n) => n.type === 'blob')
+      .map((n) => n.path);
+
+    // 2. Filter relevant files (routes > components > config, max 8)
+    const isRelevant = (p: string) =>
+      p === 'package.json' ||
+      p.startsWith('src/routes/') ||
+      (p.startsWith('src/components/') && p.endsWith('.tsx')) ||
+      /\b(schema|types|db|config)\b/.test(p.split('/').pop() ?? '');
+
+    const priority = (p: string): number => {
+      if (p === 'package.json') return 3;
+      if (p.startsWith('src/routes/')) return 2;
+      if (p.startsWith('src/components/')) return 1;
+      return 0;
+    };
+
+    const filtered = allPaths
+      .filter(isRelevant)
+      .sort((a, b) => priority(b) - priority(a))
+      .slice(0, 8);
+
+    // 3. Fetch content for each file (parallel), truncate to 150 lines
+    const fileResults = await Promise.allSettled(
+      filtered.map(async (path) => {
+        const r = await fetch(
+          `https://api.github.com/repos/${owner}/${repo}/contents/${path}`,
+          { headers },
+        );
+        if (!r.ok) return { path, content: '(no disponible)' };
+        const data = await r.json() as { content?: string; encoding?: string };
+        if (!data.content || data.encoding !== 'base64') return { path, content: '(no disponible)' };
+        const decoded = Buffer.from(data.content.replace(/\n/g, ''), 'base64').toString('utf-8');
+        const lines = decoded.split('\n').slice(0, 150).join('\n');
+        return { path, content: lines };
+      }),
+    );
+
+    const keyFiles = fileResults
+      .filter((r): r is PromiseFulfilledResult<{ path: string; content: string }> => r.status === 'fulfilled')
+      .map((r) => r.value);
+
+    res.json({ repo, tree: allPaths, keyFiles });
+  } catch {
+    res.json({ repo, tree: [], keyFiles: [] });
+  }
+});
+
 export default router;
