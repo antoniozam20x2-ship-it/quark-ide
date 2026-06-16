@@ -4,6 +4,41 @@ import { recordCall, recordEstimated } from './costTracker.js';
 const GEMINI_MODEL = 'gemini-2.0-flash-lite';
 const TIMEOUT_MS = 30_000;
 
+// ── Auth-error detection ──────────────────────────────────────────────────────
+
+/** Thrown when Gemini rejects the request due to an invalid / missing API key.
+ *  The caller should NOT retry with Gemini — switch to a different provider. */
+export class GeminiAuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GeminiAuthError';
+  }
+}
+
+function isAuthError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return (
+    msg.includes('401') ||
+    msg.includes('api_key_invalid') ||
+    msg.includes('api key not valid') ||
+    msg.includes('unauthenticated') ||
+    msg.includes('permission_denied') ||
+    msg.includes('invalid api key')
+  );
+}
+
+function rethrowIfAuth(err: unknown): never {
+  if (isAuthError(err)) {
+    throw new GeminiAuthError(
+      `Gemini 401 — key invalid or missing (${(err as Error).message})`
+    );
+  }
+  throw err;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 function getClient(): GoogleGenAI {
   return new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 }
@@ -16,6 +51,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
     ),
   ]);
 }
+
+// ── Public API ────────────────────────────────────────────────────────────────
 
 export async function streamChat(
   messages: { role: string; content: string }[],
@@ -33,21 +70,25 @@ export async function streamChat(
   let responseText = '';
 
   const streamPromise = (async () => {
-    const response = await ai.models.generateContentStream({
-      model: GEMINI_MODEL,
-      contents,
-      config: {
-        systemInstruction: systemPrompt,
-        maxOutputTokens: 4096,
-      },
-    });
+    try {
+      const response = await ai.models.generateContentStream({
+        model: GEMINI_MODEL,
+        contents,
+        config: {
+          systemInstruction: systemPrompt,
+          maxOutputTokens: 4096,
+        },
+      });
 
-    for await (const chunk of response) {
-      const text = chunk.text ?? '';
-      if (text) {
-        responseText += text;
-        onChunk(text);
+      for await (const chunk of response) {
+        const text = chunk.text ?? '';
+        if (text) {
+          responseText += text;
+          onChunk(text);
+        }
       }
+    } catch (err) {
+      rethrowIfAuth(err);
     }
   })();
 
@@ -63,18 +104,22 @@ export async function generateContent(
 ): Promise<string> {
   const ai = getClient();
 
-  const responsePromise = ai.models.generateContent({
-    model: GEMINI_MODEL,
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    config: {
-      systemInstruction: systemPrompt,
-      maxOutputTokens: maxTokens,
-    },
-  });
+  let response;
+  try {
+    const responsePromise = ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: {
+        systemInstruction: systemPrompt,
+        maxOutputTokens: maxTokens,
+      },
+    });
+    response = await withTimeout(responsePromise, TIMEOUT_MS, `generateContent:${endpoint}`);
+  } catch (err) {
+    rethrowIfAuth(err);
+  }
 
-  const response = await withTimeout(responsePromise, TIMEOUT_MS, `generateContent:${endpoint}`);
-
-  const text = response.text ?? '';
+  const text = response!.text ?? '';
   const tokensIn = (response as any).usageMetadata?.promptTokenCount ?? Math.ceil((systemPrompt + prompt).length / 4);
   const tokensOut = (response as any).usageMetadata?.candidatesTokenCount ?? Math.ceil(text.length / 4);
   recordCall(endpoint, tokensIn, tokensOut);

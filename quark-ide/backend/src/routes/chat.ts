@@ -1,7 +1,75 @@
 import { Router, Request, Response } from 'express';
-import { streamChat } from '../services/gemini.js';
+import { streamChat, GeminiAuthError } from '../services/gemini.js';
 import { searchMemory } from '../services/rufloMemory.js';
 import { getFileTree, getFileContent } from '../services/github.js';
+
+// ── Groq streaming fallback (used when Gemini returns 401) ───────────────────
+
+const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_CHAT_MODEL = 'llama-3.3-70b-versatile';
+const CHAT_TIMEOUT_MS = 25_000;
+
+async function streamGroqFallback(
+  messages: { role: string; content: string }[],
+  systemPrompt: string,
+  onChunk: (text: string) => void,
+): Promise<void> {
+  const token = process.env.GROQ_API_KEY;
+  if (!token) throw new Error('GROQ_API_KEY not set — cannot use Groq fallback');
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), CHAT_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(GROQ_URL, {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        model: GROQ_CHAT_MODEL,
+        max_tokens: 4096,
+        stream: true,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          ...messages.map((m) => ({
+            role: m.role === 'assistant' ? 'assistant' : 'user',
+            content: m.content,
+          })),
+        ],
+      }),
+    });
+
+    if (!res.ok) throw new Error(`Groq fallback error: ${res.status} ${res.statusText}`);
+    if (!res.body) throw new Error('Groq fallback: no response body');
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() ?? '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const data = trimmed.slice(5).trim();
+        if (data === '[DONE]') return;
+        try {
+          const json = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> };
+          const chunk = json.choices?.[0]?.delta?.content;
+          if (chunk) onChunk(chunk);
+        } catch { /* ignore malformed SSE lines */ }
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ── Router ────────────────────────────────────────────────────────────────────
 
 const router = Router();
 
@@ -123,7 +191,6 @@ router.post('/', async (req: Request, res: Response) => {
     }
   } catch {}
 
-  // Contexto del proyecto activo
   let projectContext = '';
   if (activeProject?.name) {
     const projectType = detectProjectType(activeProject.name);
@@ -133,7 +200,6 @@ Tipo detectado: ${projectType}
 Referencias visuales para sugerencias: ${refs}`;
   }
 
-  // Contexto real de repos mencionados en el mensaje
   let repoContext = '';
   if (process.env.GITHUB_TOKEN && process.env.GITHUB_OWNER) {
     const mentionedRepos = detectMentionedApps(lastUserMessage);
@@ -146,7 +212,6 @@ Referencias visuales para sugerencias: ${refs}`;
     }
   }
 
-  // Contexto enriquecido enviado desde el frontend (ya resuelto por /repo-context)
   let enrichedContext = '';
   if (contextData && (contextData.tree.length > 0 || contextData.keyFiles.length > 0)) {
     const treeStr = contextData.tree.slice(0, 80).join('\n');
@@ -173,21 +238,36 @@ Usa este contexto para dar respuestas precisas y específicas al código real. C
 
   // Hard timeout — close stream after 45s no matter what
   const hardTimeout = setTimeout(() => {
-    res.write(`data: ${JSON.stringify({ error: 'Request timed out. Try again.' })}\n\n`);
-    res.write('data: [DONE]\n\n');
-    res.end();
+    try {
+      res.write(`data: ${JSON.stringify({ error: 'Request timed out. Try again.' })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch { /* already closed */ }
   }, 45_000);
 
+  const emit = (chunk: string) => res.write(`data: ${JSON.stringify({ text: chunk })}\n\n`);
+
   try {
-    await streamChat(messages, systemPrompt, (chunk) => {
-      res.write(`data: ${JSON.stringify({ text: chunk })}\n\n`);
-    }, '/api/chat');
-    res.write(`data: [DONE]\n\n`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[chat] streamChat error:', msg);
-    res.write(`data: ${JSON.stringify({ error: `Chat error: ${msg}` })}\n\n`);
+    await streamChat(messages, systemPrompt, emit, '/api/chat');
     res.write('data: [DONE]\n\n');
+  } catch (err) {
+    if (err instanceof GeminiAuthError) {
+      console.error('[chat] Gemini 401 — switching to Groq fallback');
+      try {
+        await streamGroqFallback(messages, systemPrompt, emit);
+        res.write('data: [DONE]\n\n');
+      } catch (fallbackErr) {
+        const msg = fallbackErr instanceof Error ? fallbackErr.message : 'Unknown error';
+        console.error('[chat] Groq fallback also failed:', msg);
+        res.write(`data: ${JSON.stringify({ error: `All providers failed: ${msg}` })}\n\n`);
+        res.write('data: [DONE]\n\n');
+      }
+    } else {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[chat] streamChat error:', msg);
+      res.write(`data: ${JSON.stringify({ error: `Chat error: ${msg}` })}\n\n`);
+      res.write('data: [DONE]\n\n');
+    }
   } finally {
     clearTimeout(hardTimeout);
     res.end();

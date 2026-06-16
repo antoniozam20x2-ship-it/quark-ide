@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { generateContent } from '../services/gemini.js';
+import { generateContent, GeminiAuthError } from '../services/gemini.js';
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
@@ -61,7 +61,11 @@ async function withFallback(
   try {
     return await primary();
   } catch (primaryErr) {
-    console.warn(`[warroom] ${label} primary failed (${(primaryErr as Error).message}), trying fallback…`);
+    if (primaryErr instanceof GeminiAuthError) {
+      console.error(`[warroom] ${label} — Gemini key invalid (401), switching to fallback immediately`);
+    } else {
+      console.warn(`[warroom] ${label} primary failed (${(primaryErr as Error).message}), trying fallback…`);
+    }
     return fallback();
   }
 }
