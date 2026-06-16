@@ -677,13 +677,31 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         display: 'flex', gap: 8, padding: '8px 12px',
         borderTop: '1px solid #1e1e3f', flexShrink: 0, background: '#0d0d1a',
       }}>
-        <input
+        <textarea
           className="quark-input"
-          style={{ flex: 1, height: 36, minWidth: 0, fontSize: 12 }}
+          rows={1}
+          style={{
+            flex: 1, minWidth: 0, fontSize: 12,
+            resize: 'none', overflowY: 'hidden',
+            minHeight: 36, maxHeight: 120,
+            lineHeight: '1.5', paddingTop: 8, paddingBottom: 8,
+            boxSizing: 'border-box',
+          }}
           placeholder="Describe lo que quieres generar..."
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && generate()}
+          onInput={(e) => {
+            const el = e.currentTarget;
+            el.style.height = 'auto';
+            el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+            el.style.overflowY = el.scrollHeight > 120 ? 'auto' : 'hidden';
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              generate();
+            }
+          }}
           disabled={running}
         />
         <button
