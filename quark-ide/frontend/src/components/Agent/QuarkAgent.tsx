@@ -66,6 +66,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   const [fixResult, setFixResult]               = useState<FixResult | null>(null);
   const previewTriggeredRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const agentTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Keep a live ref so closures in useEffect always read the current value
   const isBackend = isBackendProject(activeProject.name);
@@ -75,6 +76,13 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [feed, result, commitResult]);
+
+  useEffect(() => {
+    const el = agentTextareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+  }, [prompt]);
 
   useEffect(() => {
     if (initialPrompt && initialPrompt.trim()) {
@@ -156,6 +164,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   async function generate(promptOverride?: string) {
     const text = (promptOverride ?? prompt).trim();
     if (!text || running) return;
+    if (agentTextareaRef.current) agentTextareaRef.current.style.height = '44px';
     setRunning(true);
     setFeed([]);
     setResult(null);
@@ -706,26 +715,20 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         </div>
 
         {/* Prompt row */}
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
         <textarea
+          ref={agentTextareaRef}
           className="quark-input"
-          rows={1}
           style={{
             flex: 1, minWidth: 0, fontSize: 12,
-            resize: 'none', overflowY: 'hidden',
-            minHeight: 36, maxHeight: 120,
+            resize: 'none', overflowY: 'auto',
+            minHeight: 44, maxHeight: 200,
             lineHeight: '1.5', paddingTop: 8, paddingBottom: 8,
             boxSizing: 'border-box',
           }}
           placeholder="Describe lo que quieres generar..."
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          onInput={(e) => {
-            const el = e.currentTarget;
-            el.style.height = 'auto';
-            el.style.height = Math.min(el.scrollHeight, 120) + 'px';
-            el.style.overflowY = el.scrollHeight > 120 ? 'auto' : 'hidden';
-          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
