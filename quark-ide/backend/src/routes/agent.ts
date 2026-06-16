@@ -60,12 +60,14 @@ Responde SOLO con un JSON array de strings, sin markdown ni explicaciones. Ejemp
 }
 
 router.post('/generate', async (req, res) => {
-  const { prompt, repo, branch = 'main', projectName } = req.body as {
+  const { prompt, repo: bodyRepo, branch = 'main', projectName } = req.body as {
     prompt?: string;
     repo?: string;
     branch?: string;
     projectName?: string;
   };
+  const repo = bodyRepo ?? process.env.GITHUB_REPO;
+  console.log(`[Agent/generate] repo recibido dinámicamente: ${repo}`);
 
   if (!prompt || !repo) {
     res.status(400).json({ error: 'prompt and repo are required' });
@@ -353,12 +355,14 @@ router.post('/generate-html', async (req, res) => {
 
 // ── /fix — AI returns search/replace patch; backend applies it ───────────────
 router.post('/fix', async (req, res) => {
-  const { repo, branch = 'main', filePath, errorDescription } = req.body as {
+  const { repo: bodyRepo, branch = 'main', filePath, errorDescription } = req.body as {
     repo?: string;
     branch?: string;
     filePath?: string;
     errorDescription?: string;
   };
+  const repo = bodyRepo ?? process.env.GITHUB_REPO;
+  console.log(`[Agent/fix] repo recibido dinámicamente: ${repo}`);
 
   if (!repo || !filePath || !errorDescription) {
     res.status(400).json({ error: 'repo, filePath and errorDescription are required' });

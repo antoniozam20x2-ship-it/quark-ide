@@ -1,0 +1,50 @@
+CONTEXTO:
+En QUARK IDE (React/TypeScript/Vite frontend + Node.js/Express backend), 
+el Quark Agent actualmente usa una variable de entorno GITHUB_REPO fija 
+en Railway para saber sobre qué repositorio operar. Necesitamos hacerlo 
+dinámico mediante un dropdown en la UI.
+
+TAREA: Implementar repo dinámico en Quark Agent — UN SOLO CAMBIO QUIRÚRGICO.
+
+REPOSITORIOS A INCLUIR (owner: antoniozam20x2-ship-it):
+1. quark-ide — QUARK IDE
+2. Ahorar — Signal OS
+3. Trade-SnipeOS — Sniper OS
+4. NEXUS-OS-app — Nexus OS
+5. Code-Coretest — Core AI
+
+CAMBIOS REQUERIDOS:
+
+1. FRONTEND — Componente Quark Agent:
+   - Agregar un dropdown/select ANTES del input de instrucciones
+   - Label: "Repositorio activo"
+   - Opciones: los 5 repos listados arriba en formato "NombreApp (repo-name)"
+   - El valor seleccionado se guarda en estado local (useState)
+   - Default: "quark-ide" (el repo propio)
+   - Este valor se envía en CADA request al backend junto con la instrucción
+
+2. BACKEND — Todos los endpoints en src/routes/agent.ts que usan GITHUB_REPO:
+   - Cambiar de leer process.env.GITHUB_REPO a leer repo del request body
+   - Campo esperado: { repo: string, ...resto del payload actual }
+   - Si repo no viene en el body, hacer fallback a process.env.GITHUB_REPO 
+     (backward compatibility)
+   - El formato del repo debe ser solo el nombre: "quark-ide", "Ahorar", etc.
+   - El owner (antoniozam20x2-ship-it) sigue siendo constante en el backend
+
+3. NO TOCAR:
+   - La lógica de autenticación GitHub (GITHUB_TOKEN sigue igual)
+   - El endpoint /fix y su lógica search/replace (ya funciona correctamente)
+   - Ningún otro archivo fuera de agent.ts y el componente Quark Agent
+
+RESULTADO ESPERADO:
+El usuario selecciona "Sniper OS (Trade-SnipeOS)" en el dropdown, 
+escribe una instrucción, y Quark Agent lee/escribe en ese repo 
+específico. Al cambiar el dropdown a "Signal OS (Ahorar)", 
+opera sobre ese otro repo. Sin reiniciar Railway, sin cambiar 
+variables de entorno.
+
+VERIFICACIÓN:
+- El dropdown debe persistir su selección durante la sesión
+- Un console.log en el backend debe mostrar el repo recibido dinámicamente
+- No debe haber errores si GITHUB_REPO sigue existiendo en Railway 
+  (el fallback protege el deploy actual)
