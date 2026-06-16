@@ -56,6 +56,7 @@ interface Props {
 
 export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPreview, initialPrompt }: Props) {
   const [prompt, setPrompt]               = useState('');
+  const [selectedRepo, setSelectedRepo]   = useState(activeProject.repo || 'quark-ide');
   const [running, setRunning]             = useState(false);
   const [feed, setFeed]                   = useState<FeedItem[]>([]);
   const [result, setResult]               = useState<AgentEvent | null>(null);
@@ -94,7 +95,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          repo:             activeProject.repo,
+          repo:             selectedRepo,
           branch:           activeProject.branch,
           filePath,
           errorDescription,
@@ -132,7 +133,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         body: JSON.stringify({
           files:   [{ path: fixResult.filePath, content: fixResult.fixedContent }],
           message: `fix: ${fixResult.filePath}`,
-          repo:    activeProject.repo,
+          repo:    selectedRepo,
           branch:  fixResult.branch,
         }),
       });
@@ -141,7 +142,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
       setCommitResult({
         sha:     data.sha,
         owner:   data.owner ?? '',
-        repo:    activeProject.repo,
+        repo:    selectedRepo,
         files:   [{ path: fixResult.filePath, content: fixResult.fixedContent }],
         message: `fix: ${fixResult.filePath}`,
       });
@@ -176,7 +177,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt:      text,
-          repo:        activeProject.repo,
+          repo:        selectedRepo,
           branch:      activeProject.branch,
           projectName: activeProject.name,
         }),
@@ -293,7 +294,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         body: JSON.stringify({
           files:   result.files,
           message: result.commitMessage,
-          repo:    result.repo ?? activeProject.repo,
+          repo:    result.repo ?? selectedRepo,
           branch:  result.branch ?? activeProject.branch,
         }),
       });
@@ -302,7 +303,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
       setCommitResult({
         sha:     data.sha,
         owner:   data.owner ?? '',
-        repo:    result.repo ?? activeProject.repo,
+        repo:    result.repo ?? selectedRepo,
         files:   result.files ?? [],
         message: result.commitMessage ?? '',
       });
@@ -674,9 +675,38 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
       {/* Input */}
       <div style={{
-        display: 'flex', gap: 8, padding: '8px 12px',
+        display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 12px',
         borderTop: '1px solid #1e1e3f', flexShrink: 0, background: '#0d0d1a',
       }}>
+        {/* Repo selector */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{
+            color: '#3a3a5c', fontSize: 10, fontFamily: 'JetBrains Mono, monospace',
+            letterSpacing: '0.06em', whiteSpace: 'nowrap',
+          }}>
+            REPO
+          </span>
+          <select
+            value={selectedRepo}
+            onChange={(e) => setSelectedRepo(e.target.value)}
+            disabled={running}
+            style={{
+              flex: 1, height: 26, background: '#0a0a16', border: '1px solid #1e1e3f',
+              borderRadius: 4, color: '#00ff88', fontSize: 11,
+              fontFamily: 'JetBrains Mono, monospace', padding: '0 6px',
+              cursor: running ? 'not-allowed' : 'pointer', outline: 'none',
+            }}
+          >
+            <option value="quark-ide">QUARK IDE (quark-ide)</option>
+            <option value="Ahorar">Signal OS (Ahorar)</option>
+            <option value="Trade-SnipeOS">Sniper OS (Trade-SnipeOS)</option>
+            <option value="NEXUS-OS-app">Nexus OS (NEXUS-OS-app)</option>
+            <option value="Code-Coretest">Core AI (Code-Coretest)</option>
+          </select>
+        </div>
+
+        {/* Prompt row */}
+        <div style={{ display: 'flex', gap: 8 }}>
         <textarea
           className="quark-input"
           rows={1}
@@ -712,6 +742,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         >
           {running ? '⟳' : '⚡ GEN'}
         </button>
+        </div>
       </div>
     </div>
   );
