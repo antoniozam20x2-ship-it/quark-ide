@@ -51,7 +51,7 @@ CRÍTICO — IMÁGENES: El entorno donde se renderiza bloquea TODOS los recursos
 1. Un <div> con background: linear-gradient() usando colores de la paleta del brief.
 2. Un <svg> inline con paths simples que represente visualmente el tema (un taco, una copa, un edificio, etc.).
 
-Para imágenes de productos, galerías o cualquier sección visual, usa Lorem Picsum con seed descriptivo: <img src="https://picsum.photos/seed/[palabra]/400/300" style="width:100%;height:100%;object-fit:cover">. Ejemplos: seed/macbook, seed/sneakers, seed/food, seed/restaurant, seed/fashion. Siempre incluye object-fit:cover en el style.`,
+Para imágenes usa Unsplash con keywords en inglés específicas al tema: <img src="https://source.unsplash.com/400x300/?keyword1,keyword2" style="width:100%;height:100%;object-fit:cover">. Ejemplos: ?croissant,bakery para panadería, ?taco,mexican,food para restaurante mexicano, ?macbook,laptop para tecnología, ?sneakers,shoes para zapatos. El preview en iframe puede mostrarlas bloqueadas pero el usuario puede usar el botón "↗ abrir" para verlas correctamente en una pestaña nueva.`,
 
   qa: `Eres un crítico de diseño senior. Recibes el BRIEF, la DIRECCIÓN CREATIVA y el HTML
 generado por el Designer. Evalúa con honestidad:
