@@ -296,7 +296,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
                       <iframe
                         srcDoc={designPrototype}
                         style={{ width: '100%', height: 480, border: '1px solid #1E1E2E', borderRadius: 8, background: '#fff', pointerEvents: 'none' }}
-                        sandbox="allow-scripts"
+                        sandbox="allow-scripts allow-same-origin"
                         title="Design Prototype"
                       />
                       <div style={{
@@ -365,7 +365,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
           <iframe
             srcDoc={designPrototype}
             style={{ flex: 1, border: 'none', width: '100%' }}
-            sandbox="allow-scripts"
+            sandbox="allow-scripts allow-same-origin"
             title="Studio Preview Fullscreen"
           />
         </div>
