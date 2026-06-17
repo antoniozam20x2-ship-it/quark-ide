@@ -131,7 +131,17 @@ Completamente funcional e interactivo, fiel al HTML de referencia."`,
 
 const FAST_MODE_IMAGE_RULES = `
 
-OBLIGATORIO: Cada sección visual DEBE tener exactamente este placeholder: <div class="img-slot" data-query="keyword1,keyword2" style="width:100%;height:300px;background-size:cover;background-position:center;"></div>. El hero debe tener height:500px. Cada item de menú height:200px. NUNCA uses colores de fondo como reemplazo de imágenes.`
+REGLA ABSOLUTA DE IMÁGENES - SIN EXCEPCIONES:
+Antes de escribir cualquier card, sección o item, SIEMPRE escribe primero este div exacto:
+<div class="img-slot" data-query="KEYWORD_ESPECIFICA" style="width:100%;height:250px;background-size:cover;background-position:center;display:block;"></div>
+
+Ejemplos obligatorios:
+- Rainbow Roll → data-query="rainbow roll sushi"
+- Hero section → data-query="japanese restaurant interior"
+- Salmon Nigiri → data-query="salmon nigiri sushi"
+
+Si generas un card SIN este div primero = ERROR CRÍTICO.
+NUNCA uses background-color como reemplazo de imágenes.`
 
 // ── Route ─────────────────────────────────────────────────────────────────────
 
