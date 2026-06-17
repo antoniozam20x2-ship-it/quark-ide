@@ -127,21 +127,31 @@ para juegos, Web Audio API para apps de música).
 Completamente funcional e interactivo, fiel al HTML de referencia."`,
 }
 
+// ── Fast Mode system prompt suffix ────────────────────────────────────────────
+
+const FAST_MODE_IMAGE_RULES = `
+
+OBLIGATORIO: Cada sección visual DEBE tener exactamente este placeholder: <div class="img-slot" data-query="keyword1,keyword2" style="width:100%;height:300px;background-size:cover;background-position:center;"></div>. El hero debe tener height:500px. Cada item de menú height:200px. NUNCA uses colores de fondo como reemplazo de imágenes.`
+
 // ── Route ─────────────────────────────────────────────────────────────────────
 
 router.post('/analyze', async (req, res) => {
   try {
-    const { brief, role, architectResult, designerResult } = req.body as {
+    const { brief, role, architectResult, designerResult, fastMode } = req.body as {
       brief: string
       role: string
       architectResult?: string
       designerResult?: string
+      fastMode?: boolean
     }
 
     if (!brief || !role) return res.status(400).json({ error: 'brief y role requeridos' })
 
-    const systemPrompt = SYSTEM_PROMPTS[role]
-    if (!systemPrompt) return res.status(400).json({ error: 'role inválido' })
+    const basePrompt = SYSTEM_PROMPTS[role]
+    if (!basePrompt) return res.status(400).json({ error: 'role inválido' })
+    const systemPrompt = (fastMode && role === 'designer')
+      ? basePrompt + FAST_MODE_IMAGE_RULES
+      : basePrompt
 
     // ── Critic (qa): evaluate + optional 1 revision round ─────────────────────
     if (role === 'qa') {

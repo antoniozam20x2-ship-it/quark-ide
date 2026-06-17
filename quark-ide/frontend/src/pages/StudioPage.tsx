@@ -51,6 +51,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
   const [designPrototype, setDesignPrototype] = useState<string>(saved?.designPrototype ?? '')
   const [fullscreenPreview, setFullscreenPreview] = useState(false)
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({})
+  const [fastMode, setFastMode] = useState(false)
 
   useEffect(() => {
     if (initialBrief) {
@@ -72,9 +73,10 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
     })
   }
 
-  async function runStudio(text?: string) {
+  async function runStudio(text?: string, overrideFastMode?: boolean) {
     const input = (text ?? brief).trim()
     if (!input || running) return
+    const isFast = overrideFastMode ?? fastMode
 
     setRunning(true)
     setDesignPrototype('')
@@ -86,24 +88,26 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
     let architectResult = ''
     let finalHtml = ''
 
-    // ── Step 1: Architect ──────────────────────────────────────────────────────
-    updateAgent('architect', { status: 'thinking' })
-    try {
-      const res = await fetch(`${API_BASE}/api/studio/analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brief: input, role: 'architect' }),
-      })
-      const data = await res.json()
-      architectResult = data.result ?? ''
-      setAgents(prev => {
-        const next = prev.map(a => a.role === 'architect' ? { ...a, content: architectResult, status: 'done' as const } : a)
-        saveState(input, next, '')
-        return next
-      })
-      setExpandedCards(prev => ({ ...prev, architect: true }))
-    } catch {
-      updateAgent('architect', { status: 'error', content: 'Error al analizar' })
+    // ── Step 1: Architect (skipped in Fast Mode) ───────────────────────────────
+    if (!isFast) {
+      updateAgent('architect', { status: 'thinking' })
+      try {
+        const res = await fetch(`${API_BASE}/api/studio/analyze`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ brief: input, role: 'architect' }),
+        })
+        const data = await res.json()
+        architectResult = data.result ?? ''
+        setAgents(prev => {
+          const next = prev.map(a => a.role === 'architect' ? { ...a, content: architectResult, status: 'done' as const } : a)
+          saveState(input, next, '')
+          return next
+        })
+        setExpandedCards(prev => ({ ...prev, architect: true }))
+      } catch {
+        updateAgent('architect', { status: 'error', content: 'Error al analizar' })
+      }
     }
 
     // ── Step 2: Designer ───────────────────────────────────────────────────────
@@ -112,7 +116,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
       const res = await fetch(`${API_BASE}/api/studio/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brief: input, role: 'designer', architectResult }),
+        body: JSON.stringify({ brief: input, role: 'designer', architectResult, fastMode: isFast }),
       })
       const data = await res.json()
       finalHtml = data.result ?? ''
@@ -126,28 +130,30 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
       updateAgent('designer', { status: 'error', content: 'Error al generar prototipo' })
     }
 
-    // ── Step 3: Critic ─────────────────────────────────────────────────────────
-    updateAgent('qa', { status: 'thinking' })
-    try {
-      const res = await fetch(`${API_BASE}/api/studio/analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brief: input, role: 'qa', architectResult, designerResult: finalHtml }),
-      })
-      const data = await res.json()
-      const criticNote = data.result ?? ''
-      if (data.revisedHtml) {
-        finalHtml = data.revisedHtml
-        setDesignPrototype(finalHtml)
+    // ── Step 3: Critic (skipped in Fast Mode) ─────────────────────────────────
+    if (!isFast) {
+      updateAgent('qa', { status: 'thinking' })
+      try {
+        const res = await fetch(`${API_BASE}/api/studio/analyze`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ brief: input, role: 'qa', architectResult, designerResult: finalHtml }),
+        })
+        const data = await res.json()
+        const criticNote = data.result ?? ''
+        if (data.revisedHtml) {
+          finalHtml = data.revisedHtml
+          setDesignPrototype(finalHtml)
+        }
+        setAgents(prev => {
+          const next = prev.map(a => a.role === 'qa' ? { ...a, content: criticNote, status: 'done' as const } : a)
+          saveState(input, next, finalHtml)
+          return next
+        })
+        setExpandedCards(prev => ({ ...prev, qa: true }))
+      } catch {
+        updateAgent('qa', { status: 'error', content: 'Error en crítica' })
       }
-      setAgents(prev => {
-        const next = prev.map(a => a.role === 'qa' ? { ...a, content: criticNote, status: 'done' as const } : a)
-        saveState(input, next, finalHtml)
-        return next
-      })
-      setExpandedCards(prev => ({ ...prev, qa: true }))
-    } catch {
-      updateAgent('qa', { status: 'error', content: 'Error en crítica' })
     }
 
     // ── Step 4: Engineer ───────────────────────────────────────────────────────
@@ -212,21 +218,39 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
                 ✕ limpiar
               </button>
             )}
-            <button
-              onClick={() => runStudio()}
-              disabled={running || !brief.trim()}
-              style={{
-                marginLeft: 'auto',
-                padding: '8px 16px',
-                background: running ? '#1E1E2E' : 'linear-gradient(135deg, #7C3AED, #6D28D9)',
-                border: 'none', borderRadius: 8,
-                color: running ? '#64748B' : '#fff',
-                fontFamily: mono, fontSize: 11, fontWeight: 700,
-                cursor: running ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {running ? '⏳ Analizando...' : '⚡ Analizar'}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
+              {/* ⚡ Fast Mode toggle */}
+              <button
+                onClick={() => setFastMode(f => !f)}
+                title={fastMode ? 'Fast Mode activo — solo Designer + Engineer' : 'Activar Fast Mode (sin Architect ni Critic)'}
+                style={{
+                  padding: '6px 12px',
+                  background: fastMode ? '#F59E0B22' : 'transparent',
+                  border: `1px solid ${fastMode ? '#F59E0B' : '#1E1E2E'}`,
+                  borderRadius: 8,
+                  color: fastMode ? '#F59E0B' : '#64748B',
+                  fontFamily: mono, fontSize: 10, fontWeight: 700,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s',
+                }}
+              >
+                ⚡ Fast {fastMode ? 'ON' : 'OFF'}
+              </button>
+              <button
+                onClick={() => runStudio()}
+                disabled={running || !brief.trim()}
+                style={{
+                  padding: '8px 16px',
+                  background: running ? '#1E1E2E' : 'linear-gradient(135deg, #7C3AED, #6D28D9)',
+                  border: 'none', borderRadius: 8,
+                  color: running ? '#64748B' : '#fff',
+                  fontFamily: mono, fontSize: 11, fontWeight: 700,
+                  cursor: running ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {running ? '⏳ Analizando...' : '▶ Analizar'}
+              </button>
+            </div>
           </div>
         </div>
 
