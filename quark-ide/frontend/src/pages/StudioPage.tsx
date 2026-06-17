@@ -269,7 +269,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
               {/* Critic badge inline */}
               {agent.role === 'qa' && agent.status === 'done' && agent.content && (
                 <span style={{
-                  marginLeft: agent.role !== 'designer' ? 0 : 'auto',
+                  marginLeft: 0,
                   fontFamily: mono, fontSize: 10, fontWeight: 700,
                   color: agent.content.trim().startsWith('APROBADO') ? '#00ff88' : '#F59E0B',
                 }}>
