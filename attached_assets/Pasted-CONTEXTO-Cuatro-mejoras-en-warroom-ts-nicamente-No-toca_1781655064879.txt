@@ -1,0 +1,152 @@
+CONTEXTO:
+Cuatro mejoras en warroom.ts únicamente. 
+No tocar ningún otro archivo.
+
+═══════════════════════════════════════
+FIX 1 — Corregir leverage de Signal OS
+═══════════════════════════════════════
+
+En buildContext(), bloque de "Signal OS":
+
+DE:
+"5x leverage, isolated margin, hedge mode."
+
+A:
+"10x leverage, isolated margin, hedge mode,
+trailing stop nativo Bitget (moving_plan, rangeRate: 2.0)."
+
+═══════════════════════════════════════
+FIX 2 — Conectar reporte de Sniper OS
+═══════════════════════════════════════
+
+1. Crear función fetchSniperOSReport():
+
+async function fetchSniperOSReport(): 
+  Promise<string | null> {
+  try {
+    const res = await fetch(
+      'https://workspacesniper-os-production.up.railway.app
+       /api/oracle-report',
+      { signal: AbortSignal.timeout(5000) }
+    )
+    const data = await res.json()
+    if (!data.summary) return null
+    
+    // Construir texto enriquecido con todos los campos
+    let report = data.summary
+    
+    if (data.risk_level) {
+      report += `\n\nNivel de riesgo actual: ${data.risk_level.toUpperCase()}`
+    }
+    if (data.recomendacion) {
+      report += `\nAcción recomendada: ${data.recomendacion}`
+    }
+    if (data.fortalezas?.length) {
+      report += `\nFortalezas: ${data.fortalezas.join(', ')}`
+    }
+    if (data.debilidades?.length) {
+      report += `\nDebilidades: ${data.debilidades.join(', ')}`
+    }
+    
+    return report
+  } catch {
+    return null
+  }
+}
+
+2. En el endpoint POST /api/warroom/swarm,
+   agregar fetch de Sniper OS junto al de Signal OS:
+
+   let signalReport: string | null = null
+   let sniperReport: string | null = null
+   
+   if (appName === 'Signal OS') {
+     signalReport = await fetchSignalOSReport()
+   }
+   if (appName === 'Sniper OS') {
+     sniperReport = await fetchSniperOSReport()
+   }
+
+3. En buildContext(), bloque de "Sniper OS",
+   agregar al final si sniperReport existe:
+
+   Actualizar firma:
+   buildContext(appName, repoContext?, 
+                signalReport?, sniperReport?)
+   
+   En bloque Sniper OS:
+   if (sniperReport) {
+     context += `\n\nREPORTE DEL ORÁCULO HOY (datos reales):
+${sniperReport}
+
+Usa estos datos reales para dar un diagnóstico 
+preciso. No inventes métricas.`
+   }
+
+4. Pasar sniperReport a callBoardMember():
+   Actualizar buildContext() en cada callBoardMember()
+   para incluir sniperReport.
+
+═══════════════════════════════════════
+FIX 3 — Actualizar contexto de Nexus OS
+═══════════════════════════════════════
+
+En buildContext(), bloque de "Nexus OS", 
+reemplazar el contenido actual por:
+
+"App bajo análisis: Nexus OS (repo: NEXUS-OS-app)
+Bot spot trading en OKX — actualmente PAUSADO.
+Razón: mercado en régimen ranging, no apto para spot.
+Stack: React/TypeScript frontend + Node.js/Express + PostgreSQL.
+Features diseñadas: CoinMarketCap/CoinGecko asset discovery,
+conviction-based position sizing, DCA support.
+Estado: arquitectura lista, pendiente de activación 
+cuando el mercado presente tendencia clara.
+ENFÓCATE EXCLUSIVAMENTE en Nexus OS. 
+No menciones otras apps."
+
+═══════════════════════════════════════
+FIX 4 — Afinar rol del Designer 
+para análisis de trading
+═══════════════════════════════════════
+
+En callBoardMember(), el lens del Designer 
+actualmente habla de UX y estética cyberpunk.
+
+Cuando appName es Signal OS o Sniper OS,
+cambiar el lens del Designer a:
+
+"Eres el especialista en visualización de datos 
+y experiencia de monitoreo del War Room.
+Tu enfoque: ¿Los dashboards muestran la información 
+crítica de forma clara? ¿El trader puede tomar 
+decisiones rápidas con lo que ve? ¿Hay métricas 
+importantes que no están visibles? ¿La UI comunica 
+riesgo de forma efectiva?
+Analiza cómo mejorar la visibilidad operacional 
+del sistema de trading."
+
+Para Quark IDE, Studio, Core AI mantener 
+el lens actual de UX/cyberpunk/diseño.
+
+═══════════════════════════════════════
+RESTRICCIONES:
+═══════════════════════════════════════
+
+- Solo warroom.ts — ningún otro archivo
+- Timeout 5s en fetchSniperOSReport() igual que Signal OS
+- Si cualquier fetch falla → null → swarm continúa normal
+- No modificar endpoints /board ni /think
+- El badge "📊 Reporte de hoy incluido en el análisis" 
+  en BoardRoom.tsx ya existe — agregar uno equivalente 
+  para Sniper OS: "🎯 Reporte del Oráculo incluido"
+  (este sí requiere tocar BoardRoom.tsx — 
+  es el único segundo archivo permitido)
+
+RESULTADO ESPERADO:
+- War Room analiza Signal OS con 10x leverage correcto
+- War Room analiza Sniper OS con datos reales del Oráculo
+  (summary + risk_level + recomendacion + fortalezas/debilidades)
+- Nexus OS aparece como bot pausado con razón clara
+- Designer aporta valor real en análisis de trading
+  en lugar de hablar de estética cyberpunk
