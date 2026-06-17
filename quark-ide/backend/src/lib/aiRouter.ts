@@ -18,9 +18,16 @@ const GEMINI_KEYS = [
   process.env.GEMINI_API_KEY_3,
 ].filter(Boolean) as string[];
 
-let openRouterIndex = 0;
-let groqIndex       = 0;
-let geminiIndex     = 0;
+let openRouterIndex  = 0;
+let groqIndex        = 0;
+let geminiIndex      = 0;
+let geminiModelIndex = 0;
+
+const GEMINI_MODELS = [
+  'gemini-3.1-flash-lite',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+];
 
 export async function callAI(
   task: 'fix' | 'generate' | 'analyze' | 'html' | 'designer' | 'warroom',
@@ -159,9 +166,11 @@ async function callGemini(prompt: string, system?: string): Promise<string> {
   if (!GEMINI_KEYS.length) throw new Error('No GEMINI keys configured');
   const key = GEMINI_KEYS[geminiIndex % GEMINI_KEYS.length];
   geminiIndex++;
+  const model = GEMINI_MODELS[geminiModelIndex % GEMINI_MODELS.length];
+  geminiModelIndex++;
   const ai = new GoogleGenAI({ apiKey: key });
   const response = await ai.models.generateContent({
-    model: 'gemini-2.0-flash',
+    model,
     contents: [{ role: 'user', parts: [{ text: (system ? system + '\n\n' : '') + prompt }] }],
     config: { maxOutputTokens: 8192 },
   });
