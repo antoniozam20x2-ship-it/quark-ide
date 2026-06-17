@@ -61,6 +61,9 @@ REGLAS:
 - Datos de ejemplo específicos al brief (nombres, precios, copy real, no "Lorem ipsum").
 - Si el brief implica fotos, NO uses servicios de imágenes aleatorias (picsum, unsplash random) — devuelven fotos irrelevantes al tema. En su lugar: usa un bloque con gradiente o color sólido de la paleta aprobada, y un ícono/ilustración simple en SVG inline (ej. trigo, hogaza de pan, taza) dibujado con <svg> y paths básicos en el color de acento.
 - Nunca abras modales, popups o lightboxes automáticamente al cargar la página (prohibido usar window.onload, eventos sin interacción de usuario, o cualquier disparo automático para esto). Cualquier modal debe abrirse ÚNICAMENTE con un onclick explícito del usuario. Si ya existe una sección inline con cierto contenido, no dupliques ese mismo contenido en un modal aparte.
+- PROHIBIDO usar picsum.photos o cualquier imagen externa sin excepción. Para imágenes usa siempre: un div con background-color de la paleta + un SVG inline que represente visualmente el tema del brief (ej: para restaurante mexicano → un taco, un chile, una olla de barro dibujados con paths SVG simples en el color de acento).
+- PROHIBIDO usar font-size en vw o unidades relativas al viewport para textos. Usa siempre px o rem con estos máximos: títulos hero máximo 56px, subtítulos máximo 28px, texto de cuerpo máximo 18px. El texto nunca debe romperse sílaba por sílaba.
+- El HTML debe ser responsivo. Usa max-width: 1200px en el contenedor principal con margin: 0 auto, padding lateral mínimo de 24px, y media queries para mobile (max-width: 768px) donde los grids de 2 columnas colapsen a 1 columna.
 - Interactividad con JavaScript inline cuando aplique.
 - Sin frameworks externos de JS — solo HTML + CSS + JS vanilla.`,
 
