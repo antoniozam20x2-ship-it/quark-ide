@@ -56,8 +56,17 @@ export async function initDb(): Promise<void> {
       updated_at TIMESTAMP DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS studio_projects (
+      id         SERIAL PRIMARY KEY,
+      name       TEXT NOT NULL,
+      folder     TEXT NOT NULL DEFAULT 'Sin carpeta',
+      html       TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_memory_namespace ON memory_entries(namespace);
+    CREATE INDEX IF NOT EXISTS idx_studio_projects_folder ON studio_projects(folder);
   `);
   console.log('✅ Database schema ready');
 }
