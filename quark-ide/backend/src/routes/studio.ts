@@ -51,9 +51,9 @@ async function resolveImagePlaceholders(html: string): Promise<string> {
   return html.replace(slotRegex, (_full, query, extraAttrs) => {
     const photoUrl = imageCache.get(query)
     if (photoUrl) {
-      return `<div class="img-slot"${extraAttrs} style="width:100%;height:100%;background-image:url('${photoUrl}');background-size:cover;background-position:center;"></div>`
+      return `<div class="img-slot"${extraAttrs} style="width:100%;min-height:250px;height:100%;background-image:url('${photoUrl}');background-size:cover;background-position:center;display:block;"></div>`
     }
-    return `<div class="img-slot"${extraAttrs} style="width:100%;height:100%;background:linear-gradient(135deg,#7C3AED33,#06B6D433);"></div>`
+    return `<div class="img-slot"${extraAttrs} style="width:100%;min-height:250px;height:100%;background:linear-gradient(135deg,#7C3AED33,#06B6D433);display:block;"></div>`
   })
 }
 
