@@ -16,6 +16,45 @@ function sanitizeDesignerHtml(raw: string): string {
   return html
 }
 
+// ── Unsplash image resolver ────────────────────────────────────────────────────
+
+const imageCache = new Map<string, string>()
+
+async function resolveImagePlaceholders(html: string): Promise<string> {
+  const key = process.env.UNSPLASH_ACCESS_KEY
+  const slotRegex = /<div class="img-slot" data-query="([^"]+)"([^>]*)><\/div>/g
+  const matches = [...html.matchAll(slotRegex)]
+  if (matches.length === 0) return html
+
+  const uniqueQueries = [...new Set(matches.map(m => m[1]))]
+
+  await Promise.all(uniqueQueries.map(async (query) => {
+    if (imageCache.has(query)) return
+    if (!key) {
+      imageCache.set(query, '')
+      return
+    }
+    try {
+      const url = `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=1&orientation=landscape`
+      const r = await fetch(url, { headers: { Authorization: `Client-ID ${key}` } })
+      const data = await r.json() as any
+      const photoUrl = data?.results?.[0]?.urls?.regular ?? ''
+      imageCache.set(query, photoUrl)
+    } catch (err) {
+      console.warn('[Unsplash] fallo en query:', query, err)
+      imageCache.set(query, '')
+    }
+  }))
+
+  return html.replace(slotRegex, (_full, query, extraAttrs) => {
+    const photoUrl = imageCache.get(query)
+    if (photoUrl) {
+      return `<div class="img-slot"${extraAttrs} style="width:100%;height:100%;background-image:url('${photoUrl}');background-size:cover;background-position:center;"></div>`
+    }
+    return `<div class="img-slot"${extraAttrs} style="width:100%;height:100%;background:linear-gradient(135deg,#7C3AED33,#06B6D433);"></div>`
+  })
+}
+
 // ── System prompts ────────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPTS: Record<string, string> = {
@@ -47,11 +86,9 @@ Devuelve ÚNICAMENTE el HTML — empieza con <!DOCTYPE html> y termina con </htm
 
 Usa tu criterio profesional para decidir qué tan complejo debe ser según el brief. Un restaurante merece navbar, hero animado, menú interactivo, reservaciones, galería con lightbox y footer completo. Un juego merece canvas y game loop. Una tienda merece carrito y productos. Sé ambicioso.
 
-CRÍTICO — IMÁGENES: El entorno donde se renderiza bloquea TODOS los recursos externos sin excepción. Nunca uses <img>, <video>, <source> ni ninguna etiqueta que cargue una URL externa — aparecerán como cuadros rotos. Para representar imágenes usa ÚNICAMENTE:
-1. Un <div> con background: linear-gradient() usando colores de la paleta del brief.
-2. Un <svg> inline con paths simples que represente visualmente el tema (un taco, una copa, un edificio, etc.).
-
-Para imágenes usa Unsplash con keywords en inglés específicas al tema: <img src="https://source.unsplash.com/400x300/?keyword1,keyword2" style="width:100%;height:100%;object-fit:cover">. Ejemplos: ?croissant,bakery para panadería, ?taco,mexican,food para restaurante mexicano, ?macbook,laptop para tecnología, ?sneakers,shoes para zapatos. El preview en iframe puede mostrarlas bloqueadas pero el usuario puede usar el botón "↗ abrir" para verlas correctamente en una pestaña nueva.`,
+CRÍTICO — IMÁGENES: Para cualquier imagen fotográfica que el diseño necesite (comida, productos, personas, lugares, etc.), usa este placeholder exacto en vez de <img>:
+<div class="img-slot" data-query="keyword1,keyword2" style="width:100%;height:100%;background-size:cover;background-position:center;"></div>
+El atributo data-query debe tener 1-3 keywords en inglés específicas al contenido real (ej: data-query="croissant,bakery" para una panadería, data-query="sneakers,product" para zapatillas). No inventes URLs de imágenes ni uses la etiqueta <img> para fotos — el backend resuelve estos placeholders después. Para iconografía decorativa simple (no fotos) puedes seguir usando SVG inline.`,
 
   qa: `Eres un crítico de diseño senior. Recibes el BRIEF, la DIRECCIÓN CREATIVA y el HTML
 generado por el Designer. Evalúa con honestidad:
@@ -112,7 +149,7 @@ router.post('/analyze', async (req, res) => {
       if (criticText.trim().startsWith('REVISAR:')) {
         const revisionPrompt = `BRIEF: ${brief}\n\nDIRECCIÓN CREATIVA:\n${architectResult ?? ''}\n\nHTML ORIGINAL (referencia base, mejóralo sin partir de cero):\n${designerResult ?? ''}\n\nNOTAS DE REVISIÓN (correcciones obligatorias):\n${criticText}`
         const revisedRaw  = await callAI('html', revisionPrompt, SYSTEM_PROMPTS['designer'])
-        const revisedHtml = sanitizeDesignerHtml(revisedRaw)
+        const revisedHtml = await resolveImagePlaceholders(sanitizeDesignerHtml(revisedRaw))
         const useRevised  = revisedHtml.length > (designerResult ?? '').length * 0.5
         return res.json({ result: criticText, role, revisedHtml: useRevised ? revisedHtml : designerResult })
       }
@@ -136,7 +173,7 @@ router.post('/analyze', async (req, res) => {
     }
 
     const raw    = await callAI(task, userPrompt, systemPrompt)
-    const result = role === 'designer' ? sanitizeDesignerHtml(raw) : raw
+    const result = role === 'designer' ? await resolveImagePlaceholders(sanitizeDesignerHtml(raw)) : raw
     res.json({ result, role })
   } catch (err) {
     console.error('studio/analyze error:', err)

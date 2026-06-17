@@ -1,0 +1,80 @@
+Necesito arreglar el sistema de imágenes en quark-ide/backend/src/routes/studio.ts.
+Actualmente el prompt del designer le dice al modelo que use <img src="https://source.unsplash.com/...">
+pero ese dominio está descontinuado desde 2021 y apagado por completo desde 2024 — por eso
+las imágenes aparecen rotas. Voy a cambiar la arquitectura para que las imágenes se resuelvan
+en el backend después de que el LLM genera el HTML, no dentro del HTML mismo.
+
+PASO 1 — Variable de entorno
+Necesito una API key gratuita de Unsplash (https://unsplash.com/developers, crear una app,
+copiar el "Access Key"). Agrega esta variable a Railway:
+UNSPLASH_ACCESS_KEY=<la key>
+
+PASO 2 — Reemplazar el prompt del designer en SYSTEM_PROMPTS
+Sustituye por completo el bloque "CRÍTICO — IMÁGENES" y el párrafo de Unsplash al final del
+prompt del designer (las dos últimas instrucciones, que hoy son contradictorias entre sí) por
+esto:
+
+CRÍTICO — IMÁGENES: Para cualquier imagen fotográfica que el diseño necesite (comida, productos,
+personas, lugares, etc.), usa este placeholder exacto en vez de <img>:
+<div class="img-slot" data-query="keyword1,keyword2" style="width:100%;height:100%;background-size:cover;background-position:center;"></div>
+El atributo data-query debe tener 1-3 keywords en inglés específicas al contenido real
+(ej: data-query="croissant,bakery" para una panadería, data-query="sneakers,product" para
+zapatillas). No inventes URLs de imágenes ni uses la etiqueta <img> para fotos — el backend
+resuelve estos placeholders después. Para iconografía decorativa simple (no fotos) puedes
+seguir usando SVG inline.
+
+PASO 3 — Nueva función de resolución de imágenes
+Agrega esta función en studio.ts, después de sanitizeDesignerHtml:
+
+const imageCache = new Map<string, string>()
+
+async function resolveImagePlaceholders(html: string): Promise<string> {
+  const key = process.env.UNSPLASH_ACCESS_KEY
+  const slotRegex = /<div class="img-slot" data-query="([^"]+)"([^>]*)><\/div>/g
+  const matches = [...html.matchAll(slotRegex)]
+  if (matches.length === 0) return html
+
+  const uniqueQueries = [...new Set(matches.map(m => m[1]))]
+
+  await Promise.all(uniqueQueries.map(async (query) => {
+    if (imageCache.has(query)) return
+    if (!key) {
+      imageCache.set(query, '')
+      return
+    }
+    try {
+      const url = `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=1&orientation=landscape`
+      const r = await fetch(url, { headers: { Authorization: `Client-ID ${key}` } })
+      const data = await r.json() as any
+      const photoUrl = data?.results?.[0]?.urls?.regular ?? ''
+      imageCache.set(query, photoUrl)
+    } catch (err) {
+      console.warn('[Unsplash] fallo en query:', query, err)
+      imageCache.set(query, '')
+    }
+  }))
+
+  return html.replace(slotRegex, (full, query, extraAttrs) => {
+    const photoUrl = imageCache.get(query)
+    if (photoUrl) {
+      return `<div class="img-slot"${extraAttrs} style="width:100%;height:100%;background-image:url('${photoUrl}');background-size:cover;background-position:center;"></div>`
+    }
+    // Fallback si no hay key o falló la búsqueda: gradiente en vez de imagen rota
+    return `<div class="img-slot"${extraAttrs} style="width:100%;height:100%;background:linear-gradient(135deg,#7C3AED33,#06B6D433);"></div>`
+  })
+}
+
+PASO 4 — Conectar la función en los dos lugares donde se genera HTML del designer
+
+4a) En el flujo principal, busca esta línea:
+const result = role === 'designer' ? sanitizeDesignerHtml(raw) : raw
+Reemplázala por:
+const result = role === 'designer' ? await resolveImagePlaceholders(sanitizeDesignerHtml(raw)) : raw
+
+4b) En el flujo de revisión del QA (dentro del bloque if (role === 'qa')), busca:
+const revisedHtml = sanitizeDesignerHtml(revisedRaw)
+Reemplázala por:
+const revisedHtml = await resolveImagePlaceholders(sanitizeDesignerHtml(revisedRaw))
+
+No cambies nada más en la lógica existente — solo estos 4 puntos. Verifica que el archivo
+compile y no haya tipos rotos antes de hacer commit.
