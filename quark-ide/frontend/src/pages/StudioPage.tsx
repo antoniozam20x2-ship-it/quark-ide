@@ -75,6 +75,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
   const [newFolderMode, setNewFolderMode] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'ok' | 'error'>('idle')
+  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null)
 
   useEffect(() => {
     loadProjects()
@@ -408,20 +409,40 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
                       <span style={{ fontFamily: mono, fontSize: 9, color: '#64748B' }}>({fps.length})</span>
                     </div>
                     {expandedFolders[folder] && fps.map(p => (
-                      <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 20, paddingBottom: 4 }}>
+                      <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 20, paddingBottom: 4, flexWrap: 'wrap' }}>
                         <span style={{ fontFamily: mono, fontSize: 10, color: '#94A3B8', flex: 1 }}>📄 {p.name}</span>
-                        <button
-                          onClick={() => loadProjectHtml(p.id)}
-                          style={{ padding: '3px 8px', background: '#06B6D422', border: '1px solid #06B6D444', borderRadius: 4, color: '#06B6D4', fontFamily: mono, fontSize: 9, cursor: 'pointer' }}
-                        >
-                          cargar
-                        </button>
-                        <button
-                          onClick={() => deleteProject(p.id)}
-                          style={{ padding: '3px 6px', background: 'transparent', border: 'none', color: '#64748B', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}
-                        >
-                          ✕
-                        </button>
+                        {deleteConfirmId === p.id ? (
+                          <>
+                            <span style={{ fontFamily: mono, fontSize: 9, color: '#EF4444' }}>¿Eliminar?</span>
+                            <button
+                              onClick={() => setDeleteConfirmId(null)}
+                              style={{ padding: '3px 7px', background: 'transparent', border: '1px solid #1E1E2E', borderRadius: 4, color: '#64748B', fontFamily: mono, fontSize: 9, cursor: 'pointer' }}
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              onClick={() => { deleteProject(p.id); setDeleteConfirmId(null) }}
+                              style={{ padding: '3px 7px', background: '#EF444422', border: '1px solid #EF4444', borderRadius: 4, color: '#EF4444', fontFamily: mono, fontSize: 9, fontWeight: 700, cursor: 'pointer' }}
+                            >
+                              Eliminar
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => loadProjectHtml(p.id)}
+                              style={{ padding: '3px 8px', background: '#06B6D422', border: '1px solid #06B6D444', borderRadius: 4, color: '#06B6D4', fontFamily: mono, fontSize: 9, cursor: 'pointer' }}
+                            >
+                              cargar
+                            </button>
+                            <button
+                              onClick={() => setDeleteConfirmId(p.id)}
+                              style={{ padding: '3px 6px', background: 'transparent', border: 'none', color: '#64748B', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}
+                            >
+                              ✕
+                            </button>
+                          </>
+                        )}
                       </div>
                     ))}
                   </div>
