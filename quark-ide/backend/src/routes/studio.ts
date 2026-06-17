@@ -23,10 +23,6 @@ const imageCache = new Map<string, string>()
 
 async function resolveImagePlaceholders(html: string): Promise<string> {
   const key = process.env.UNSPLASH_ACCESS_KEY
-  console.log('[Unsplash] key presente:', !!key)
-  console.log('[Unsplash] slots encontrados:', [...html.matchAll(/<div class="img-slot"/g)].length)
-  console.log('[Unsplash] img tags encontrados:', [...html.matchAll(/<img /g)].length)
-  console.log('[Unsplash] primeros 500 chars del HTML:', html.slice(0, 500))
   const slotRegex = /<div class="img-slot" data-query="([^"]+)"([^>]*)><\/div>/g
   const matches = [...html.matchAll(slotRegex)]
   if (matches.length === 0) return html
@@ -44,7 +40,6 @@ async function resolveImagePlaceholders(html: string): Promise<string> {
       const r = await fetch(url, { headers: { Authorization: `Client-ID ${key}` } })
       const data = await r.json() as any
       const photoUrl = data?.results?.[0]?.urls?.regular ?? ''
-      console.log('[Unsplash] foto URL para query', query, ':', photoUrl ? photoUrl.slice(0, 60) : 'VACÍA')
       imageCache.set(query, photoUrl)
     } catch (err) {
       console.warn('[Unsplash] fallo en query:', query, err)
@@ -52,13 +47,21 @@ async function resolveImagePlaceholders(html: string): Promise<string> {
     }
   }))
 
-  return html.replace(slotRegex, (_full, query, extraAttrs) => {
+  let result = html.replace(slotRegex, (_full, query, _extraAttrs) => {
     const photoUrl = imageCache.get(query)
     if (photoUrl) {
-      return `<div class="img-slot"${extraAttrs} style="width:100% !important;min-height:250px !important;height:100% !important;background-image:url('${photoUrl}') !important;background-size:cover !important;background-position:center !important;display:block !important;"></div>`
+      return `<div class="img-slot" style="width:100%;height:250px;background-image:url('${photoUrl}');background-size:cover;background-position:center;background-repeat:no-repeat;display:block;"></div>`
     }
-    return `<div class="img-slot"${extraAttrs} style="width:100%;min-height:250px;height:100%;background:linear-gradient(135deg,#7C3AED33,#06B6D433);display:block;"></div>`
+    return `<div class="img-slot" style="width:100%;height:250px;background:linear-gradient(135deg,#7C3AED33,#06B6D433);display:block;"></div>`
   })
+
+  const styleInject = `<style>
+    .img-slot { width: 100% !important; height: 250px !important; background-size: cover !important; background-position: center !important; background-repeat: no-repeat !important; display: block !important; }
+  </style>`
+
+  result = result.replace('</head>', styleInject + '</head>')
+
+  return result
 }
 
 // ── System prompts ────────────────────────────────────────────────────────────
