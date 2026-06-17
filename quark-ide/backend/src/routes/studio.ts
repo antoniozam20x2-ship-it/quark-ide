@@ -43,6 +43,7 @@ async function resolveImagePlaceholders(html: string): Promise<string> {
       const r = await fetch(url, { headers: { Authorization: `Client-ID ${key}` } })
       const data = await r.json() as any
       const photoUrl = data?.results?.[0]?.urls?.regular ?? ''
+      console.log('[Unsplash] foto URL para query', query, ':', photoUrl ? photoUrl.slice(0, 60) : 'VACÍA')
       imageCache.set(query, photoUrl)
     } catch (err) {
       console.warn('[Unsplash] fallo en query:', query, err)
