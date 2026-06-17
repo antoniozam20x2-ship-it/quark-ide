@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { callAI } from '../lib/aiRouter.js'
+import pool from '../services/db.js'
 
 const router = Router()
 
@@ -203,6 +204,58 @@ router.post('/analyze', async (req, res) => {
   } catch (err) {
     console.error('studio/analyze error:', err)
     res.status(500).json({ error: 'Error en análisis' })
+  }
+})
+
+// ── Studio Projects CRUD ──────────────────────────────────────────────────────
+
+router.get('/projects', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, name, folder, created_at FROM studio_projects ORDER BY folder, created_at DESC'
+    )
+    res.json(rows)
+  } catch (err) {
+    console.error('studio/projects GET error:', err)
+    res.status(500).json({ error: 'Error al obtener proyectos' })
+  }
+})
+
+router.post('/projects', async (req, res) => {
+  try {
+    const { name, folder, html } = req.body as { name: string; folder: string; html: string }
+    if (!name || !html) return res.status(400).json({ error: 'name y html requeridos' })
+    const folderVal = (folder ?? '').trim() || 'Sin carpeta'
+    const { rows } = await pool.query(
+      'INSERT INTO studio_projects (name, folder, html) VALUES ($1, $2, $3) RETURNING id, name, folder, created_at',
+      [name.trim(), folderVal, html]
+    )
+    res.json(rows[0])
+  } catch (err) {
+    console.error('studio/projects POST error:', err)
+    res.status(500).json({ error: 'Error al guardar proyecto' })
+  }
+})
+
+router.delete('/projects/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    await pool.query('DELETE FROM studio_projects WHERE id = $1', [id])
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('studio/projects DELETE error:', err)
+    res.status(500).json({ error: 'Error al eliminar proyecto' })
+  }
+})
+
+router.get('/projects/:id/html', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT html FROM studio_projects WHERE id = $1', [req.params.id])
+    if (!rows.length) return res.status(404).json({ error: 'Proyecto no encontrado' })
+    res.json({ html: rows[0].html })
+  } catch (err) {
+    console.error('studio/projects/:id/html error:', err)
+    res.status(500).json({ error: 'Error al obtener HTML' })
   }
 })
 

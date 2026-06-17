@@ -4,6 +4,14 @@ const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replac
 
 const STORAGE_KEY = 'quark_studio_state'
 
+interface StudioProject {
+  id: number
+  name: string
+  folder: string
+  html: string
+  created_at: string
+}
+
 interface Props {
   initialBrief?: string
   onBriefConsumed?: () => void
@@ -56,6 +64,22 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
   const [importHtml, setImportHtml] = useState('')
   const [importPreview, setImportPreview] = useState('')
 
+  // Projects state
+  const [projects, setProjects] = useState<StudioProject[]>([])
+  const [showProjects, setShowProjects] = useState(false)
+  const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({})
+  const [showSaveModal, setShowSaveModal] = useState(false)
+  const [saveHtmlTarget, setSaveHtmlTarget] = useState<'import' | 'prototype'>('import')
+  const [saveName, setSaveName] = useState('')
+  const [saveFolder, setSaveFolder] = useState('')
+  const [newFolderMode, setNewFolderMode] = useState(false)
+  const [newFolderName, setNewFolderName] = useState('')
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'ok' | 'error'>('idle')
+
+  useEffect(() => {
+    loadProjects()
+  }, [])
+
   useEffect(() => {
     if (initialBrief) {
       setBrief(initialBrief)
@@ -64,6 +88,63 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialBrief])
+
+  async function loadProjects() {
+    try {
+      const res = await fetch(`${API_BASE}/api/studio/projects`)
+      if (res.ok) setProjects(await res.json())
+    } catch {}
+  }
+
+  function openSaveModal(target: 'import' | 'prototype') {
+    setSaveHtmlTarget(target)
+    setSaveName('')
+    setSaveFolder('')
+    setNewFolderMode(false)
+    setNewFolderName('')
+    setSaveStatus('idle')
+    setShowSaveModal(true)
+  }
+
+  async function saveProject() {
+    const html = saveHtmlTarget === 'import' ? importHtml.trim() : designPrototype
+    if (!html || !saveName.trim()) return
+    const folder = newFolderMode ? newFolderName.trim() || 'Sin carpeta' : saveFolder || 'Sin carpeta'
+    setSaveStatus('saving')
+    try {
+      const res = await fetch(`${API_BASE}/api/studio/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: saveName.trim(), folder, html }),
+      })
+      if (!res.ok) throw new Error()
+      await loadProjects()
+      setSaveStatus('ok')
+      setTimeout(() => setShowSaveModal(false), 800)
+    } catch {
+      setSaveStatus('error')
+    }
+  }
+
+  async function deleteProject(id: number) {
+    try {
+      await fetch(`${API_BASE}/api/studio/projects/${id}`, { method: 'DELETE' })
+      setProjects(prev => prev.filter(p => p.id !== id))
+    } catch {}
+  }
+
+  async function loadProjectHtml(id: number) {
+    try {
+      const res = await fetch(`${API_BASE}/api/studio/projects/${id}/html`)
+      const data = await res.json()
+      if (data.html) {
+        setImportHtml(data.html)
+        setImportPreview(data.html)
+        setShowImport(true)
+        setShowProjects(false)
+      }
+    } catch {}
+  }
 
   function toggleCard(role: string) {
     setExpandedCards(prev => ({ ...prev, [role]: !prev[role] }))
@@ -226,7 +307,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
                 padding: 10, resize: 'vertical', lineHeight: 1.5, outline: 'none',
               }}
             />
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <button
                 onClick={() => setImportPreview(importHtml.trim())}
                 disabled={!importHtml.trim()}
@@ -240,6 +321,21 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
                 }}
               >
                 👁 Vista Previa
+              </button>
+              <button
+                onClick={() => openSaveModal('import')}
+                disabled={!importHtml.trim()}
+                style={{
+                  padding: '7px 14px',
+                  background: importHtml.trim() ? '#10B98122' : 'transparent',
+                  border: `1px solid ${importHtml.trim() ? '#10B981' : '#1E1E2E'}`,
+                  borderRadius: 8,
+                  color: importHtml.trim() ? '#10B981' : '#64748B',
+                  fontFamily: mono, fontSize: 10, fontWeight: 700,
+                  cursor: importHtml.trim() ? 'pointer' : 'not-allowed',
+                }}
+              >
+                💾 Guardar
               </button>
               {importPreview && (
                 <button
@@ -281,6 +377,59 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
             )}
           </div>
         )}
+
+        {/* Mis Proyectos */}
+        <div style={{ background: '#12121A', border: '1px solid #1E1E2E', borderLeft: '3px solid #10B981', borderRadius: 12, overflow: 'hidden' }}>
+          <div
+            onClick={() => setShowProjects(p => !p)}
+            style={{ padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}
+          >
+            <span style={{ fontFamily: mono, fontSize: 10, color: '#10B981', fontWeight: 700 }}>🗂 MIS PROYECTOS</span>
+            <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>({projects.length})</span>
+            <span style={{ marginLeft: 'auto', fontFamily: mono, fontSize: 10, color: '#64748B' }}>{showProjects ? '▲' : '▼'}</span>
+          </div>
+          {showProjects && (
+            <div style={{ padding: '0 12px 12px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {projects.length === 0 ? (
+                <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>Sin proyectos guardados</span>
+              ) : (
+                Object.entries(
+                  projects.reduce((acc, p) => { (acc[p.folder] = acc[p.folder] || []).push(p); return acc }, {} as Record<string, StudioProject[]>)
+                ).map(([folder, fps]) => (
+                  <div key={folder}>
+                    <div
+                      onClick={() => setExpandedFolders(ef => ({ ...ef, [folder]: !ef[folder] }))}
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 0', cursor: 'pointer', userSelect: 'none' }}
+                    >
+                      <span style={{ fontFamily: mono, fontSize: 10, color: '#F59E0B' }}>
+                        {expandedFolders[folder] ? '📂' : '📁'}
+                      </span>
+                      <span style={{ fontFamily: mono, fontSize: 10, color: '#F59E0B', fontWeight: 700 }}>{folder}</span>
+                      <span style={{ fontFamily: mono, fontSize: 9, color: '#64748B' }}>({fps.length})</span>
+                    </div>
+                    {expandedFolders[folder] && fps.map(p => (
+                      <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 20, paddingBottom: 4 }}>
+                        <span style={{ fontFamily: mono, fontSize: 10, color: '#94A3B8', flex: 1 }}>📄 {p.name}</span>
+                        <button
+                          onClick={() => loadProjectHtml(p.id)}
+                          style={{ padding: '3px 8px', background: '#06B6D422', border: '1px solid #06B6D444', borderRadius: 4, color: '#06B6D4', fontFamily: mono, fontSize: 9, cursor: 'pointer' }}
+                        >
+                          cargar
+                        </button>
+                        <button
+                          onClick={() => deleteProject(p.id)}
+                          style={{ padding: '3px 6px', background: 'transparent', border: 'none', color: '#64748B', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Input */}
         <div style={{ background: '#12121A', border: '1px solid #1E1E2E', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -464,6 +613,98 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
       <div style={{ padding: '10px 14px', borderTop: '1px solid #1E1E2E', background: '#12121A', fontFamily: mono, fontSize: 10, color: '#64748B', textAlign: 'center' }}>
         Director Creativo → Designer → Critic → Engineer
       </div>
+
+      {/* Save modal */}
+      {showSaveModal && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          zIndex: 10000, background: 'rgba(0,0,0,0.75)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{
+            background: '#12121A', border: '1px solid #1E1E2E', borderRadius: 14,
+            padding: 24, width: 360, display: 'flex', flexDirection: 'column', gap: 14,
+          }}>
+            <span style={{ fontFamily: mono, fontSize: 12, color: '#10B981', fontWeight: 700 }}>💾 GUARDAR PROYECTO</span>
+
+            {/* Name */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>nombre</span>
+              <input
+                value={saveName}
+                onChange={e => setSaveName(e.target.value)}
+                placeholder="Mi proyecto..."
+                autoFocus
+                style={{ background: '#0A0A0F', border: '1px solid #1E1E2E', borderRadius: 7, padding: '8px 10px', color: '#E2E8F0', fontFamily: mono, fontSize: 11, outline: 'none' }}
+              />
+            </div>
+
+            {/* Folder */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>carpeta</span>
+              {!newFolderMode ? (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <select
+                    value={saveFolder}
+                    onChange={e => setSaveFolder(e.target.value)}
+                    style={{ flex: 1, background: '#0A0A0F', border: '1px solid #1E1E2E', borderRadius: 7, padding: '8px 10px', color: '#E2E8F0', fontFamily: mono, fontSize: 11, outline: 'none' }}
+                  >
+                    <option value="">Sin carpeta</option>
+                    {[...new Set(projects.map(p => p.folder).filter(f => f !== 'Sin carpeta'))].map(f => (
+                      <option key={f} value={f}>{f}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => setNewFolderMode(true)}
+                    style={{ padding: '8px 10px', background: 'transparent', border: '1px solid #1E1E2E', borderRadius: 7, color: '#64748B', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}
+                  >
+                    + nueva
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    value={newFolderName}
+                    onChange={e => setNewFolderName(e.target.value)}
+                    placeholder="Nombre de carpeta..."
+                    style={{ flex: 1, background: '#0A0A0F', border: '1px solid #F59E0B', borderRadius: 7, padding: '8px 10px', color: '#E2E8F0', fontFamily: mono, fontSize: 11, outline: 'none' }}
+                  />
+                  <button
+                    onClick={() => setNewFolderMode(false)}
+                    style={{ padding: '8px 10px', background: 'transparent', border: '1px solid #1E1E2E', borderRadius: 7, color: '#64748B', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
+              <button
+                onClick={() => setShowSaveModal(false)}
+                style={{ padding: '8px 16px', background: 'transparent', border: '1px solid #1E1E2E', borderRadius: 8, color: '#64748B', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={saveProject}
+                disabled={!saveName.trim() || saveStatus === 'saving'}
+                style={{
+                  padding: '8px 18px',
+                  background: saveStatus === 'ok' ? '#10B981' : saveStatus === 'error' ? '#EF4444' : saveName.trim() ? 'linear-gradient(135deg, #10B981, #059669)' : '#1E1E2E',
+                  border: 'none', borderRadius: 8,
+                  color: saveName.trim() ? '#fff' : '#64748B',
+                  fontFamily: mono, fontSize: 11, fontWeight: 700,
+                  cursor: saveName.trim() && saveStatus !== 'saving' ? 'pointer' : 'not-allowed',
+                }}
+              >
+                {saveStatus === 'saving' ? '⏳...' : saveStatus === 'ok' ? '✓ Guardado' : saveStatus === 'error' ? '✕ Error' : '💾 Guardar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Fullscreen modal */}
       {fullscreenPreview && (
