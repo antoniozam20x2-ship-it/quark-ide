@@ -3,78 +3,149 @@ import { callAI } from '../lib/aiRouter.js'
 
 const router = Router()
 
+// ── HTML sanitizer ────────────────────────────────────────────────────────────
+
+function sanitizeDesignerHtml(raw: string): string {
+  let html = raw.trim()
+  html = html.replace(/^```(?:html)?\s*/i, '').replace(/```\s*$/i, '').trim()
+  const start = html.indexOf('<!DOCTYPE')
+  const end   = html.lastIndexOf('</html>')
+  if (start !== -1 && end !== -1) {
+    html = html.slice(start, end + '</html>'.length)
+  }
+  return html
+}
+
+// ── System prompts ────────────────────────────────────────────────────────────
+
 const SYSTEM_PROMPTS: Record<string, string> = {
-  architect: `Eres un arquitecto de software senior. Dado un brief de producto, define en máximo 8 líneas:
-- Estructura de archivos necesarios (máximo 3 archivos)
-- Componentes principales y su responsabilidad
-- Props y estado necesario
-- Endpoints de API si aplica
-Sé específico y conciso. Sin explicaciones largas.`,
+  architect: `Eres un director creativo y arquitecto de producto senior. Dado un brief de producto,
+clasifica el tipo de proyecto y define una dirección de diseño concreta y específica
+a ESTE brief — nunca un default genérico que usarías para cualquier brief similar.
 
-  designer: `Eres un diseñador UI/UX senior. Dado un brief de producto, genera ÚNICAMENTE un HTML completo y funcional que sea un prototipo visual de alta fidelidad de la interfaz.
+Devuelve en este formato exacto, máximo 12 líneas:
+TIPO: [marketing-site | functional-tool | dashboard | game-2d | media-app]
+PALETA: 4-6 colores hex con nombre (ej: "Terracota cálido #C76B4A")
+TIPOGRAFÍA: una fuente de display + una de texto, nombres reales de Google Fonts
+LAYOUT: una frase describiendo la estructura visual
+ELEMENTO FIRMA: el único elemento memorable que distingue esta pieza
+ARQUITECTURA: máximo 3 archivos/componentes con responsabilidad, props y estado clave
 
-REGLAS ESTRICTAS:
-- Devuelve SOLO el HTML — sin explicaciones, sin texto antes ni después
-- Empieza con <!DOCTYPE html> y termina con </html>
-- Inline styles en todo — sin CSS externo, sin clases Tailwind
-- Fondo oscuro por defecto (#0A0A0F o similar)
-- Tipografía: system-ui o monospace
-- Debe verse como un producto real, no un wireframe
-- Incluye datos de ejemplo realistas (nombres, precios, imágenes placeholder con background-color)
-- Máximo 150 líneas
-- Interactividad básica con JavaScript inline si aplica (hover states, clicks)
-- Sin frameworks externos — solo HTML + CSS inline + JS vanilla`,
+Reglas:
+- Evita por defecto estos tres looks (solo úsalos si el brief los pide explícitamente):
+  fondo crema con serif y acento terracota; fondo negro con acento ácido único;
+  diseño tipo periódico con reglas finas y columnas densas.
+- La paleta y tipografía deben nacer del tema real del brief.
+- Sé específico y concreto, sin explicaciones largas.`,
 
-  engineer: `Eres un engineer senior especialista en React y TypeScript.
-Dado un brief de producto con análisis de arquitectura y diseño, genera ÚNICAMENTE un prompt técnico detallado para un agente de código.
+  designer: `Eres un diseñador UI/UX senior. Recibes un BRIEF de producto y una DIRECCIÓN CREATIVA
+ya decidida (tipo, paleta, tipografía, layout, elemento firma) — síguela exactamente,
+no la reinterpretes ni la ignores.
 
-El prompt debe especificar:
-1. Qué componentes crear con nombres exactos
-2. Colores exactos en hex del diseño (extráelos del brief del designer)
-3. Estructura de datos y estado necesario
-4. Interacciones y animaciones específicas
-5. Que use inline styles, solo React, sin librerías externas
+Genera ÚNICAMENTE un HTML completo y funcional, de alta fidelidad visual.
+
+REGLAS:
+- Devuelve SOLO el HTML — sin explicaciones, sin texto antes ni después, sin bloques
+  de markdown (nada de \`\`\`).
+- Empieza con <!DOCTYPE html> y termina con </html>.
+- Puedes usar UN bloque <style> interno (nada de archivos externos ni Tailwind).
+  Inline styles solo donde tenga sentido puntual.
+- Importa las dos fuentes de Google Fonts de la dirección creativa vía <link>.
+- Usa exactamente la paleta de la dirección creativa — nada fuera de ella salvo
+  blancos/negros funcionales.
+- Si el brief implica fotos, usa https://picsum.photos/ANCHO/ALTO?random=N como
+  placeholder real en vez de solo rectángulos de color.
+- Sin tope artificial de líneas: el largo lo decide la complejidad real del brief.
+- Jerarquía visual real: tamaños, pesos y espaciados deliberados — no todo centrado
+  y del mismo tamaño.
+- Datos de ejemplo específicos al brief (nombres, precios, copy real, no "Lorem ipsum").
+- Interactividad con JavaScript inline cuando aplique.
+- Sin frameworks externos de JS — solo HTML + CSS + JS vanilla.`,
+
+  qa: `Eres un crítico de diseño senior. Recibes el BRIEF, la DIRECCIÓN CREATIVA y el HTML
+generado por el Designer. Evalúa con honestidad:
+1. ¿Sigue exactamente la paleta y tipografía indicadas?
+2. ¿Tiene jerarquía visual real o se ve genérico/plantilla/todo centrado?
+3. ¿El contenido es específico al brief o es relleno genérico?
+4. ¿Hay algún bug visible (HTML roto, bloques de markdown sin limpiar, texto sin estilo)?
+
+Si todo está bien, responde EXACTAMENTE: APROBADO
+Si algo falla, responde con máximo 4 líneas de instrucciones de revisión específicas
+y accionables, empezando con: REVISAR:`,
+
+  engineer: `Eres un engineer senior especialista en React y TypeScript. Recibes el BRIEF, la
+DIRECCIÓN CREATIVA, y el HTML aprobado del Designer — es la referencia visual exacta
+a replicar, no a reinventar.
+
+Adapta el enfoque según el TIPO de proyecto:
+- marketing-site / dashboard / functional-tool → componentes React funcionales,
+  useState/useEffect
+- game-2d → usa <canvas> y requestAnimationFrame con loop de juego explícito
+- media-app → usa Web Audio API o <audio>/<video> según corresponda
 
 FORMATO DE SALIDA — devuelve SOLO esto, sin explicaciones:
-"Crea un componente React TypeScript llamado [Nombre] que implemente [descripción detallada].
-Colores: fondo [hex], texto [hex], acentos [hex].
-Debe incluir: [lista de features específicas].
-Usa inline styles, React.useState, React.useEffect.
-Sin librerías externas. Completamente funcional e interactivo."
-
-Sustituye los corchetes con detalles específicos del brief. Una sola vez, sin repetir.`,
-
-  qa: `Eres un QA engineer senior. Dado un brief de producto, define en máximo 6 líneas:
-- 3 criterios de éxito verificables
-- 2 casos de error a manejar
-- 1 edge case crítico
-Sé específico y medible.`
+"Crea un proyecto React + TypeScript llamado [Nombre].
+Replica fielmente este diseño de referencia (no lo reinterpretes): [resumen
+estructural del HTML aprobado: secciones, layout, jerarquía].
+Paleta exacta: [hex de la dirección creativa].
+Tipografía: [fuentes].
+Componentes: [nombres exactos, props, estado].
+Funcionalidad: [features e interacciones específicas].
+Usa inline styles o styled-components, React.useState, React.useEffect.
+Sin librerías de UI externas salvo que el TIPO de proyecto lo requiera (canvas API
+para juegos, Web Audio API para apps de música).
+Completamente funcional e interactivo, fiel al HTML de referencia."`,
 }
+
+// ── Route ─────────────────────────────────────────────────────────────────────
 
 router.post('/analyze', async (req, res) => {
   try {
-    const { brief, role, architectResult, designerResult } = req.body
+    const { brief, role, architectResult, designerResult } = req.body as {
+      brief: string
+      role: string
+      architectResult?: string
+      designerResult?: string
+    }
+
     if (!brief || !role) return res.status(400).json({ error: 'brief y role requeridos' })
 
     const systemPrompt = SYSTEM_PROMPTS[role]
     if (!systemPrompt) return res.status(400).json({ error: 'role inválido' })
 
+    // ── Critic (qa): evaluate + optional 1 revision round ─────────────────────
+    if (role === 'qa') {
+      const criticPrompt = `BRIEF: ${brief}\n\nDIRECCIÓN CREATIVA:\n${architectResult ?? ''}\n\nHTML DEL DESIGNER:\n${designerResult ?? ''}`
+      const criticText = await callAI('analyze', criticPrompt, systemPrompt)
+
+      if (criticText.trim().startsWith('REVISAR:')) {
+        const revisionPrompt = `BRIEF: ${brief}\n\nDIRECCIÓN CREATIVA:\n${architectResult ?? ''}\n\nNOTAS DE REVISIÓN (correcciones obligatorias):\n${criticText}`
+        const revisedRaw  = await callAI('html', revisionPrompt, SYSTEM_PROMPTS['designer'])
+        const revisedHtml = sanitizeDesignerHtml(revisedRaw)
+        return res.json({ result: criticText, role, revisedHtml })
+      }
+
+      return res.json({ result: criticText, role })
+    }
+
+    // ── All other roles ────────────────────────────────────────────────────────
     let userPrompt: string
     let task: 'html' | 'analyze'
 
-    if (role === 'engineer') {
-      userPrompt = `BRIEF: ${brief}\n\nARQUITECTURA: ${architectResult ?? ''}\n\nDISEÑO: ${designerResult ?? ''}`
-      task = 'analyze'
-    } else if (role === 'designer') {
-      userPrompt = `BRIEF: ${brief}`
+    if (role === 'designer') {
+      userPrompt = `BRIEF: ${brief}\n\nDIRECCIÓN CREATIVA:\n${architectResult ?? ''}`
       task = 'html'
+    } else if (role === 'engineer') {
+      userPrompt = `BRIEF: ${brief}\n\nDIRECCIÓN CREATIVA:\n${architectResult ?? ''}\n\nHTML APROBADO DEL DESIGNER:\n${designerResult ?? ''}`
+      task = 'analyze'
     } else {
       userPrompt = `BRIEF: ${brief}`
       task = 'analyze'
     }
 
-    const text = await callAI(task, userPrompt, systemPrompt)
-    res.json({ result: text, role })
+    const raw    = await callAI(task, userPrompt, systemPrompt)
+    const result = role === 'designer' ? sanitizeDesignerHtml(raw) : raw
+    res.json({ result, role })
   } catch (err) {
     console.error('studio/analyze error:', err)
     res.status(500).json({ error: 'Error en análisis' })
