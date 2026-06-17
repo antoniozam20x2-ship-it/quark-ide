@@ -121,10 +121,11 @@ router.post('/analyze', async (req, res) => {
       const criticText = await callAI('analyze', criticPrompt, systemPrompt)
 
       if (criticText.trim().startsWith('REVISAR:')) {
-        const revisionPrompt = `BRIEF: ${brief}\n\nDIRECCIÓN CREATIVA:\n${architectResult ?? ''}\n\nNOTAS DE REVISIÓN (correcciones obligatorias):\n${criticText}`
+        const revisionPrompt = `BRIEF: ${brief}\n\nDIRECCIÓN CREATIVA:\n${architectResult ?? ''}\n\nHTML ORIGINAL (referencia base, mejóralo sin partir de cero):\n${designerResult ?? ''}\n\nNOTAS DE REVISIÓN (correcciones obligatorias):\n${criticText}`
         const revisedRaw  = await callAI('html', revisionPrompt, SYSTEM_PROMPTS['designer'])
         const revisedHtml = sanitizeDesignerHtml(revisedRaw)
-        return res.json({ result: criticText, role, revisedHtml })
+        const useRevised  = revisedHtml.length > (designerResult ?? '').length * 0.5
+        return res.json({ result: criticText, role, revisedHtml: useRevised ? revisedHtml : designerResult })
       }
 
       return res.json({ result: criticText, role })
