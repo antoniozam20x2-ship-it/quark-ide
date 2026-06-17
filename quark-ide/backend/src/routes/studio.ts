@@ -49,7 +49,9 @@ Usa tu criterio profesional para decidir qué tan complejo debe ser según el br
 
 CRÍTICO — IMÁGENES: El entorno donde se renderiza bloquea TODOS los recursos externos sin excepción. Nunca uses <img>, <video>, <source> ni ninguna etiqueta que cargue una URL externa — aparecerán como cuadros rotos. Para representar imágenes usa ÚNICAMENTE:
 1. Un <div> con background: linear-gradient() usando colores de la paleta del brief.
-2. Un <svg> inline con paths simples que represente visualmente el tema (un taco, una copa, un edificio, etc.).`,
+2. Un <svg> inline con paths simples que represente visualmente el tema (un taco, una copa, un edificio, etc.).
+
+Para imágenes de productos, galerías o cualquier sección visual, usa Lorem Picsum con seed descriptivo: <img src="https://picsum.photos/seed/[palabra]/400/300" style="width:100%;height:100%;object-fit:cover">. Ejemplos: seed/macbook, seed/sneakers, seed/food, seed/restaurant, seed/fashion. Siempre incluye object-fit:cover en el style.`,
 
   qa: `Eres un crítico de diseño senior. Recibes el BRIEF, la DIRECCIÓN CREATIVA y el HTML
 generado por el Designer. Evalúa con honestidad:
