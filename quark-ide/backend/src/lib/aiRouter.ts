@@ -40,9 +40,11 @@ export async function callAI(
     case 'html':
     case 'designer':
       return tryProviders([
+        () => callAnthropic(prompt, systemPrompt),
         () => callGitHubModels(prompt, systemPrompt, 'gpt-4o'),
-        () => callGitHubModels(prompt, systemPrompt, 'gpt-4o'),
-        () => callOpenRouter(prompt, systemPrompt),
+        () => callOpenRouter(prompt, systemPrompt, 'google/gemma-3-27b-it:free'),
+        () => callOpenRouter(prompt, systemPrompt, 'meta-llama/llama-3.3-70b-instruct:free'),
+        () => callOpenRouter(prompt, systemPrompt, 'mistralai/mistral-small-3.2-24b-instruct:free'),
       ]);
 
     // ── Fix de código: Gemini → Groq → DeepSeek ──
@@ -115,7 +117,29 @@ async function tryProviders(providers: (() => Promise<string>)[]): Promise<strin
   throw new Error(`Todos los proveedores fallaron:\n${errors.join('\n')}`);
 }
 
-async function callOpenRouter(prompt: string, system?: string): Promise<string> {
+async function callAnthropic(prompt: string, system?: string): Promise<string> {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) throw new Error('ANTHROPIC_API_KEY not set');
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-5',
+      max_tokens: 8192,
+      system: system ?? '',
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+  const data = await res.json() as any;
+  if (!res.ok) throw Object.assign(new Error(data?.error?.message ?? `Anthropic ${res.status}`), { status: res.status });
+  return data.content?.[0]?.text ?? '';
+}
+
+async function callOpenRouter(prompt: string, system?: string, model = 'google/gemma-3-27b-it:free'): Promise<string> {
   if (!OPENROUTER_KEYS.length) throw new Error('No OPENROUTER keys configured');
   const key = OPENROUTER_KEYS[openRouterIndex % OPENROUTER_KEYS.length];
   openRouterIndex++;
@@ -128,7 +152,7 @@ async function callOpenRouter(prompt: string, system?: string): Promise<string> 
       'X-Title': 'QUARK IDE',
     },
     body: JSON.stringify({
-      model: 'google/gemma-3-27b-it:free',
+      model,
       max_tokens: 4096,
       messages: [
         ...(system ? [{ role: 'system', content: system }] : []),
