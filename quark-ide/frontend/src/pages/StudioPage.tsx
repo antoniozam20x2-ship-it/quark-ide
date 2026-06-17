@@ -319,7 +319,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
                     {agent.content}
                   </div>
 
-                ) : agent.role !== 'qa' && agent.role !== 'designer' && expandedCards[agent.role] ? (
+                ) : agent.role !== 'qa' && expandedCards[agent.role] ? (
                   /* Architect + Engineer — expandibles */
                   <div style={{ fontFamily: mono, fontSize: 11, color: '#94A3B8', lineHeight: 1.7, whiteSpace: 'pre-wrap', paddingTop: 4 }}>
                     {agent.content}
