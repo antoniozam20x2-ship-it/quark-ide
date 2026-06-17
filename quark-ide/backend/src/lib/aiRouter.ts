@@ -33,10 +33,10 @@ export async function callAI(
     case 'html':
     case 'designer':
       return tryProviders([
-        () => callOpenRouter(prompt, systemPrompt),
-        () => callOpenRouter(prompt, systemPrompt),
-        () => callOpenRouter(prompt, systemPrompt),
+        () => callGitHubModels(prompt, systemPrompt, 'claude-sonnet-4-5'),
         () => callGitHubModels(prompt, systemPrompt, 'gpt-4o'),
+        () => callOpenRouter(prompt, systemPrompt),
+        () => callOpenRouter(prompt, systemPrompt),
       ]);
 
     // ── Fix de código: Gemini → Groq → DeepSeek ──
