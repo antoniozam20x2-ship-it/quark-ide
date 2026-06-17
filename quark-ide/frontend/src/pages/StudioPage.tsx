@@ -52,6 +52,9 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
   const [fullscreenPreview, setFullscreenPreview] = useState(false)
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({})
   const [fastMode, setFastMode] = useState(false)
+  const [showImport, setShowImport] = useState(false)
+  const [importHtml, setImportHtml] = useState('')
+  const [importPreview, setImportPreview] = useState('')
 
   useEffect(() => {
     if (initialBrief) {
@@ -188,10 +191,96 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
         <span style={{ fontSize: 16 }}>🎨</span>
         <span style={{ fontFamily: mono, fontSize: 12, fontWeight: 700, color: '#7C3AED', letterSpacing: '0.08em' }}>QUARK STUDIO</span>
         <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>// design → build pipeline</span>
+        <button
+          onClick={() => { setShowImport(i => !i); setImportPreview('') }}
+          style={{
+            marginLeft: 'auto',
+            padding: '5px 11px',
+            background: showImport ? '#06B6D422' : 'transparent',
+            border: `1px solid ${showImport ? '#06B6D4' : '#1E1E2E'}`,
+            borderRadius: 7,
+            color: showImport ? '#06B6D4' : '#64748B',
+            fontFamily: mono, fontSize: 10, fontWeight: 700,
+            cursor: 'pointer',
+          }}
+        >
+          📥 Importar
+        </button>
       </div>
 
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+        {/* Import HTML panel */}
+        {showImport && (
+          <div style={{ background: '#12121A', border: '1px solid #06B6D444', borderLeft: '3px solid #06B6D4', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <span style={{ fontFamily: mono, fontSize: 10, color: '#06B6D4', fontWeight: 700 }}>📥 IMPORTAR HTML</span>
+            <textarea
+              value={importHtml}
+              onChange={e => setImportHtml(e.target.value)}
+              placeholder="Pega tu HTML aquí..."
+              rows={6}
+              style={{
+                background: '#0A0A0F', border: '1px solid #1E1E2E', borderRadius: 8,
+                color: '#E2E8F0', fontFamily: mono, fontSize: 11,
+                padding: 10, resize: 'vertical', lineHeight: 1.5, outline: 'none',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button
+                onClick={() => setImportPreview(importHtml.trim())}
+                disabled={!importHtml.trim()}
+                style={{
+                  padding: '7px 16px',
+                  background: importHtml.trim() ? 'linear-gradient(135deg, #06B6D4, #0891B2)' : '#1E1E2E',
+                  border: 'none', borderRadius: 8,
+                  color: importHtml.trim() ? '#fff' : '#64748B',
+                  fontFamily: mono, fontSize: 11, fontWeight: 700,
+                  cursor: importHtml.trim() ? 'pointer' : 'not-allowed',
+                }}
+              >
+                👁 Vista Previa
+              </button>
+              {importPreview && (
+                <button
+                  onClick={() => {
+                    const blob = new Blob([importPreview], { type: 'text/html' })
+                    window.open(URL.createObjectURL(blob), '_blank')
+                  }}
+                  style={{
+                    padding: '7px 14px', background: 'transparent',
+                    border: '1px solid #1E1E2E', borderRadius: 8,
+                    color: '#94A3B8', fontFamily: mono, fontSize: 10, cursor: 'pointer',
+                  }}
+                >
+                  ↗ abrir
+                </button>
+              )}
+              {importPreview && (
+                <button
+                  onClick={() => setImportPreview('')}
+                  style={{
+                    padding: '7px 10px', background: 'transparent',
+                    border: 'none', color: '#64748B', fontFamily: mono, fontSize: 10, cursor: 'pointer',
+                  }}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+            {importPreview && (
+              <div style={{ position: 'relative' }}>
+                <div style={{ fontFamily: mono, fontSize: 10, color: '#64748B', marginBottom: 6 }}>// preview</div>
+                <iframe
+                  srcDoc={importPreview}
+                  style={{ width: '100%', height: 480, border: '1px solid #1E1E2E', borderRadius: 8, background: '#fff' }}
+                  sandbox="allow-scripts allow-same-origin"
+                  title="Import Preview"
+                />
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Input */}
         <div style={{ background: '#12121A', border: '1px solid #1E1E2E', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
