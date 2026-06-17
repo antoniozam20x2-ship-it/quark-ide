@@ -33,9 +33,8 @@ export async function callAI(
     case 'html':
     case 'designer':
       return tryProviders([
-        () => callGitHubModels(prompt, systemPrompt, 'claude-sonnet-4-5'),
         () => callGitHubModels(prompt, systemPrompt, 'gpt-4o'),
-        () => callOpenRouter(prompt, systemPrompt),
+        () => callGitHubModels(prompt, systemPrompt, 'gpt-4o'),
         () => callOpenRouter(prompt, systemPrompt),
       ]);
 
