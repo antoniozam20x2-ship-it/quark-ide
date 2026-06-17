@@ -23,7 +23,9 @@ const imageCache = new Map<string, string>()
 async function resolveImagePlaceholders(html: string): Promise<string> {
   const key = process.env.UNSPLASH_ACCESS_KEY
   console.log('[Unsplash] key presente:', !!key)
-  console.log('[Unsplash] slots:', [...html.matchAll(/<div class="img-slot"/g)].length)
+  console.log('[Unsplash] slots encontrados:', [...html.matchAll(/<div class="img-slot"/g)].length)
+  console.log('[Unsplash] img tags encontrados:', [...html.matchAll(/<img /g)].length)
+  console.log('[Unsplash] primeros 500 chars del HTML:', html.slice(0, 500))
   const slotRegex = /<div class="img-slot" data-query="([^"]+)"([^>]*)><\/div>/g
   const matches = [...html.matchAll(slotRegex)]
   if (matches.length === 0) return html
