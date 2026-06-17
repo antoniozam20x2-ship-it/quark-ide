@@ -15,6 +15,7 @@ const GROQ_KEYS = [
 const GEMINI_KEYS = [
   process.env.GEMINI_API_KEY,
   process.env.GEMINI_API_KEY_2,
+  process.env.GEMINI_API_KEY_3,
 ].filter(Boolean) as string[];
 
 let openRouterIndex = 0;
@@ -28,7 +29,7 @@ export async function callAI(
 ): Promise<string> {
   switch (task) {
 
-    // ── Designer exclusivo: OpenRouter (Claude) → GitHub fallback ──
+    // ── Designer exclusivo: OpenRouter (Gemma free) → GitHub fallback ──
     case 'html':
     case 'designer':
       return tryProviders([
@@ -38,7 +39,7 @@ export async function callAI(
         () => callGitHubModels(prompt, systemPrompt, 'gpt-4o'),
       ]);
 
-    // ── Fix de código: DeepSeek → Groq → Gemini ──
+    // ── Fix de código: Gemini → Groq → DeepSeek ──
     case 'fix': {
       const lines = prompt.split('\n');
       const errorLineMatch = systemPrompt?.match(/línea (\d+)/);
@@ -58,27 +59,35 @@ export async function callAI(
       }
 
       return tryProviders([
-        () => callDeepSeek(optimizedPrompt, systemPrompt),
-        () => callGroq(optimizedPrompt, systemPrompt),
         () => callGemini(optimizedPrompt, systemPrompt),
+        () => callGemini(optimizedPrompt, systemPrompt),
+        () => callGroq(optimizedPrompt, systemPrompt),
+        () => callGroq(optimizedPrompt, systemPrompt),
+        () => callGroq(optimizedPrompt, systemPrompt),
+        () => callDeepSeek(optimizedPrompt, systemPrompt),
       ]);
     }
 
-    // ── Generación general: Gemini 1 → Groq → Gemini 2 ──
+    // ── Generación general: Gemini → Groq → DeepSeek ──
     case 'generate':
       return tryProviders([
         () => callGemini(prompt, systemPrompt),
-        () => callGroq(prompt, systemPrompt),
         () => callGemini(prompt, systemPrompt),
+        () => callGroq(prompt, systemPrompt),
+        () => callGroq(prompt, systemPrompt),
+        () => callGroq(prompt, systemPrompt),
+        () => callDeepSeek(prompt, systemPrompt),
       ]);
 
-    // ── Análisis y War Room: Groq → Gemini 1 → Gemini 2 → DeepSeek ──
+    // ── Análisis y War Room: Gemini → Groq → DeepSeek ──
     case 'analyze':
     case 'warroom':
       return tryProviders([
+        () => callGemini(prompt, systemPrompt),
+        () => callGemini(prompt, systemPrompt),
         () => callGroq(prompt, systemPrompt),
-        () => callGemini(prompt, systemPrompt),
-        () => callGemini(prompt, systemPrompt),
+        () => callGroq(prompt, systemPrompt),
+        () => callGroq(prompt, systemPrompt),
         () => callDeepSeek(prompt, systemPrompt),
       ]);
   }
@@ -113,8 +122,8 @@ async function callOpenRouter(prompt: string, system?: string): Promise<string> 
       'X-Title': 'QUARK IDE',
     },
     body: JSON.stringify({
-      model: 'anthropic/claude-sonnet-4-6',
-      max_tokens: 8192,
+      model: 'google/gemma-3-27b-it:free',
+      max_tokens: 4096,
       messages: [
         ...(system ? [{ role: 'system', content: system }] : []),
         { role: 'user', content: prompt },
