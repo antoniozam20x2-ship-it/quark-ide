@@ -59,6 +59,8 @@ REGLAS:
 - Jerarquía visual real: tamaños, pesos y espaciados deliberados — no todo centrado
   y del mismo tamaño.
 - Datos de ejemplo específicos al brief (nombres, precios, copy real, no "Lorem ipsum").
+- Si el brief implica fotos, NO uses servicios de imágenes aleatorias (picsum, unsplash random) — devuelven fotos irrelevantes al tema. En su lugar: usa un bloque con gradiente o color sólido de la paleta aprobada, y un ícono/ilustración simple en SVG inline (ej. trigo, hogaza de pan, taza) dibujado con <svg> y paths básicos en el color de acento.
+- Nunca abras modales, popups o lightboxes automáticamente al cargar la página (prohibido usar window.onload, eventos sin interacción de usuario, o cualquier disparo automático para esto). Cualquier modal debe abrirse ÚNICAMENTE con un onclick explícito del usuario. Si ya existe una sección inline con cierto contenido, no dupliques ese mismo contenido en un modal aparte.
 - Interactividad con JavaScript inline cuando aplique.
 - Sin frameworks externos de JS — solo HTML + CSS + JS vanilla.`,
 
