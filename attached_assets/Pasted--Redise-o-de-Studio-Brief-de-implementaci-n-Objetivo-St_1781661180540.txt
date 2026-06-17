@@ -1,0 +1,191 @@
+# Rediseño de Studio — Brief de implementación
+
+## Objetivo
+
+Studio hoy produce un mockup HTML genérico (fondo oscuro forzado, monospace, inline styles, 150 líneas) y un prompt huérfano que nadie consume. El rediseño:
+
+1. Hace que el diseño se adapte al dominio real del brief (panadería ≠ dashboard ≠ juego).
+1. Añade una ronda de autocrítica antes de mostrar el resultado.
+1. Deja preparado el spec final del Engineer para que, cuando se construya el paso de “Construir”, empuje el proyecto a un **repo nuevo e independiente** — Studio nunca debe tocar `/api/agent/generate` (ese endpoint es exclusivo del flujo Board/War Room → Quark Agent para proyectos existentes como Signal OS; mezclar los dos flujos fue justo lo que generó confusión antes).
+
+Pipeline nuevo: **Architect (Director Creativo) → Designer → Critic → [revisión opcional ×1] → Engineer → (futuro) Build a repo nuevo**
+
+Nota de alcance: este brief cubre los pasos 1-5 (la calidad del diseño y la lógica interna de Studio). El paso de “construir a repo nuevo” es una pieza separada (crear repo vía API de GitHub, hacer push del código generado, conectar deploy) que conviene diseñar en su propia ronda cuando quieras — no se mezcla aquí para no repetir el problema de enredar los dos sistemas.
+
+-----
+
+## 1. Bug fix inmediato (independiente del resto)
+
+En `quark-ide/backend/src/routes/studio.ts`, justo después de recibir la respuesta del Designer y antes de guardarla/devolverla, aplicar:
+
+```ts
+function sanitizeDesignerHtml(raw: string): string {
+  let html = raw.trim();
+  // Quita fences de markdown si el modelo los puso
+  html = html.replace(/^```(?:html)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  // Si hay texto antes/después del HTML real, lo recorta
+  const start = html.indexOf('<!DOCTYPE');
+  const end = html.lastIndexOf('</html>');
+  if (start !== -1 && end !== -1) {
+    html = html.slice(start, end + '</html>'.length);
+  }
+  return html;
+}
+```
+
+Aplicar esta función al output crudo del Designer en **ambos** lugares donde se usa: antes de mandarlo al frontend para el iframe, y antes de pasarlo como referencia al Engineer en el paso 5.
+
+-----
+
+## 2. Nuevo prompt: Architect → “Director Creativo”
+
+Reemplazar el system prompt actual de `role === 'architect'`:
+
+```
+Eres un director creativo y arquitecto de producto senior. Dado un brief de producto,
+clasifica el tipo de proyecto y define una dirección de diseño concreta y específica
+a ESTE brief — nunca un default genérico que usarías para cualquier brief similar.
+
+Devuelve en este formato exacto, máximo 12 líneas:
+TIPO: [marketing-site | functional-tool | dashboard | game-2d | media-app]
+PALETA: 4-6 colores hex con nombre (ej: "Terracota cálido #C76B4A")
+TIPOGRAFÍA: una fuente de display + una de texto, nombres reales de Google Fonts
+LAYOUT: una frase describiendo la estructura visual
+ELEMENTO FIRMA: el único elemento memorable que distingue esta pieza
+ARQUITECTURA: máximo 3 archivos/componentes con responsabilidad, props y estado clave
+
+Reglas:
+- Evita por defecto estos tres looks (solo úsalos si el brief los pide explícitamente):
+  fondo crema con serif y acento terracota; fondo negro con acento ácido único;
+  diseño tipo periódico con reglas finas y columnas densas.
+- La paleta y tipografía deben nacer del tema real del brief.
+- Sé específico y concreto, sin explicaciones largas.
+```
+
+-----
+
+## 3. Nuevo prompt: Designer
+
+Reemplazar el system prompt actual de `role === 'designer'`. Ahora **recibe también** el output del Architect (igual que ya haces con el Engineer):
+
+```ts
+if (role === 'designer') {
+  body.architectResult = results['architect'] ?? '';
+}
+```
+
+Nuevo system prompt:
+
+```
+Eres un diseñador UI/UX senior. Recibes un BRIEF de producto y una DIRECCIÓN CREATIVA
+ya decidida (tipo, paleta, tipografía, layout, elemento firma) — síguela exactamente,
+no la reinterpretes ni la ignores.
+
+Genera ÚNICAMENTE un HTML completo y funcional, de alta fidelidad visual.
+
+REGLAS:
+- Devuelve SOLO el HTML — sin explicaciones, sin texto antes ni después, sin bloques
+  de markdown (nada de ```).
+- Empieza con <!DOCTYPE html> y termina con </html>.
+- Puedes usar UN bloque <style> interno (nada de archivos externos ni Tailwind).
+  Inline styles solo donde tenga sentido puntual.
+- Importa las dos fuentes de Google Fonts de la dirección creativa vía <link>.
+- Usa exactamente la paleta de la dirección creativa — nada fuera de ella salvo
+  blancos/negros funcionales.
+- Si el brief implica fotos, usa https://picsum.photos/ANCHO/ALTO?random=N como
+  placeholder real en vez de solo rectángulos de color.
+- Sin tope artificial de líneas: el largo lo decide la complejidad real del brief.
+- Jerarquía visual real: tamaños, pesos y espaciados deliberados — no todo centrado
+  y del mismo tamaño.
+- Datos de ejemplo específicos al brief (nombres, precios, copy real, no "Lorem ipsum").
+- Interactividad con JavaScript inline cuando aplique.
+- Sin frameworks externos de JS — solo HTML + CSS + JS vanilla.
+```
+
+-----
+
+## 4. Nuevo paso: Critic (reemplaza el QA actual)
+
+El QA actual escribe criterios de éxito que nunca se usan. Cambiarlo por un crítico real que evalúa el HTML generado y puede disparar una revisión.
+
+```
+Eres un crítico de diseño senior. Recibes el BRIEF, la DIRECCIÓN CREATIVA y el HTML
+generado por el Designer. Evalúa con honestidad:
+1. ¿Sigue exactamente la paleta y tipografía indicadas?
+2. ¿Tiene jerarquía visual real o se ve genérico/plantilla/todo centrado?
+3. ¿El contenido es específico al brief o es relleno genérico?
+4. ¿Hay algún bug visible (HTML roto, bloques de markdown sin limpiar, texto sin estilo)?
+
+Si todo está bien, responde EXACTAMENTE: APROBADO
+Si algo falla, responde con máximo 4 líneas de instrucciones de revisión específicas
+y accionables, empezando con: REVISAR:
+```
+
+Lógica en `studio.ts` / `StudioPage.tsx`:
+
+```ts
+const criticRes = await callAI({ role: 'qa', brief, architectResult, designerResult: cleanHtml });
+
+let finalHtml = cleanHtml;
+if (criticRes.trim().startsWith('REVISAR:')) {
+  const revised = await callAI({
+    role: 'designer',
+    brief,
+    architectResult,
+    revisionNotes: criticRes, // se añade al prompt del designer como contexto extra
+  });
+  finalHtml = sanitizeDesignerHtml(revised);
+}
+// máximo 1 ronda de revisión — no looping infinito
+```
+
+-----
+
+## 5. Nuevo prompt: Engineer (ahora alimenta el build real)
+
+El Engineer ya no genera un prompt huérfano: genera el spec técnico final, completo y autocontenido, listo para usarse cuando se construya el paso de “repo nuevo”. Recibe el HTML **ya aprobado** (post-crítico) como referencia visual literal.
+
+```
+Eres un engineer senior especialista en React y TypeScript. Recibes el BRIEF, la
+DIRECCIÓN CREATIVA, y el HTML aprobado del Designer — es la referencia visual exacta
+a replicar, no a reinventar.
+
+Adapta el enfoque según el TIPO de proyecto:
+- marketing-site / dashboard / functional-tool → componentes React funcionales,
+  useState/useEffect
+- game-2d → usa <canvas> y requestAnimationFrame con loop de juego explícito
+- media-app → usa Web Audio API o <audio>/<video> según corresponda
+
+FORMATO DE SALIDA — devuelve SOLO esto, sin explicaciones:
+"Crea un proyecto React + TypeScript llamado [Nombre].
+Replica fielmente este diseño de referencia (no lo reinterpretes): [resumen
+estructural del HTML aprobado: secciones, layout, jerarquía].
+Paleta exacta: [hex de la dirección creativa].
+Tipografía: [fuentes].
+Componentes: [nombres exactos, props, estado].
+Funcionalidad: [features e interacciones específicas].
+Usa inline styles o styled-components, React.useState, React.useEffect.
+Sin librerías de UI externas salvo que el TIPO de proyecto lo requiera (canvas API
+para juegos, Web Audio API para apps de música).
+Completamente funcional e interactivo, fiel al HTML de referencia."
+```
+
+-----
+
+## 6. Sobre el botón “Construir” (fuera de alcance de este brief)
+
+Importante: el botón de construir de Studio **no debe** llamar a `/api/agent/generate`. Ese endpoint SSE pertenece exclusivamente al flujo Board/War Room → Quark Agent, que existe para modificar proyectos ya existentes (Signal OS, Snipe OS) con commit a GitHub/Railway. Mezclar ambos flujos fue justo lo que generó confusión antes — Studio y Quark Agent quedan deliberadamente desacoplados.
+
+Si más adelante quieres que Studio construya el proyecto real, el destino correcto es un **repo nuevo e independiente** (crear repo vía API de GitHub, push del código generado, deploy propio). Es una pieza de trabajo separada — vale la pena diseñarla en su propia ronda, con su propio brief, en vez de adjuntarla aquí. Por ahora, el spec del Engineer (paso 5) queda guardado en `buildPrompt` listo para ese momento, sin que nada lo dispare todavía.
+
+-----
+
+## Resumen de lo que cambia y por qué
+
+|Antes                                                |Ahora                                                                |Por qué                                                             |
+|-----------------------------------------------------|---------------------------------------------------------------------|--------------------------------------------------------------------|
+|Architect: solo arquitectura de archivos             |Director Creativo: clasifica tipo + define paleta/tipografía/firma   |El diseño deja de ser genérico por defecto                          |
+|Designer: inline-only, dark forzado, 150 líneas      |Designer: `<style>` permitido, paleta del brief, sin tope arbitrario |Quita el techo de calidad artificial                                |
+|QA: criterios de texto sin uso                       |Critic: evalúa el HTML real y dispara 1 revisión si falla            |Convierte la crítica en mejora real, no en texto decorativo         |
+|Engineer: prompt huérfano para “un agente” indefinido|Engineer: spec final autocontenido, con HTML aprobado como referencia|Queda listo para un futuro build a repo nuevo, sin tocar Quark Agent|
+|Botón “Construir” eliminado                          |Sigue sin botón de build por ahora (a propósito)                     |Evita repetir el enredo entre Studio y Quark Agent; se diseña aparte|

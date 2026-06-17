@@ -9,7 +9,7 @@ interface Props {
 }
 
 interface AgentResult {
-  role: 'architect' | 'designer' | 'engineer' | 'qa'
+  role: 'architect' | 'designer' | 'qa' | 'engineer'
   label: string
   icon: string
   color: string
@@ -18,13 +18,13 @@ interface AgentResult {
 }
 
 const AGENTS: AgentResult[] = [
-  { role: 'architect', label: 'Architect', icon: '🏗', color: '#7C3AED', content: '', status: 'idle' },
-  { role: 'designer',  label: 'Designer',  icon: '🎨', color: '#06B6D4', content: '', status: 'idle' },
-  { role: 'engineer',  label: 'Engineer',  icon: '⚙️', color: '#10B981', content: '', status: 'idle' },
-  { role: 'qa',        label: 'QA',        icon: '🔍', color: '#F59E0B', content: '', status: 'idle' },
+  { role: 'architect', label: 'Director Creativo', icon: '🎭', color: '#7C3AED', content: '', status: 'idle' },
+  { role: 'designer',  label: 'Designer',          icon: '🎨', color: '#06B6D4', content: '', status: 'idle' },
+  { role: 'qa',        label: 'Critic',            icon: '🔍', color: '#F59E0B', content: '', status: 'idle' },
+  { role: 'engineer',  label: 'Engineer',          icon: '⚙️', color: '#10B981', content: '', status: 'idle' },
 ]
 
-export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgent }: Props) {
+export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
   const [brief, setBrief] = useState('')
   const [agents, setAgents] = useState<AgentResult[]>(AGENTS)
   const [running, setRunning] = useState(false)
@@ -48,36 +48,81 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
   async function runStudio(text?: string) {
     const input = (text ?? brief).trim()
     if (!input || running) return
+
     setRunning(true)
     setEngineeredPrompt('')
     setDesignPrototype('')
     setAgents(AGENTS.map(a => ({ ...a, content: '', status: 'idle' })))
 
-    const roles = ['architect', 'designer', 'engineer', 'qa']
-    const results: Record<string, string> = {}
+    let architectResult = ''
+    let finalHtml = ''
 
-    for (const role of roles) {
-      updateAgent(role, { status: 'thinking' })
-      try {
-        const body: Record<string, string> = { brief: input, role }
-        if (role === 'engineer') {
-          body.architectResult = results['architect'] ?? ''
-          body.designerResult  = results['designer']  ?? ''
-        }
-        const res = await fetch(`${API_BASE}/api/studio/analyze`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        })
-        const data = await res.json()
-        results[role] = data.result ?? ''
-        updateAgent(role, { content: data.result, status: 'done' })
-        if (role === 'designer') setDesignPrototype(data.result ?? '')
-        if (role === 'engineer') setEngineeredPrompt(data.result ?? '')
-      } catch {
-        updateAgent(role, { status: 'error', content: 'Error al analizar' })
-      }
+    // ── Step 1: Architect (Director Creativo) ──────────────────────────────────
+    updateAgent('architect', { status: 'thinking' })
+    try {
+      const res = await fetch(`${API_BASE}/api/studio/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brief: input, role: 'architect' }),
+      })
+      const data = await res.json()
+      architectResult = data.result ?? ''
+      updateAgent('architect', { content: architectResult, status: 'done' })
+    } catch {
+      updateAgent('architect', { status: 'error', content: 'Error al analizar' })
     }
+
+    // ── Step 2: Designer ───────────────────────────────────────────────────────
+    updateAgent('designer', { status: 'thinking' })
+    try {
+      const res = await fetch(`${API_BASE}/api/studio/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brief: input, role: 'designer', architectResult }),
+      })
+      const data = await res.json()
+      finalHtml = data.result ?? ''
+      setDesignPrototype(finalHtml)
+      updateAgent('designer', { content: finalHtml, status: 'done' })
+    } catch {
+      updateAgent('designer', { status: 'error', content: 'Error al generar prototipo' })
+    }
+
+    // ── Step 3: Critic ─────────────────────────────────────────────────────────
+    updateAgent('qa', { status: 'thinking' })
+    try {
+      const res = await fetch(`${API_BASE}/api/studio/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brief: input, role: 'qa', architectResult, designerResult: finalHtml }),
+      })
+      const data = await res.json()
+      const criticNote = data.result ?? ''
+      if (data.revisedHtml) {
+        finalHtml = data.revisedHtml
+        setDesignPrototype(finalHtml)
+      }
+      updateAgent('qa', { content: criticNote, status: 'done' })
+    } catch {
+      updateAgent('qa', { status: 'error', content: 'Error en crítica' })
+    }
+
+    // ── Step 4: Engineer ───────────────────────────────────────────────────────
+    updateAgent('engineer', { status: 'thinking' })
+    try {
+      const res = await fetch(`${API_BASE}/api/studio/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brief: input, role: 'engineer', architectResult, designerResult: finalHtml }),
+      })
+      const data = await res.json()
+      const spec = data.result ?? ''
+      setEngineeredPrompt(spec)
+      updateAgent('engineer', { content: spec, status: 'done' })
+    } catch {
+      updateAgent('engineer', { status: 'error', content: 'Error al generar spec' })
+    }
+
     setRunning(false)
   }
 
@@ -109,29 +154,53 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
           <button
             onClick={() => runStudio()}
             disabled={running || !brief.trim()}
-            style={{ alignSelf: 'flex-end', padding: '8px 16px', background: running ? '#1E1E2E' : 'linear-gradient(135deg, #7C3AED, #6D28D9)', border: 'none', borderRadius: 8, color: running ? '#64748B' : '#fff', fontFamily: mono, fontSize: 11, fontWeight: 700, cursor: running ? 'not-allowed' : 'pointer' }}
+            style={{
+              alignSelf: 'flex-end', padding: '8px 16px',
+              background: running ? '#1E1E2E' : 'linear-gradient(135deg, #7C3AED, #6D28D9)',
+              border: 'none', borderRadius: 8,
+              color: running ? '#64748B' : '#fff',
+              fontFamily: mono, fontSize: 11, fontWeight: 700,
+              cursor: running ? 'not-allowed' : 'pointer',
+            }}
           >
             {running ? '⏳ Analizando...' : '⚡ Analizar'}
           </button>
         </div>
 
-        {/* Agents */}
+        {/* Agent cards */}
         {agents.map(agent => agent.status !== 'idle' && (
-          <div key={agent.role} style={{ background: '#12121A', border: `1px solid ${agent.status === 'done' ? agent.color + '44' : '#1E1E2E'}`, borderLeft: `3px solid ${agent.color}`, borderRadius: 12, overflow: 'hidden' }}>
+          <div
+            key={agent.role}
+            style={{
+              background: '#12121A',
+              border: `1px solid ${agent.status === 'done' ? agent.color + '44' : '#1E1E2E'}`,
+              borderLeft: `3px solid ${agent.color}`,
+              borderRadius: 12,
+              overflow: 'hidden',
+            }}
+          >
+            {/* Card header */}
             <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span>{agent.icon}</span>
               <span style={{ fontFamily: mono, fontSize: 11, fontWeight: 700, color: agent.color }}>{agent.label}</span>
-              {agent.status === 'thinking' && <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>analizando...</span>}
-              {agent.status === 'done' && <span style={{ fontSize: 10, color: agent.color }}>✓</span>}
+              {agent.status === 'thinking' && (
+                <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>analizando...</span>
+              )}
+              {agent.status === 'done' && (
+                <span style={{ fontSize: 10, color: agent.color }}>✓</span>
+              )}
             </div>
+
+            {/* Card body */}
             {(agent.status === 'done' || agent.status === 'error') && agent.content && (
               <div style={{ padding: '0 12px 12px' }}>
+
+                {/* Designer — iframe preview */}
                 {agent.role === 'designer' && designPrototype ? (
                   <div>
                     <div style={{ fontFamily: mono, fontSize: 10, color: '#64748B', marginBottom: 8 }}>
                       // prototipo visual
                     </div>
-                    {/* Wrapper clickeable — abre fullscreen */}
                     <div
                       style={{ position: 'relative', cursor: 'pointer' }}
                       onClick={() => setFullscreenPreview(true)}
@@ -145,11 +214,8 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
                       />
                       <div style={{
                         position: 'absolute', top: 8, right: 8,
-                        background: 'rgba(0,0,0,0.6)',
-                        borderRadius: 4, padding: '4px 8px',
-                        fontSize: 11, color: '#aaa',
-                        fontFamily: mono,
-                        pointerEvents: 'none',
+                        background: 'rgba(0,0,0,0.6)', borderRadius: 4, padding: '4px 8px',
+                        fontSize: 11, color: '#aaa', fontFamily: mono, pointerEvents: 'none',
                       }}>
                         ⛶ expandir
                       </div>
@@ -161,7 +227,18 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
                       ver código
                     </button>
                   </div>
+
+                ) : agent.role === 'qa' ? (
+                  /* Critic — green for APROBADO, amber for REVISAR */
+                  <div style={{
+                    fontFamily: mono, fontSize: 11, lineHeight: 1.7, whiteSpace: 'pre-wrap',
+                    color: agent.content.trim().startsWith('APROBADO') ? '#00ff88' : '#F59E0B',
+                  }}>
+                    {agent.content}
+                  </div>
+
                 ) : (
+                  /* Architect + Engineer — plain text */
                   <div style={{ fontFamily: mono, fontSize: 11, color: '#94A3B8', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
                     {agent.content}
                   </div>
@@ -174,41 +251,28 @@ export default function StudioPage({ initialBrief, onBriefConsumed, onSendToAgen
 
       {/* Footer */}
       <div style={{ padding: '10px 14px', borderTop: '1px solid #1E1E2E', background: '#12121A', fontFamily: mono, fontSize: 10, color: '#64748B', textAlign: 'center' }}>
-        Chat → Studio → Agent → Preview → Commit
+        Director Creativo → Designer → Critic → Engineer
       </div>
 
-      {/* Fullscreen modal — fixed overlay outside normal flow */}
+      {/* Fullscreen modal */}
       {fullscreenPreview && (
         <div style={{
-          position: 'fixed',
-          top: 0, left: 0, right: 0, bottom: 0,
-          zIndex: 9999,
-          background: '#000',
-          display: 'flex',
-          flexDirection: 'column',
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          zIndex: 9999, background: '#000',
+          display: 'flex', flexDirection: 'column',
         }}>
           <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            padding: '12px 16px',
-            borderBottom: '1px solid rgba(255,255,255,0.1)',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.1)',
             background: '#0a0a0a',
           }}>
-            <span style={{ color: '#888', fontSize: 12, fontFamily: mono }}>
-              // preview — Designer
-            </span>
+            <span style={{ color: '#888', fontSize: 12, fontFamily: mono }}>// preview — Designer</span>
             <button
               onClick={() => setFullscreenPreview(false)}
               style={{
-                background: 'none',
-                border: '1px solid rgba(255,255,255,0.2)',
-                color: '#fff',
-                borderRadius: 4,
-                padding: '4px 12px',
-                cursor: 'pointer',
-                fontSize: 12,
-                fontFamily: mono,
+                background: 'none', border: '1px solid rgba(255,255,255,0.2)',
+                color: '#fff', borderRadius: 4, padding: '4px 12px',
+                cursor: 'pointer', fontSize: 12, fontFamily: mono,
               }}
             >
               ✕ cerrar
