@@ -399,6 +399,23 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
                 📊 Reporte de hoy incluido en el análisis
               </div>
             )}
+            {(appNameRef.current ?? detectRepo(challenge)) === 'Sniper OS' && (
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '4px 10px',
+                borderRadius: '4px',
+                background: 'rgba(0, 255, 136, 0.1)',
+                border: '1px solid rgba(0, 255, 136, 0.3)',
+                fontSize: '11px',
+                color: '#00ff88',
+                marginBottom: '12px',
+                fontFamily: 'monospace',
+              }}>
+                🎯 Reporte del Oráculo incluido
+              </div>
+            )}
             {MEMBERS.map((m) => {
               const r = memberMap[m.key];
               if (!r) return null;

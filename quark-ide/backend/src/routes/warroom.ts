@@ -136,6 +136,35 @@ async function fetchSignalOSReport(): Promise<string | null> {
   }
 }
 
+// ── Sniper OS report fetch ────────────────────────────────────────────────────
+
+async function fetchSniperOSReport(): Promise<string | null> {
+  try {
+    const res = await fetch(
+      'https://workspacesniper-os-production.up.railway.app/api/oracle-report',
+      { signal: AbortSignal.timeout(5000) },
+    );
+    const data = await res.json() as {
+      summary?: string;
+      risk_level?: string;
+      recomendacion?: string;
+      fortalezas?: string[];
+      debilidades?: string[];
+    };
+    if (!data.summary) return null;
+
+    let report = data.summary;
+    if (data.risk_level)          report += `\n\nNivel de riesgo actual: ${data.risk_level.toUpperCase()}`;
+    if (data.recomendacion)       report += `\nAcción recomendada: ${data.recomendacion}`;
+    if (data.fortalezas?.length)  report += `\nFortalezas: ${data.fortalezas.join(', ')}`;
+    if (data.debilidades?.length) report += `\nDebilidades: ${data.debilidades.join(', ')}`;
+
+    return report;
+  } catch {
+    return null;
+  }
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 const router = Router();
@@ -152,7 +181,7 @@ App bajo análisis: Signal OS (repo: Ahorar)
 Bot autónomo de crypto futures en Bitget USDT-M.
 Stack: React/TypeScript frontend + Node.js/Express backend + PostgreSQL.
 Features clave: scoring SMC/ICT, filtro CoinMarketCap 30 pares, trailing stops nativos Bitget, circuit breakers, streak protection (3 SL losses → 30min pause), bias engine BTC 1H multi-tier, módulo de aprendizaje, análisis institucional (OI, LS ratio, funding).
-Parámetros actuales: 0.5% risk/trade, 2% SL, 4.5% TP, 5x leverage, isolated margin, hedge mode.
+Parámetros actuales: 0.5% risk/trade, 2% SL, 4.5% TP, 10x leverage, isolated margin, hedge mode, trailing stop nativo Bitget (moving_plan, rangeRate: 2.0).
 ENFÓCATE EXCLUSIVAMENTE en Signal OS. No menciones otras apps.`,
 
   'Sniper OS': `
@@ -165,9 +194,11 @@ ENFÓCATE EXCLUSIVAMENTE en Sniper OS. No menciones otras apps.`,
 
   'Nexus OS': `
 App bajo análisis: Nexus OS (repo: NEXUS-OS-app)
-Bot spot trading en OKX.
+Bot spot trading en OKX — actualmente PAUSADO.
+Razón: mercado en régimen ranging, no apto para spot.
 Stack: React/TypeScript frontend + Node.js/Express backend + PostgreSQL.
-Features clave: CoinMarketCap/CoinGecko asset discovery, conviction-based position sizing, DCA support.
+Features diseñadas: CoinMarketCap/CoinGecko asset discovery, conviction-based position sizing, DCA support.
+Estado: arquitectura lista, pendiente de activación cuando el mercado presente tendencia clara.
 ENFÓCATE EXCLUSIVAMENTE en Nexus OS. No menciones otras apps.`,
 
   'Core AI': `
@@ -192,6 +223,7 @@ function buildContext(
   appName: string | null,
   repoContext?: RepoContextPayload,
   signalReport?: string | null,
+  sniperReport?: string | null,
 ): string {
   const appCtx = appName ? (APP_CONTEXTS[appName] ?? '') : '';
   let repoCtx = '';
@@ -205,6 +237,9 @@ function buildContext(
   let reportCtx = '';
   if (appName === 'Signal OS' && signalReport) {
     reportCtx = `\n\nREPORTE DE TRADING HOY (datos reales):\n${signalReport}\n\nUsa estos datos reales para dar un diagnóstico preciso. No inventes métricas — usa exactamente los números del reporte.`;
+  }
+  if (appName === 'Sniper OS' && sniperReport) {
+    reportCtx = `\n\nREPORTE DEL ORÁCULO HOY (datos reales):\n${sniperReport}\n\nUsa estos datos reales para dar un diagnóstico preciso. No inventes métricas.`;
   }
   return BASE_CONTEXT + appCtx + repoCtx + reportCtx;
 }
@@ -260,16 +295,26 @@ function buildProviderChain(
 
 // ── Board member dispatch ─────────────────────────────────────────────────────
 
+const DESIGNER_TRADING_ROLE = `Eres el especialista en visualización de datos y experiencia de monitoreo del War Room.
+Tu enfoque: ¿Los dashboards muestran la información crítica de forma clara? ¿El trader puede tomar decisiones rápidas con lo que ve? ¿Hay métricas importantes que no están visibles? ¿La UI comunica riesgo de forma efectiva?
+Analiza cómo mejorar la visibilidad operacional del sistema de trading.`;
+
+const TRADING_APPS = new Set(['Signal OS', 'Sniper OS']);
+
 async function callBoardMember(
   member: string,
   challenge: string,
   appName: string | null,
   repoContext?: RepoContextPayload,
   signalReport?: string | null,
+  sniperReport?: string | null,
 ): Promise<string> {
-  const roleDesc = BOARD_ROLES[member];
+  let roleDesc = BOARD_ROLES[member];
   if (!roleDesc) throw new Error(`Invalid member: ${member}`);
-  const systemPrompt = `${roleDesc}\n\n${buildContext(appName, repoContext, signalReport)}`;
+  if (member === 'Designer' && appName && TRADING_APPS.has(appName)) {
+    roleDesc = DESIGNER_TRADING_ROLE;
+  }
+  const systemPrompt = `${roleDesc}\n\n${buildContext(appName, repoContext, signalReport, sniperReport)}`;
 
   return withFallbackChain(
     buildProviderChain(challenge, systemPrompt, 1024, `/api/warroom/board/${member}`)
@@ -373,15 +418,19 @@ router.post('/swarm', async (req: Request, res: Response) => {
   const start = Date.now();
   try {
     let signalReport: string | null = null;
+    let sniperReport: string | null = null;
     if (resolvedApp === 'Signal OS') {
       signalReport = await fetchSignalOSReport();
     }
+    if (resolvedApp === 'Sniper OS') {
+      sniperReport = await fetchSniperOSReport();
+    }
 
     const [ceo, cto, designer, qa] = await Promise.all([
-      callBoardMember('CEO',      challenge, resolvedApp, repoContext, signalReport),
-      callBoardMember('CTO',      challenge, resolvedApp, repoContext, signalReport),
-      callBoardMember('Designer', challenge, resolvedApp, repoContext, signalReport),
-      callBoardMember('QA',       challenge, resolvedApp, repoContext, signalReport),
+      callBoardMember('CEO',      challenge, resolvedApp, repoContext, signalReport, sniperReport),
+      callBoardMember('CTO',      challenge, resolvedApp, repoContext, signalReport, sniperReport),
+      callBoardMember('Designer', challenge, resolvedApp, repoContext, signalReport, sniperReport),
+      callBoardMember('QA',       challenge, resolvedApp, repoContext, signalReport, sniperReport),
     ]);
 
     const consensus = await generateConsensus(challenge, { CEO: ceo, CTO: cto, Designer: designer, QA: qa });
