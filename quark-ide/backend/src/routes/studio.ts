@@ -45,7 +45,9 @@ Reglas:
 
 Devuelve ÚNICAMENTE el HTML — empieza con <!DOCTYPE html> y termina con </html>. Sin explicaciones, sin markdown.
 
-Usa tu criterio profesional para decidir qué tan complejo debe ser según el brief. Un restaurante merece navbar, hero animado, menú interactivo, reservaciones, galería con lightbox y footer completo. Un juego merece canvas y game loop. Una tienda merece carrito y productos. Sé ambicioso.`,
+Usa tu criterio profesional para decidir qué tan complejo debe ser según el brief. Un restaurante merece navbar, hero animado, menú interactivo, reservaciones, galería con lightbox y footer completo. Un juego merece canvas y game loop. Una tienda merece carrito y productos. Sé ambicioso.
+
+Para imágenes usa Lorem Picsum con seed descriptivo: https://picsum.photos/seed/[palabra-tema]/800/600 — por ejemplo para tacos: https://picsum.photos/seed/tacos/800/600, para restaurante: https://picsum.photos/seed/restaurant/800/600. No uses Unsplash ni ningún otro servicio.`,
 
   qa: `Eres un crítico de diseño senior. Recibes el BRIEF, la DIRECCIÓN CREATIVA y el HTML
 generado por el Designer. Evalúa con honestidad:
