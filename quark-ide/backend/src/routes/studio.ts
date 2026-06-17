@@ -37,7 +37,7 @@ async function resolveImagePlaceholders(html: string): Promise<string> {
       return
     }
     try {
-      const url = `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=1&orientation=landscape`
+      const url = `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=1&orientation=landscape&content_filter=high`
       const r = await fetch(url, { headers: { Authorization: `Client-ID ${key}` } })
       const data = await r.json() as any
       const photoUrl = data?.results?.[0]?.urls?.regular ?? ''
