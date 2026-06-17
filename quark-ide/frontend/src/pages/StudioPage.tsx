@@ -299,6 +299,21 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
                         sandbox="allow-scripts allow-same-origin"
                         title="Design Prototype"
                       />
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          const blob = new Blob([designPrototype], { type: 'text/html' })
+                          const url = URL.createObjectURL(blob)
+                          window.open(url, '_blank')
+                        }}
+                        style={{
+                          position: 'absolute', top: 8, left: 8,
+                          background: 'rgba(0,0,0,0.7)', borderRadius: 4, padding: '4px 8px',
+                          fontSize: 11, color: '#ccc', fontFamily: mono, border: 'none', cursor: 'pointer',
+                        }}
+                      >
+                        ↗ abrir
+                      </button>
                       <div style={{
                         position: 'absolute', top: 8, right: 8,
                         background: 'rgba(0,0,0,0.7)', borderRadius: 4, padding: '4px 8px',
