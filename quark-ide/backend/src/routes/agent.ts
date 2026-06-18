@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { getFileTree, getFileContent } from '../services/github.js';
 import { callAI } from '../lib/aiRouter.js';
+import { generateContent } from '../services/gemini.js';
 
 // ── Agent provider fallback chain ─────────────────────────────────────────────
 
@@ -76,6 +77,7 @@ async function generateWithFallback(prompt: string, system: string): Promise<str
   const providers = [
     { label: 'Groq',     fn: () => callGroqAgent(prompt, system, 4096) },
     { label: 'DeepSeek', fn: () => callDeepSeekAgent(prompt, system, 4096) },
+    { label: 'Gemini',   fn: () => generateContent(prompt, system, 4096, '/api/agent/generate') },
   ]
   let lastErr: Error = new Error('All providers failed')
   for (const { label, fn } of providers) {
