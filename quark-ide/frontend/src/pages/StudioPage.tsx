@@ -386,6 +386,21 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
                 >
                   ⚡ Fast {fastMode ? 'ON' : 'OFF'}
                 </button>
+                {designPrototype && (
+                  <button
+                    onClick={() => openSaveModal('prototype')}
+                    style={{
+                      flex: 1, padding: '6px 0',
+                      background: '#10B98122',
+                      border: '1px solid #10B981',
+                      borderRadius: 8,
+                      color: '#10B981',
+                      fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: 'pointer',
+                    }}
+                  >
+                    💾 Guardar
+                  </button>
+                )}
                 {agents.some(a => a.status === 'done') && (
                   <button
                     onClick={() => {
