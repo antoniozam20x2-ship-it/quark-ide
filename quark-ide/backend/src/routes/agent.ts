@@ -130,8 +130,9 @@ router.post('/generate', async (req, res) => {
     const tree = await getFileTree(repo, branch);
     const filePaths = tree
       .filter((f) => f.type === 'blob')
+      .filter((f) => !f.path.includes('node_modules') && !f.path.includes('.lock'))
       .map((f) => f.path)
-      .slice(0, 80)
+      .slice(0, 40)
       .join('\n');
 
     // ── READ PATH — no Gemini generation, just fetch real file content ────────

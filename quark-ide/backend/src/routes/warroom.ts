@@ -230,7 +230,13 @@ function buildContext(
   if (repoContext && (repoContext.tree.length > 0 || repoContext.keyFiles.length > 0)) {
     const treeStr = repoContext.tree.slice(0, 80).join('\n');
     const filesStr = repoContext.keyFiles
-      .map((f) => `--- ${f.path} ---\n${f.content}`)
+      .map((f) => {
+        const lines = f.content.split('\n')
+        const truncated = lines.length > 200
+          ? lines.slice(0, 200).join('\n') + `\n// ... (${lines.length - 200} líneas más)`
+          : f.content
+        return `--- ${f.path} ---\n${truncated}`
+      })
       .join('\n\n');
     repoCtx = `\n\nCódigo real del repositorio:\n\nEstructura de archivos:\n${treeStr}\n\nArchivos clave:\n${filesStr}`;
   }
@@ -314,8 +320,12 @@ async function callBoardMember(
   if (member === 'Designer' && appName && TRADING_APPS.has(appName)) {
     roleDesc = DESIGNER_TRADING_ROLE;
   }
-  const systemPrompt = `${roleDesc}\n\n${buildContext(appName, repoContext, signalReport, sniperReport)}`;
 
+  // CEO y Designer no necesitan el código — solo el contexto de negocio
+  const codeAgents = new Set(['CTO', 'QA', 'DEBUGGER']);
+  const contextForMember = codeAgents.has(member) ? repoContext : undefined;
+
+  const systemPrompt = `${roleDesc}\n\n${buildContext(appName, contextForMember, signalReport, sniperReport)}`;
   return withFallbackChain(
     buildProviderChain(challenge, systemPrompt, 1024, `/api/warroom/board/${member}`)
   );
