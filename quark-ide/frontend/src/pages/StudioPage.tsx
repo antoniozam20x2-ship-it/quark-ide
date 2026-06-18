@@ -623,7 +623,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
               <div style={{ fontFamily: mono, fontSize: 10, color: '#06B6D4', fontWeight: 700 }}>// prototipo visual</div>
               <div
                 style={{ position: 'relative', cursor: 'pointer' }}
-                onClick={() => setFullscreenPreview(true)}
+                onClick={() => openFullscreen(designPrototype)}
                 title="Ver en pantalla completa"
               >
                 <iframe
@@ -722,7 +722,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
                     onClick={() => openFullscreen(importPreview)}
                     style={{ padding: '7px 14px', background: 'transparent', border: '1px solid #1E1E2E', borderRadius: 8, color: '#94A3B8', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}
                   >
-                    ↗ abrir
+                    ⛶ Pantalla completa
                   </button>
                 )}
                 {importPreview && (
@@ -737,12 +737,22 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
               {importPreview && (
                 <div>
                   <div style={{ fontFamily: mono, fontSize: 10, color: '#64748B', marginBottom: 6 }}>// preview</div>
-                  <iframe
-                    srcDoc={importPreview}
-                    style={{ width: '100%', height: 420, border: '1px solid #1E1E2E', borderRadius: 8, background: '#fff' }}
-                    sandbox="allow-scripts allow-same-origin"
-                    title="Import Preview"
-                  />
+                  <div style={{ position: 'relative', width: '100%', height: 420, overflow: 'hidden', borderRadius: 8, border: '1px solid #1E1E2E' }}>
+                    <iframe
+                      srcDoc={importPreview}
+                      style={{
+                        width: '1280px',
+                        height: '900px',
+                        border: 'none',
+                        background: '#fff',
+                        transform: 'scale(0.33)',
+                        transformOrigin: 'top left',
+                        pointerEvents: 'none',
+                      }}
+                      sandbox="allow-scripts allow-same-origin"
+                      title="Import Preview"
+                    />
+                  </div>
                 </div>
               )}
             </div>
