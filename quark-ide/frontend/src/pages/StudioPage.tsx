@@ -76,6 +76,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
   const [newFolderName, setNewFolderName] = useState('')
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'ok' | 'error'>('idle')
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null)
+  const [leftCollapsed, setLeftCollapsed] = useState(() => localStorage.getItem('quark_studio_left_collapsed') === 'true')
 
   // Edit project state
   const [showEditModal, setShowEditModal] = useState(false)
@@ -333,6 +334,27 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
         <span style={{ fontFamily: mono, fontSize: 12, fontWeight: 700, color: '#7C3AED', letterSpacing: '0.08em' }}>QUARK STUDIO</span>
         <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>// design → build pipeline</span>
         <button
+          onClick={() => {
+            const next = !leftCollapsed
+            setLeftCollapsed(next)
+            localStorage.setItem('quark_studio_left_collapsed', String(next))
+          }}
+          title={leftCollapsed ? 'Expandir panel izquierdo' : 'Colapsar panel izquierdo'}
+          style={{
+            marginLeft: 12,
+            padding: '4px 9px',
+            background: 'transparent',
+            border: '1px solid #1E1E2E',
+            borderRadius: 6,
+            color: '#64748B',
+            fontFamily: mono, fontSize: 11, fontWeight: 700,
+            cursor: 'pointer',
+            lineHeight: 1,
+          }}
+        >
+          {leftCollapsed ? '>>' : '<<'}
+        </button>
+        <button
           onClick={() => { setShowImport(i => !i); setImportPreview('') }}
           style={{
             marginLeft: 'auto',
@@ -354,10 +376,12 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
 
         {/* ── LEFT: Brief + Mis Proyectos ── */}
         <div style={{
-          width: 260, flexShrink: 0,
-          borderRight: '1px solid #1E1E2E',
+          width: leftCollapsed ? 0 : 260, flexShrink: 0,
+          borderRight: leftCollapsed ? 'none' : '1px solid #1E1E2E',
           display: 'flex', flexDirection: 'column', overflowY: 'auto',
-          padding: 14, gap: 12,
+          padding: leftCollapsed ? 0 : 14, gap: 12,
+          overflow: 'hidden',
+          transition: 'width 0.2s ease',
         }}>
 
           {/* Brief input */}
