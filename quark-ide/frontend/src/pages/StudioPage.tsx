@@ -77,6 +77,14 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'ok' | 'error'>('idle')
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null)
 
+  // Edit project state
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editChanges, setEditChanges] = useState('')
+  const [editedHtml, setEditedHtml] = useState('')
+  const [editStatus, setEditStatus] = useState<'idle' | 'applying' | 'done' | 'error'>('idle')
+  const [activeProjectId, setActiveProjectId] = useState<number | null>(null)
+  const [saveEditStatus, setSaveEditStatus] = useState<'idle' | 'saving' | 'ok' | 'error'>('idle')
+
   useEffect(() => {
     loadProjects()
   }, [])
@@ -143,8 +151,56 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
         setImportPreview(data.html)
         setShowImport(true)
         setShowProjects(false)
+        setActiveProjectId(id)
       }
     } catch {}
+  }
+
+  function openEditModal() {
+    setEditChanges('')
+    setEditedHtml('')
+    setEditStatus('idle')
+    setSaveEditStatus('idle')
+    setShowEditModal(true)
+  }
+
+  async function applyEdits() {
+    if (!editChanges.trim() || !importHtml.trim()) return
+    setEditStatus('applying')
+    setEditedHtml('')
+    try {
+      const res = await fetch(`${API_BASE}/api/studio/edit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ html: importHtml, changes: editChanges.trim() }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setEditedHtml(data.html)
+      setEditStatus('done')
+      setSaveEditStatus('idle')
+    } catch {
+      setEditStatus('error')
+    }
+  }
+
+  async function saveEditedProject() {
+    if (!editedHtml || !activeProjectId) return
+    setSaveEditStatus('saving')
+    try {
+      const res = await fetch(`${API_BASE}/api/studio/projects/${activeProjectId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ html: editedHtml }),
+      })
+      if (!res.ok) throw new Error()
+      setImportHtml(editedHtml)
+      setImportPreview(editedHtml)
+      setSaveEditStatus('ok')
+      setTimeout(() => setShowEditModal(false), 800)
+    } catch {
+      setSaveEditStatus('error')
+    }
   }
 
   function toggleCard(role: string) {
@@ -337,6 +393,22 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
                 }}
               >
                 💾 Guardar
+              </button>
+              <button
+                onClick={openEditModal}
+                disabled={!importHtml.trim()}
+                title={activeProjectId ? 'Editar este proyecto con AI' : 'Carga un proyecto desde Mis Proyectos para editar'}
+                style={{
+                  padding: '7px 14px',
+                  background: importHtml.trim() ? '#7C3AED22' : 'transparent',
+                  border: `1px solid ${importHtml.trim() ? '#7C3AED' : '#1E1E2E'}`,
+                  borderRadius: 8,
+                  color: importHtml.trim() ? '#A78BFA' : '#64748B',
+                  fontFamily: mono, fontSize: 10, fontWeight: 700,
+                  cursor: importHtml.trim() ? 'pointer' : 'not-allowed',
+                }}
+              >
+                ✏️ Editar
               </button>
               {importPreview && (
                 <button
@@ -634,6 +706,121 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
       <div style={{ padding: '10px 14px', borderTop: '1px solid #1E1E2E', background: '#12121A', fontFamily: mono, fontSize: 10, color: '#64748B', textAlign: 'center' }}>
         Director Creativo → Designer → Critic → Engineer
       </div>
+
+      {/* Edit modal */}
+      {showEditModal && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          zIndex: 10000, background: 'rgba(0,0,0,0.80)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{
+            background: '#12121A', border: '1px solid #7C3AED44', borderRadius: 14,
+            padding: 24, width: 560, maxHeight: '90vh', display: 'flex', flexDirection: 'column', gap: 14, overflow: 'hidden',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontFamily: mono, fontSize: 12, color: '#A78BFA', fontWeight: 700 }}>✏️ EDITAR PROYECTO</span>
+              {activeProjectId && (
+                <span style={{ fontFamily: mono, fontSize: 9, color: '#64748B' }}>
+                  #{activeProjectId} · {projects.find(p => p.id === activeProjectId)?.name ?? ''}
+                </span>
+              )}
+            </div>
+
+            {/* Changes textarea */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>describe los cambios que quieres aplicar</span>
+              <textarea
+                value={editChanges}
+                onChange={e => setEditChanges(e.target.value)}
+                placeholder='Ej: "agrega 5 estilos de pizza más al menú" / "cambia el hero a fondo azul" / "añade sección de reseñas"'
+                rows={4}
+                autoFocus
+                style={{
+                  background: '#0A0A0F', border: '1px solid #7C3AED44', borderRadius: 8,
+                  color: '#E2E8F0', fontFamily: mono, fontSize: 11,
+                  padding: 10, resize: 'vertical', lineHeight: 1.5, outline: 'none',
+                }}
+              />
+            </div>
+
+            {/* Apply button */}
+            <button
+              onClick={applyEdits}
+              disabled={!editChanges.trim() || editStatus === 'applying'}
+              style={{
+                padding: '9px 20px', alignSelf: 'flex-start',
+                background: editChanges.trim() && editStatus !== 'applying'
+                  ? 'linear-gradient(135deg, #7C3AED, #6D28D9)' : '#1E1E2E',
+                border: 'none', borderRadius: 8,
+                color: editChanges.trim() ? '#fff' : '#64748B',
+                fontFamily: mono, fontSize: 11, fontWeight: 700,
+                cursor: editChanges.trim() && editStatus !== 'applying' ? 'pointer' : 'not-allowed',
+              }}
+            >
+              {editStatus === 'applying' ? '⏳ Aplicando...' : '▶ Aplicar cambios'}
+            </button>
+
+            {editStatus === 'error' && (
+              <span style={{ fontFamily: mono, fontSize: 10, color: '#EF4444' }}>✕ Error al aplicar cambios</span>
+            )}
+
+            {/* Preview of edited HTML */}
+            {editedHtml && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, overflow: 'hidden', minHeight: 0 }}>
+                <div style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>// preview de cambios</div>
+                <iframe
+                  srcDoc={editedHtml}
+                  style={{ width: '100%', flex: 1, minHeight: 280, border: '1px solid #7C3AED44', borderRadius: 8, background: '#fff' }}
+                  sandbox="allow-scripts allow-same-origin"
+                  title="Edit Preview"
+                />
+                {/* Save / discard */}
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                  <button
+                    onClick={() => { setEditedHtml(''); setEditStatus('idle') }}
+                    style={{ padding: '7px 14px', background: 'transparent', border: '1px solid #1E1E2E', borderRadius: 8, color: '#64748B', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}
+                  >
+                    Descartar
+                  </button>
+                  {activeProjectId ? (
+                    <button
+                      onClick={saveEditedProject}
+                      disabled={saveEditStatus === 'saving'}
+                      style={{
+                        padding: '7px 18px',
+                        background: saveEditStatus === 'ok' ? '#10B981' : saveEditStatus === 'error' ? '#EF4444' : 'linear-gradient(135deg,#10B981,#059669)',
+                        border: 'none', borderRadius: 8,
+                        color: '#fff', fontFamily: mono, fontSize: 11, fontWeight: 700,
+                        cursor: saveEditStatus === 'saving' ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {saveEditStatus === 'saving' ? '⏳...' : saveEditStatus === 'ok' ? '✓ Guardado' : saveEditStatus === 'error' ? '✕ Error' : '💾 Guardar cambios'}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => { setImportHtml(editedHtml); setImportPreview(editedHtml); setShowEditModal(false) }}
+                      style={{ padding: '7px 18px', background: 'linear-gradient(135deg,#7C3AED,#6D28D9)', border: 'none', borderRadius: 8, color: '#fff', fontFamily: mono, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
+                    >
+                      Usar en Import
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Cancel */}
+            {editStatus !== 'done' && (
+              <button
+                onClick={() => setShowEditModal(false)}
+                style={{ padding: '7px 14px', alignSelf: 'flex-end', background: 'transparent', border: '1px solid #1E1E2E', borderRadius: 8, color: '#64748B', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}
+              >
+                ✕ Cerrar
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Save modal */}
       {showSaveModal && (

@@ -210,6 +210,46 @@ router.post('/analyze', async (req, res) => {
   }
 })
 
+// ── Edit existing project HTML ────────────────────────────────────────────────
+
+const EDITOR_SYSTEM_PROMPT = `Eres un editor HTML experto. Recibirás un HTML existente y una descripción de cambios solicitados.
+
+REGLAS ABSOLUTAS:
+- SOLO modifica las secciones relevantes al cambio pedido
+- NO regeneres ni reescribas todo el documento
+- Mantén exactamente la misma estructura, paleta de colores y tipografía
+- Mantén todos los img-slot existentes (no los elimines)
+- Si se piden nuevos elementos visuales, añade img-slot con data-query apropiado
+- Devuelve el HTML COMPLETO pero con los cambios aplicados
+- Sin explicaciones, sin markdown — solo el HTML`
+
+router.post('/edit', async (req, res) => {
+  try {
+    const { projectId, changes, html: inlineHtml } = req.body as {
+      projectId?: number
+      changes: string
+      html?: string
+    }
+    if (!changes) return res.status(400).json({ error: 'changes requerido' })
+
+    let currentHtml = inlineHtml ?? ''
+    if (!currentHtml && projectId) {
+      const { rows } = await pool.query('SELECT html FROM studio_projects WHERE id = $1', [projectId])
+      if (!rows.length) return res.status(404).json({ error: 'Proyecto no encontrado' })
+      currentHtml = rows[0].html
+    }
+    if (!currentHtml) return res.status(400).json({ error: 'html o projectId requerido' })
+
+    const userPrompt = `HTML ACTUAL:\n${currentHtml}\n\nCAMBIOS SOLICITADOS:\n${changes}`
+    const raw = await callAI('html', userPrompt, EDITOR_SYSTEM_PROMPT)
+    const editedHtml = await resolveImagePlaceholders(sanitizeDesignerHtml(raw))
+    res.json({ html: editedHtml })
+  } catch (err) {
+    console.error('studio/edit error:', err)
+    res.status(500).json({ error: 'Error al editar proyecto' })
+  }
+})
+
 // ── Studio Projects CRUD ──────────────────────────────────────────────────────
 
 router.get('/projects', async (_req, res) => {
@@ -237,6 +277,22 @@ router.post('/projects', async (req, res) => {
   } catch (err) {
     console.error('studio/projects POST error:', err)
     res.status(500).json({ error: 'Error al guardar proyecto' })
+  }
+})
+
+router.put('/projects/:id', async (req, res) => {
+  try {
+    const { html } = req.body as { html: string }
+    if (!html) return res.status(400).json({ error: 'html requerido' })
+    const { rows } = await pool.query(
+      'UPDATE studio_projects SET html = $1 WHERE id = $2 RETURNING id, name, folder, created_at',
+      [html, req.params.id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Proyecto no encontrado' })
+    res.json(rows[0])
+  } catch (err) {
+    console.error('studio/projects PUT error:', err)
+    res.status(500).json({ error: 'Error al actualizar proyecto' })
   }
 })
 
