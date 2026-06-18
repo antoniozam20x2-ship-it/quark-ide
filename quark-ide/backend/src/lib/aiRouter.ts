@@ -36,6 +36,13 @@ export async function callAI(
 ): Promise<string> {
   switch (task) {
 
+    // ── Edición quirúrgica: solo Claude o GPT-4o ──
+    case 'edit':
+      return tryProviders([
+        () => callAnthropic(prompt, systemPrompt),
+        () => callGitHubModels(prompt, systemPrompt, 'gpt-4o'),
+      ]);
+
     // ── Designer exclusivo: OpenRouter (Gemma free) → GitHub fallback ──
     case 'html':
     case 'designer':
