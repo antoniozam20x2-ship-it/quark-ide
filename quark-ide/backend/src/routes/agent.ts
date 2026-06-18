@@ -128,11 +128,28 @@ router.post('/generate', async (req, res) => {
     // Step 1: file tree (needed for smart read + generation paths)
     send('action', { text: '🔍 Leyendo estructura del repo...' });
     const tree = await getFileTree(repo, branch);
+    const PRIORITY_PATTERNS = [
+      /server\.(ts|js)$/,
+      /routes\//,
+      /services\//,
+      /engine\.(ts|js)$/,
+      /detector\.(ts|js)$/,
+    ]
+
     const filePaths = tree
       .filter((f) => f.type === 'blob')
-      .filter((f) => !f.path.includes('node_modules') && !f.path.includes('.lock'))
-      .map((f) => f.path)
+      .filter((f) =>
+        !f.path.includes('node_modules') &&
+        !f.path.includes('.lock') &&
+        !f.path.includes('dist/')
+      )
+      .sort((a, b) => {
+        const aScore = PRIORITY_PATTERNS.some(p => p.test(a.path)) ? 0 : 1
+        const bScore = PRIORITY_PATTERNS.some(p => p.test(b.path)) ? 0 : 1
+        return aScore - bScore
+      })
       .slice(0, 40)
+      .map((f) => f.path)
       .join('\n');
 
     // ── READ PATH — no Gemini generation, just fetch real file content ────────

@@ -321,9 +321,11 @@ async function callBoardMember(
     roleDesc = DESIGNER_TRADING_ROLE;
   }
 
-  // CEO y Designer no necesitan el código — solo el contexto de negocio
+  // CEO y Designer trabajan con contexto de negocio, no con código
   const codeAgents = new Set(['CTO', 'QA', 'DEBUGGER']);
-  const contextForMember = codeAgents.has(member) ? repoContext : undefined;
+  const isVisualBug = /bug|error|broken|roto|falla|no muestra|no carga/i.test(challenge);
+  const needsCode = codeAgents.has(member) || (member === 'Designer' && isVisualBug);
+  const contextForMember = needsCode ? repoContext : undefined;
 
   const systemPrompt = `${roleDesc}\n\n${buildContext(appName, contextForMember, signalReport, sniperReport)}`;
   return withFallbackChain(
