@@ -2,6 +2,93 @@ import { Router } from 'express';
 import { getFileTree, getFileContent } from '../services/github.js';
 import { callAI } from '../lib/aiRouter.js';
 
+// ── Agent provider fallback chain ─────────────────────────────────────────────
+
+const GROQ_URL       = 'https://api.groq.com/openai/v1/chat/completions'
+const GROQ_MODEL     = 'llama-3.3-70b-versatile'
+const DEEPSEEK_URL   = 'https://api.deepseek.com/v1/chat/completions'
+const DEEPSEEK_MODEL = 'deepseek-chat'
+const PROVIDER_TIMEOUT_MS = 25_000
+
+function getGroqKeys(): string[] {
+  return [
+    process.env.GROQ_API_KEY,
+    process.env.GROQ_API_KEY_2,
+    process.env.GROQ_API_KEY_3,
+  ].filter((k): k is string => Boolean(k))
+}
+
+async function callGroqAgent(prompt: string, system: string, maxTokens = 4096): Promise<string> {
+  const keys = getGroqKeys()
+  if (keys.length === 0) throw new Error('No GROQ_API_KEY configured')
+  for (const key of keys) {
+    try {
+      const ctrl = new AbortController()
+      const timer = setTimeout(() => ctrl.abort(), PROVIDER_TIMEOUT_MS)
+      const res = await fetch(GROQ_URL, {
+        method: 'POST',
+        signal: ctrl.signal,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({
+          model: GROQ_MODEL,
+          max_tokens: maxTokens,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: prompt },
+          ],
+        }),
+      }).finally(() => clearTimeout(timer))
+      if (res.status === 429) continue
+      if (!res.ok) throw new Error(`Groq error: ${res.status}`)
+      const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> }
+      return json.choices?.[0]?.message?.content ?? ''
+    } catch (err) {
+      console.warn(`[agent] Groq key failed: ${(err as Error).message}`)
+    }
+  }
+  throw new Error('All Groq keys failed')
+}
+
+async function callDeepSeekAgent(prompt: string, system: string, maxTokens = 4096): Promise<string> {
+  const token = process.env.DEEPSEEK_API_KEY
+  if (!token) throw new Error('DEEPSEEK_API_KEY not set')
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), PROVIDER_TIMEOUT_MS)
+  const res = await fetch(DEEPSEEK_URL, {
+    method: 'POST',
+    signal: ctrl.signal,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      model: DEEPSEEK_MODEL,
+      max_tokens: maxTokens,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: prompt },
+      ],
+    }),
+  }).finally(() => clearTimeout(timer))
+  if (!res.ok) throw new Error(`DeepSeek error: ${res.status}`)
+  const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> }
+  return json.choices?.[0]?.message?.content ?? ''
+}
+
+async function generateWithFallback(prompt: string, system: string): Promise<string> {
+  const providers = [
+    { label: 'Groq',     fn: () => callGroqAgent(prompt, system, 4096) },
+    { label: 'DeepSeek', fn: () => callDeepSeekAgent(prompt, system, 4096) },
+  ]
+  let lastErr: Error = new Error('All providers failed')
+  for (const { label, fn } of providers) {
+    try {
+      return await fn()
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err))
+      console.warn(`[agent] ${label} failed: ${lastErr.message}`)
+    }
+  }
+  throw lastErr
+}
+
 const router = Router();
 
 const REPAIR_SYSTEM = `Eres un agente de reparación de JSON.
@@ -228,7 +315,7 @@ NUNCA uses comillas simples en property names ni values.
 NUNCA incluyas comentarios dentro del JSON.
 El campo content de cada archivo debe ser un string JSON válido con caracteres escapados correctamente.`;
 
-    const raw = (await callAI('generate', systemPrompt + '\n\nTAREA: ' + prompt)).trim();
+    const raw = (await generateWithFallback(systemPrompt + '\n\nTAREA: ' + prompt, systemPrompt)).trim();
 
     console.log('[Agent] Raw length:', raw.length);
     console.log('[Agent] Raw preview:', raw.slice(0, 300));
