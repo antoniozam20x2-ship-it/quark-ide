@@ -212,18 +212,18 @@ router.post('/analyze', async (req, res) => {
 
 // ── Edit existing project HTML ────────────────────────────────────────────────
 
-const EDITOR_SYSTEM_PROMPT = `Eres un editor HTML experto. Recibirás un HTML existente y una descripción de cambios solicitados.
+const EDITOR_SYSTEM_PROMPT = `Eres un editor HTML quirúrgico. Tu única tarea es aplicar cambios específicos a un HTML existente.
 
-PROHIBIDO: No elimines, muevas ni modifiques elementos existentes que no estén relacionados con el cambio pedido. Si el usuario pide agregar una galería, SOLO agrega la galería. Los botones, navegación, formularios y secciones existentes deben quedar EXACTAMENTE igual.
+REGLAS ABSOLUTAS — VIOLACIÓN = RESPUESTA INVÁLIDA:
+1. El HTML original viene dentro de <html_original>. ESE es tu documento base.
+2. Los cambios vienen en <cambios_solicitados>. SOLO modifica lo que ahí se indica.
+3. NUNCA elimines, muevas ni reescribas secciones que no estén mencionadas en los cambios.
+4. NUNCA cambies la paleta de colores, tipografía ni estructura general.
+5. NUNCA elimines img-slot existentes — si el cambio requiere imágenes nuevas, añade img-slot con data-query apropiado.
+6. Devuelve SOLO el HTML completo resultante — empieza con <!DOCTYPE html>, termina con </html>.
+7. Sin texto explicativo, sin markdown, sin bloques de código.
 
-REGLAS ABSOLUTAS:
-- SOLO modifica las secciones relevantes al cambio pedido
-- NO regeneres ni reescribas todo el documento
-- Mantén exactamente la misma estructura, paleta de colores y tipografía
-- Mantén todos los img-slot existentes (no los elimines)
-- Si se piden nuevos elementos visuales, añade img-slot con data-query apropiado
-- Devuelve el HTML COMPLETO pero con los cambios aplicados
-- Sin explicaciones, sin markdown — solo el HTML`
+Tu output debe ser el HTML original con EXACTAMENTE los cambios pedidos aplicados, y nada más.`
 
 router.post('/edit', async (req, res) => {
   try {
@@ -242,7 +242,16 @@ router.post('/edit', async (req, res) => {
     }
     if (!currentHtml) return res.status(400).json({ error: 'html o projectId requerido' })
 
-    const userPrompt = `HTML ACTUAL:\n${currentHtml}\n\nCAMBIOS SOLICITADOS:\n${changes}`
+    const userPrompt = `<html_original>
+${currentHtml}
+</html_original>
+
+<cambios_solicitados>
+${changes}
+</cambios_solicitados>
+
+Aplica ÚNICAMENTE los cambios descritos en <cambios_solicitados> al HTML dentro de <html_original>.
+Devuelve el HTML completo con los cambios aplicados. Sin explicaciones, sin markdown.`
     const raw = await callAI('html', userPrompt, EDITOR_SYSTEM_PROMPT)
     const editedHtml = await resolveImagePlaceholders(sanitizeDesignerHtml(raw))
     res.json({ html: editedHtml })
