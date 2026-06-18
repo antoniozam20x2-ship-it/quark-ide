@@ -1,0 +1,98 @@
+// ✅ DESPUÉS — diff viewer antes del commit
+) : (
+  result.files?.length ? (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+
+      {/* Diff por archivo */}
+      {result.files.map((file, idx) => {
+        const newLines = file.content.split('\n')
+        return (
+          <div key={idx} style={{
+            background: '#0a0a16',
+            border: '1px solid #1e1e3f',
+            borderLeft: '2px solid #7c3aed',
+            borderRadius: 6,
+            overflow: 'hidden',
+          }}>
+            {/* Header del archivo */}
+            <div style={{
+              padding: '5px 10px',
+              borderBottom: '1px solid #1e1e3f',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            }}>
+              <span style={{
+                color: '#7c3aed', fontSize: 10,
+                fontFamily: 'JetBrains Mono, monospace',
+              }}>
+                📄 {file.path}
+              </span>
+              <span style={{
+                color: '#22c55e', fontSize: 10,
+                fontFamily: 'JetBrains Mono, monospace',
+              }}>
+                +{newLines.length} líneas
+              </span>
+            </div>
+
+            {/* Preview del contenido */}
+            <div style={{
+              padding: '8px 12px',
+              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 10, color: '#a0a0c0',
+              whiteSpace: 'pre-wrap', overflowX: 'auto',
+              maxHeight: 200, overflowY: 'auto',
+              lineHeight: 1.6,
+            }}>
+              {newLines.slice(0, 40).map((line, i) => (
+                <div key={i} style={{
+                  background: 'rgba(34,197,94,0.06)',
+                  color: '#86efac',
+                }}>
+                  <span style={{ color: '#3a3a5c', userSelect: 'none' }}>
+                    {String(i + 1).padStart(3, ' ')} │{' '}
+                  </span>
+                  {line || ' '}
+                </div>
+              ))}
+              {newLines.length > 40 && (
+                <div style={{ color: '#3a3a5c', padding: '4px 0' }}>
+                  // ... {newLines.length - 40} líneas más
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      })}
+
+      {/* Stat bar */}
+      <div style={{
+        background: 'rgba(124,58,237,0.06)',
+        border: '1px solid #4c1d95',
+        borderRadius: 6, padding: '6px 12px',
+        display: 'flex', alignItems: 'center', gap: 10,
+        fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
+      }}>
+        <span style={{ color: '#a78bfa', fontWeight: 700 }}>
+          📦 {result.files.length} archivo(s) · {result.commitMessage}
+        </span>
+      </div>
+
+      {/* Botón aprobar */}
+      <button
+        onClick={commitToGitHub}
+        disabled={committing}
+        style={{
+          background: committing ? '#1e1e3f' : 'rgba(124,58,237,0.12)',
+          border: `1px solid ${committing ? '#1e1e3f' : '#4c1d95'}`,
+          borderRadius: 6, color: committing ? '#3a3a5c' : '#a78bfa',
+          fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700,
+          padding: '9px 12px', cursor: committing ? 'not-allowed' : 'pointer',
+          letterSpacing: '0.04em', transition: 'background 0.15s', width: '100%',
+        }}
+        onMouseEnter={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(124,58,237,0.22)' }}
+        onMouseLeave={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(124,58,237,0.12)' }}
+      >
+        {committing ? '⟳ Committing…' : `✅ Aprobar y commitear ${result.files.length} archivo(s)`}
+      </button>
+    </div>
+  ) : (
