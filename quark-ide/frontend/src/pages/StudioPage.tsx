@@ -349,232 +349,63 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
         </button>
       </div>
 
-      {/* Content */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Content — 3-column layout */}
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
 
-        {/* Import HTML panel */}
-        {showImport && (
-          <div style={{ background: '#12121A', border: '1px solid #06B6D444', borderLeft: '3px solid #06B6D4', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <span style={{ fontFamily: mono, fontSize: 10, color: '#06B6D4', fontWeight: 700 }}>📥 IMPORTAR HTML</span>
+        {/* ── LEFT: Brief + Mis Proyectos ── */}
+        <div style={{
+          width: 260, flexShrink: 0,
+          borderRight: '1px solid #1E1E2E',
+          display: 'flex', flexDirection: 'column', overflowY: 'auto',
+          padding: 14, gap: 12,
+        }}>
+
+          {/* Brief input */}
+          <div style={{ background: '#12121A', border: '1px solid #1E1E2E', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>// describe lo que quieres construir</span>
             <textarea
-              value={importHtml}
-              onChange={e => setImportHtml(e.target.value)}
-              placeholder="Pega tu HTML aquí..."
-              rows={6}
-              style={{
-                background: '#0A0A0F', border: '1px solid #1E1E2E', borderRadius: 8,
-                color: '#E2E8F0', fontFamily: mono, fontSize: 11,
-                padding: 10, resize: 'vertical', lineHeight: 1.5, outline: 'none',
-              }}
+              value={brief}
+              onChange={e => setBrief(e.target.value)}
+              placeholder="Ej: Una página de tienda con productos, carrito y checkout. Fondo oscuro, estilo moderno."
+              rows={5}
+              style={{ background: 'transparent', border: 'none', outline: 'none', color: '#E2E8F0', fontFamily: mono, fontSize: 12, resize: 'none', lineHeight: 1.6 }}
             />
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <button
-                onClick={() => setImportPreview(importHtml.trim())}
-                disabled={!importHtml.trim()}
-                style={{
-                  padding: '7px 16px',
-                  background: importHtml.trim() ? 'linear-gradient(135deg, #06B6D4, #0891B2)' : '#1E1E2E',
-                  border: 'none', borderRadius: 8,
-                  color: importHtml.trim() ? '#fff' : '#64748B',
-                  fontFamily: mono, fontSize: 11, fontWeight: 700,
-                  cursor: importHtml.trim() ? 'pointer' : 'not-allowed',
-                }}
-              >
-                👁 Vista Previa
-              </button>
-              <button
-                onClick={() => openSaveModal('import')}
-                disabled={!importHtml.trim()}
-                style={{
-                  padding: '7px 14px',
-                  background: importHtml.trim() ? '#10B98122' : 'transparent',
-                  border: `1px solid ${importHtml.trim() ? '#10B981' : '#1E1E2E'}`,
-                  borderRadius: 8,
-                  color: importHtml.trim() ? '#10B981' : '#64748B',
-                  fontFamily: mono, fontSize: 10, fontWeight: 700,
-                  cursor: importHtml.trim() ? 'pointer' : 'not-allowed',
-                }}
-              >
-                💾 Guardar
-              </button>
-              <button
-                onClick={openEditModal}
-                disabled={!importHtml.trim()}
-                title={activeProjectId ? 'Editar este proyecto con AI' : 'Carga un proyecto desde Mis Proyectos para editar'}
-                style={{
-                  padding: '7px 14px',
-                  background: importHtml.trim() ? '#7C3AED22' : 'transparent',
-                  border: `1px solid ${importHtml.trim() ? '#7C3AED' : '#1E1E2E'}`,
-                  borderRadius: 8,
-                  color: importHtml.trim() ? '#A78BFA' : '#64748B',
-                  fontFamily: mono, fontSize: 10, fontWeight: 700,
-                  cursor: importHtml.trim() ? 'pointer' : 'not-allowed',
-                }}
-              >
-                ✏️ Editar
-              </button>
-              {importPreview && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ display: 'flex', gap: 6 }}>
                 <button
-                  onClick={() => {
-                    const blob = new Blob([importPreview], { type: 'text/html' })
-                    window.open(URL.createObjectURL(blob), '_blank')
-                  }}
+                  onClick={() => setFastMode(f => !f)}
+                  title={fastMode ? 'Fast Mode activo' : 'Activar Fast Mode'}
                   style={{
-                    padding: '7px 14px', background: 'transparent',
-                    border: '1px solid #1E1E2E', borderRadius: 8,
-                    color: '#94A3B8', fontFamily: mono, fontSize: 10, cursor: 'pointer',
+                    flex: 1, padding: '6px 0',
+                    background: fastMode ? '#F59E0B22' : 'transparent',
+                    border: `1px solid ${fastMode ? '#F59E0B' : '#1E1E2E'}`,
+                    borderRadius: 8,
+                    color: fastMode ? '#F59E0B' : '#64748B',
+                    fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: 'pointer',
                   }}
                 >
-                  ↗ abrir
+                  ⚡ Fast {fastMode ? 'ON' : 'OFF'}
                 </button>
-              )}
-              {importPreview && (
-                <button
-                  onClick={() => setImportPreview('')}
-                  style={{
-                    padding: '7px 10px', background: 'transparent',
-                    border: 'none', color: '#64748B', fontFamily: mono, fontSize: 10, cursor: 'pointer',
-                  }}
-                >
-                  ✕
-                </button>
-              )}
-            </div>
-            {importPreview && (
-              <div style={{ position: 'relative' }}>
-                <div style={{ fontFamily: mono, fontSize: 10, color: '#64748B', marginBottom: 6 }}>// preview</div>
-                <iframe
-                  srcDoc={importPreview}
-                  style={{ width: '100%', height: 480, border: '1px solid #1E1E2E', borderRadius: 8, background: '#fff' }}
-                  sandbox="allow-scripts allow-same-origin"
-                  title="Import Preview"
-                />
+                {agents.some(a => a.status === 'done') && (
+                  <button
+                    onClick={() => {
+                      setBrief('')
+                      setAgents(AGENTS.map(a => ({ ...a, content: '', status: 'idle' })))
+                      setDesignPrototype('')
+                      setExpandedCards({})
+                      localStorage.removeItem(STORAGE_KEY)
+                    }}
+                    style={{ padding: '6px 10px', background: 'transparent', border: '1px solid #1E1E2E', borderRadius: 8, color: '#64748B', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
-            )}
-          </div>
-        )}
-
-        {/* Mis Proyectos */}
-        <div style={{ background: '#12121A', border: '1px solid #1E1E2E', borderLeft: '3px solid #10B981', borderRadius: 12, overflow: 'hidden' }}>
-          <div
-            onClick={() => setShowProjects(p => !p)}
-            style={{ padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}
-          >
-            <span style={{ fontFamily: mono, fontSize: 10, color: '#10B981', fontWeight: 700 }}>🗂 MIS PROYECTOS</span>
-            <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>({projects.length})</span>
-            <span style={{ marginLeft: 'auto', fontFamily: mono, fontSize: 10, color: '#64748B' }}>{showProjects ? '▲' : '▼'}</span>
-          </div>
-          {showProjects && (
-            <div style={{ padding: '0 12px 12px', display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {projects.length === 0 ? (
-                <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>Sin proyectos guardados</span>
-              ) : (
-                Object.entries(
-                  projects.reduce((acc, p) => { (acc[p.folder] = acc[p.folder] || []).push(p); return acc }, {} as Record<string, StudioProject[]>)
-                ).map(([folder, fps]) => (
-                  <div key={folder}>
-                    <div
-                      onClick={() => setExpandedFolders(ef => ({ ...ef, [folder]: !ef[folder] }))}
-                      style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 0', cursor: 'pointer', userSelect: 'none' }}
-                    >
-                      <span style={{ fontFamily: mono, fontSize: 10, color: '#F59E0B' }}>
-                        {expandedFolders[folder] ? '📂' : '📁'}
-                      </span>
-                      <span style={{ fontFamily: mono, fontSize: 10, color: '#F59E0B', fontWeight: 700 }}>{folder}</span>
-                      <span style={{ fontFamily: mono, fontSize: 9, color: '#64748B' }}>({fps.length})</span>
-                    </div>
-                    {expandedFolders[folder] && fps.map(p => (
-                      <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 20, paddingBottom: 4, flexWrap: 'wrap' }}>
-                        <span style={{ fontFamily: mono, fontSize: 10, color: '#94A3B8', flex: 1 }}>📄 {p.name}</span>
-                        {deleteConfirmId === p.id ? (
-                          <>
-                            <span style={{ fontFamily: mono, fontSize: 9, color: '#EF4444' }}>¿Eliminar?</span>
-                            <button
-                              onClick={() => setDeleteConfirmId(null)}
-                              style={{ padding: '3px 7px', background: 'transparent', border: '1px solid #1E1E2E', borderRadius: 4, color: '#64748B', fontFamily: mono, fontSize: 9, cursor: 'pointer' }}
-                            >
-                              Cancelar
-                            </button>
-                            <button
-                              onClick={() => { deleteProject(p.id); setDeleteConfirmId(null) }}
-                              style={{ padding: '3px 7px', background: '#EF444422', border: '1px solid #EF4444', borderRadius: 4, color: '#EF4444', fontFamily: mono, fontSize: 9, fontWeight: 700, cursor: 'pointer' }}
-                            >
-                              Eliminar
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              onClick={() => loadProjectHtml(p.id)}
-                              style={{ padding: '3px 8px', background: '#06B6D422', border: '1px solid #06B6D444', borderRadius: 4, color: '#06B6D4', fontFamily: mono, fontSize: 9, cursor: 'pointer' }}
-                            >
-                              cargar
-                            </button>
-                            <button
-                              onClick={() => setDeleteConfirmId(p.id)}
-                              style={{ padding: '3px 6px', background: 'transparent', border: 'none', color: '#64748B', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}
-                            >
-                              ✕
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Input */}
-        <div style={{ background: '#12121A', border: '1px solid #1E1E2E', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>// describe lo que quieres construir</span>
-          <textarea
-            value={brief}
-            onChange={e => setBrief(e.target.value)}
-            placeholder="Ej: Una página de tienda con productos, carrito y checkout. Fondo oscuro, estilo moderno."
-            rows={3}
-            style={{ background: 'transparent', border: 'none', outline: 'none', color: '#E2E8F0', fontFamily: mono, fontSize: 12, resize: 'none', lineHeight: 1.6 }}
-          />
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            {agents.some(a => a.status === 'done') && (
-              <button
-                onClick={() => {
-                  setBrief('')
-                  setAgents(AGENTS.map(a => ({ ...a, content: '', status: 'idle' })))
-                  setDesignPrototype('')
-                  setExpandedCards({})
-                  localStorage.removeItem(STORAGE_KEY)
-                }}
-                style={{ background: 'transparent', border: '1px solid #1E1E2E', borderRadius: 6, color: '#64748B', fontFamily: mono, fontSize: 10, padding: '4px 10px', cursor: 'pointer' }}
-              >
-                ✕ limpiar
-              </button>
-            )}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
-              {/* ⚡ Fast Mode toggle */}
-              <button
-                onClick={() => setFastMode(f => !f)}
-                title={fastMode ? 'Fast Mode activo — solo Designer + Engineer' : 'Activar Fast Mode (sin Architect ni Critic)'}
-                style={{
-                  padding: '6px 12px',
-                  background: fastMode ? '#F59E0B22' : 'transparent',
-                  border: `1px solid ${fastMode ? '#F59E0B' : '#1E1E2E'}`,
-                  borderRadius: 8,
-                  color: fastMode ? '#F59E0B' : '#64748B',
-                  fontFamily: mono, fontSize: 10, fontWeight: 700,
-                  cursor: 'pointer',
-                  transition: 'all 0.15s',
-                }}
-              >
-                ⚡ Fast {fastMode ? 'ON' : 'OFF'}
-              </button>
               <button
                 onClick={() => runStudio()}
                 disabled={running || !brief.trim()}
                 style={{
-                  padding: '8px 16px',
+                  padding: '9px 0',
                   background: running ? '#1E1E2E' : 'linear-gradient(135deg, #7C3AED, #6D28D9)',
                   border: 'none', borderRadius: 8,
                   color: running ? '#64748B' : '#fff',
@@ -586,138 +417,305 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
               </button>
             </div>
           </div>
-        </div>
 
-        {/* Agent cards */}
-        {agents.map(agent => agent.status !== 'idle' && (
-          <div
-            key={agent.role}
-            style={{
-              background: '#12121A',
-              border: `1px solid ${agent.status === 'done' ? agent.color + '44' : '#1E1E2E'}`,
-              borderLeft: `3px solid ${agent.color}`,
-              borderRadius: 12,
-              overflow: 'hidden',
-            }}
-          >
-            {/* Card header — clickable para todas las cards excepto Designer */}
+          {/* Mis Proyectos */}
+          <div style={{ background: '#12121A', border: '1px solid #1E1E2E', borderLeft: '3px solid #10B981', borderRadius: 12, overflow: 'hidden' }}>
             <div
-              onClick={() => agent.status === 'done' && agent.role !== 'designer' && toggleCard(agent.role)}
-              style={{
-                padding: '10px 12px',
-                display: 'flex', alignItems: 'center', gap: 8,
-                cursor: agent.status === 'done' && agent.role !== 'designer' ? 'pointer' : 'default',
-                userSelect: 'none',
-              }}
+              onClick={() => setShowProjects(p => !p)}
+              style={{ padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}
             >
-              <span>{agent.icon}</span>
-              <span style={{ fontFamily: mono, fontSize: 11, fontWeight: 700, color: agent.color }}>{agent.label}</span>
-              {agent.status === 'thinking' && (
-                <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>analizando...</span>
-              )}
-              {agent.status === 'done' && (
-                <span style={{ fontSize: 10, color: agent.color }}>✓</span>
-              )}
-              {/* Toggle indicator para cards no-Designer */}
-              {agent.status === 'done' && agent.role !== 'designer' && (
-                <span style={{ marginLeft: 'auto', fontFamily: mono, fontSize: 10, color: '#64748B' }}>
-                  {expandedCards[agent.role] ? '▲ cerrar' : '▼ ver'}
-                </span>
-              )}
-              {/* Critic badge inline */}
-              {agent.role === 'qa' && agent.status === 'done' && agent.content && (
-                <span style={{
-                  marginLeft: 0,
-                  fontFamily: mono, fontSize: 10, fontWeight: 700,
-                  color: agent.content.trim().startsWith('APROBADO') ? '#00ff88' : '#F59E0B',
-                }}>
-                  {agent.content.trim().startsWith('APROBADO') ? '● APROBADO' : '● REVISAR'}
-                </span>
-              )}
+              <span style={{ fontFamily: mono, fontSize: 10, color: '#10B981', fontWeight: 700 }}>🗂 MIS PROYECTOS</span>
+              <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>({projects.length})</span>
+              <span style={{ marginLeft: 'auto', fontFamily: mono, fontSize: 10, color: '#64748B' }}>{showProjects ? '▲' : '▼'}</span>
             </div>
-
-            {/* Card body */}
-            {(agent.status === 'done' || agent.status === 'error') && agent.content && (
-              <div style={{ padding: '0 12px 12px' }}>
-
-                {/* Designer — siempre visible con iframe */}
-                {agent.role === 'designer' && designPrototype ? (
-                  <div>
-                    <div style={{ fontFamily: mono, fontSize: 10, color: '#64748B', marginBottom: 8 }}>
-                      // prototipo visual
-                    </div>
-                    <div
-                      style={{ position: 'relative', cursor: 'pointer' }}
-                      onClick={() => setFullscreenPreview(true)}
-                      title="Ver en pantalla completa"
-                    >
-                      <iframe
-                        srcDoc={designPrototype}
-                        style={{ width: '100%', height: 480, border: '1px solid #1E1E2E', borderRadius: 8, background: '#fff', pointerEvents: 'none' }}
-                        sandbox="allow-scripts allow-same-origin"
-                        title="Design Prototype"
-                      />
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          const blob = new Blob([designPrototype], { type: 'text/html' })
-                          const url = URL.createObjectURL(blob)
-                          window.open(url, '_blank')
-                        }}
-                        style={{
-                          position: 'absolute', top: 8, left: 8,
-                          background: 'rgba(0,0,0,0.7)', borderRadius: 4, padding: '4px 8px',
-                          fontSize: 11, color: '#ccc', fontFamily: mono, border: 'none', cursor: 'pointer',
-                        }}
+            {showProjects && (
+              <div style={{ padding: '0 12px 12px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {projects.length === 0 ? (
+                  <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>Sin proyectos guardados</span>
+                ) : (
+                  Object.entries(
+                    projects.reduce((acc, p) => { (acc[p.folder] = acc[p.folder] || []).push(p); return acc }, {} as Record<string, StudioProject[]>)
+                  ).map(([folder, fps]) => (
+                    <div key={folder}>
+                      <div
+                        onClick={() => setExpandedFolders(ef => ({ ...ef, [folder]: !ef[folder] }))}
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 0', cursor: 'pointer', userSelect: 'none' }}
                       >
-                        ↗ abrir
-                      </button>
-                      <div style={{
-                        position: 'absolute', top: 8, right: 8,
-                        background: 'rgba(0,0,0,0.7)', borderRadius: 4, padding: '4px 8px',
-                        fontSize: 11, color: '#ccc', fontFamily: mono, pointerEvents: 'none',
-                      }}>
-                        ⛶ expandir
+                        <span style={{ fontFamily: mono, fontSize: 10, color: '#F59E0B' }}>
+                          {expandedFolders[folder] ? '📂' : '📁'}
+                        </span>
+                        <span style={{ fontFamily: mono, fontSize: 10, color: '#F59E0B', fontWeight: 700 }}>{folder}</span>
+                        <span style={{ fontFamily: mono, fontSize: 9, color: '#64748B' }}>({fps.length})</span>
                       </div>
+                      {expandedFolders[folder] && fps.map(p => (
+                        <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 16, paddingBottom: 4, flexWrap: 'wrap' }}>
+                          <span style={{ fontFamily: mono, fontSize: 10, color: '#94A3B8', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📄 {p.name}</span>
+                          {deleteConfirmId === p.id ? (
+                            <>
+                              <span style={{ fontFamily: mono, fontSize: 9, color: '#EF4444' }}>¿Eliminar?</span>
+                              <button onClick={() => setDeleteConfirmId(null)} style={{ padding: '3px 6px', background: 'transparent', border: '1px solid #1E1E2E', borderRadius: 4, color: '#64748B', fontFamily: mono, fontSize: 9, cursor: 'pointer' }}>No</button>
+                              <button onClick={() => { deleteProject(p.id); setDeleteConfirmId(null) }} style={{ padding: '3px 6px', background: '#EF444422', border: '1px solid #EF4444', borderRadius: 4, color: '#EF4444', fontFamily: mono, fontSize: 9, fontWeight: 700, cursor: 'pointer' }}>Sí</button>
+                            </>
+                          ) : (
+                            <>
+                              <button onClick={() => loadProjectHtml(p.id)} style={{ padding: '3px 8px', background: '#06B6D422', border: '1px solid #06B6D444', borderRadius: 4, color: '#06B6D4', fontFamily: mono, fontSize: 9, cursor: 'pointer' }}>cargar</button>
+                              <button onClick={() => setDeleteConfirmId(p.id)} style={{ padding: '3px 6px', background: 'transparent', border: 'none', color: '#64748B', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}>✕</button>
+                            </>
+                          )}
+                        </div>
+                      ))}
                     </div>
-                    {/* Save prototype button */}
-                    <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
-                      <button
-                        onClick={() => openSaveModal('prototype')}
-                        style={{
-                          padding: '7px 16px',
-                          background: 'linear-gradient(135deg, #10B981, #059669)',
-                          border: 'none', borderRadius: 8,
-                          color: '#fff', fontFamily: mono, fontSize: 11, fontWeight: 700,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        💾 Guardar Proyecto
-                      </button>
-                    </div>
-                  </div>
-
-                ) : agent.role === 'qa' && expandedCards['qa'] ? (
-                  /* Critic — expandible, verde/ámbar */
-                  <div style={{
-                    fontFamily: mono, fontSize: 11, lineHeight: 1.7, whiteSpace: 'pre-wrap',
-                    color: agent.content.trim().startsWith('APROBADO') ? '#00ff88' : '#F59E0B',
-                    paddingTop: 4,
-                  }}>
-                    {agent.content}
-                  </div>
-
-                ) : agent.role !== 'qa' && expandedCards[agent.role] ? (
-                  /* Architect + Engineer — expandibles */
-                  <div style={{ fontFamily: mono, fontSize: 11, color: '#94A3B8', lineHeight: 1.7, whiteSpace: 'pre-wrap', paddingTop: 4 }}>
-                    {agent.content}
-                  </div>
-
-                ) : null}
+                  ))
+                )}
               </div>
             )}
           </div>
-        ))}
+        </div>
+
+        {/* ── CENTER: Pipeline cards ── */}
+        <div style={{
+          flex: 1, minWidth: 0,
+          overflowY: 'auto', padding: 14,
+          display: 'flex', flexDirection: 'column', gap: 12,
+        }}>
+          {agents.map(agent => agent.status !== 'idle' && (
+            <div
+              key={agent.role}
+              style={{
+                background: '#12121A',
+                border: `1px solid ${agent.status === 'done' ? agent.color + '44' : '#1E1E2E'}`,
+                borderLeft: `3px solid ${agent.color}`,
+                borderRadius: 12,
+                overflow: 'hidden',
+              }}
+            >
+              {/* Card header */}
+              <div
+                onClick={() => agent.status === 'done' && agent.role !== 'designer' && toggleCard(agent.role)}
+                style={{
+                  padding: '10px 12px',
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  cursor: agent.status === 'done' && agent.role !== 'designer' ? 'pointer' : 'default',
+                  userSelect: 'none',
+                }}
+              >
+                <span>{agent.icon}</span>
+                <span style={{ fontFamily: mono, fontSize: 11, fontWeight: 700, color: agent.color }}>{agent.label}</span>
+                {agent.status === 'thinking' && (
+                  <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>analizando...</span>
+                )}
+                {agent.status === 'done' && (
+                  <span style={{ fontSize: 10, color: agent.color }}>✓</span>
+                )}
+                {/* Critic badge */}
+                {agent.role === 'qa' && agent.status === 'done' && agent.content && (
+                  <span style={{ fontFamily: mono, fontSize: 10, fontWeight: 700, color: agent.content.trim().startsWith('APROBADO') ? '#00ff88' : '#F59E0B' }}>
+                    {agent.content.trim().startsWith('APROBADO') ? '● APROBADO' : '● REVISAR'}
+                  </span>
+                )}
+                {/* Designer: 💾 button in header */}
+                {agent.role === 'designer' && agent.status === 'done' && designPrototype && (
+                  <button
+                    onClick={e => { e.stopPropagation(); openSaveModal('prototype') }}
+                    style={{
+                      marginLeft: 'auto',
+                      padding: '4px 12px',
+                      background: 'linear-gradient(135deg, #10B981, #059669)',
+                      border: 'none', borderRadius: 6,
+                      color: '#fff', fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: 'pointer',
+                    }}
+                  >
+                    💾 Guardar
+                  </button>
+                )}
+                {/* Toggle for non-designer cards */}
+                {agent.status === 'done' && agent.role !== 'designer' && (
+                  <span style={{ marginLeft: 'auto', fontFamily: mono, fontSize: 10, color: '#64748B' }}>
+                    {expandedCards[agent.role] ? '▲ cerrar' : '▼ ver'}
+                  </span>
+                )}
+              </div>
+
+              {/* Card body — with internal scroll */}
+              {(agent.status === 'done' || agent.status === 'error') && agent.content && (
+                <div style={{ padding: '0 12px 12px' }}>
+                  {agent.role === 'designer' && designPrototype ? (
+                    <span style={{ fontFamily: mono, fontSize: 10, color: '#64748B' }}>// prototipo listo — ver panel derecho</span>
+                  ) : agent.role === 'qa' && expandedCards['qa'] ? (
+                    <div style={{
+                      maxHeight: 200, overflowY: 'auto',
+                      fontFamily: mono, fontSize: 11, lineHeight: 1.7, whiteSpace: 'pre-wrap',
+                      color: agent.content.trim().startsWith('APROBADO') ? '#00ff88' : '#F59E0B',
+                      paddingTop: 4,
+                    }}>
+                      {agent.content}
+                    </div>
+                  ) : agent.role !== 'qa' && agent.role !== 'designer' && expandedCards[agent.role] ? (
+                    <div style={{
+                      maxHeight: 200, overflowY: 'auto',
+                      fontFamily: mono, fontSize: 11, color: '#94A3B8', lineHeight: 1.7, whiteSpace: 'pre-wrap', paddingTop: 4,
+                    }}>
+                      {agent.content}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* ── RIGHT: Preview panel ── */}
+        <div style={{
+          width: 420, flexShrink: 0,
+          borderLeft: '1px solid #1E1E2E',
+          display: 'flex', flexDirection: 'column', overflowY: 'auto',
+          padding: 14, gap: 12,
+        }}>
+
+          {/* Design prototype */}
+          {designPrototype && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ fontFamily: mono, fontSize: 10, color: '#06B6D4', fontWeight: 700 }}>// prototipo visual</div>
+              <div
+                style={{ position: 'relative', cursor: 'pointer' }}
+                onClick={() => setFullscreenPreview(true)}
+                title="Ver en pantalla completa"
+              >
+                <iframe
+                  srcDoc={designPrototype}
+                  style={{ width: '100%', height: 480, border: '1px solid #1E1E2E', borderRadius: 8, background: '#fff', pointerEvents: 'none' }}
+                  sandbox="allow-scripts allow-same-origin"
+                  title="Design Prototype"
+                />
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    const blob = new Blob([designPrototype], { type: 'text/html' })
+                    window.open(URL.createObjectURL(blob), '_blank')
+                  }}
+                  style={{
+                    position: 'absolute', top: 8, left: 8,
+                    background: 'rgba(0,0,0,0.7)', borderRadius: 4, padding: '4px 8px',
+                    fontSize: 11, color: '#ccc', fontFamily: mono, border: 'none', cursor: 'pointer',
+                  }}
+                >
+                  ↗ abrir
+                </button>
+                <div style={{
+                  position: 'absolute', top: 8, right: 8,
+                  background: 'rgba(0,0,0,0.7)', borderRadius: 4, padding: '4px 8px',
+                  fontSize: 11, color: '#ccc', fontFamily: mono, pointerEvents: 'none',
+                }}>
+                  ⛶ expandir
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Import HTML panel */}
+          {showImport && (
+            <div style={{ background: '#12121A', border: '1px solid #06B6D444', borderLeft: '3px solid #06B6D4', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <span style={{ fontFamily: mono, fontSize: 10, color: '#06B6D4', fontWeight: 700 }}>📥 IMPORTAR HTML</span>
+              <textarea
+                value={importHtml}
+                onChange={e => setImportHtml(e.target.value)}
+                placeholder="Pega tu HTML aquí..."
+                rows={6}
+                style={{
+                  background: '#0A0A0F', border: '1px solid #1E1E2E', borderRadius: 8,
+                  color: '#E2E8F0', fontFamily: mono, fontSize: 11,
+                  padding: 10, resize: 'vertical', lineHeight: 1.5, outline: 'none',
+                }}
+              />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => setImportPreview(importHtml.trim())}
+                  disabled={!importHtml.trim()}
+                  style={{
+                    padding: '7px 16px',
+                    background: importHtml.trim() ? 'linear-gradient(135deg, #06B6D4, #0891B2)' : '#1E1E2E',
+                    border: 'none', borderRadius: 8,
+                    color: importHtml.trim() ? '#fff' : '#64748B',
+                    fontFamily: mono, fontSize: 11, fontWeight: 700,
+                    cursor: importHtml.trim() ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  👁 Vista Previa
+                </button>
+                <button
+                  onClick={() => openSaveModal('import')}
+                  disabled={!importHtml.trim()}
+                  style={{
+                    padding: '7px 14px',
+                    background: importHtml.trim() ? '#10B98122' : 'transparent',
+                    border: `1px solid ${importHtml.trim() ? '#10B981' : '#1E1E2E'}`,
+                    borderRadius: 8,
+                    color: importHtml.trim() ? '#10B981' : '#64748B',
+                    fontFamily: mono, fontSize: 10, fontWeight: 700,
+                    cursor: importHtml.trim() ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  💾 Guardar
+                </button>
+                <button
+                  onClick={openEditModal}
+                  disabled={!importHtml.trim()}
+                  title={activeProjectId ? 'Editar este proyecto con AI' : 'Carga un proyecto desde Mis Proyectos para editar'}
+                  style={{
+                    padding: '7px 14px',
+                    background: importHtml.trim() ? '#7C3AED22' : 'transparent',
+                    border: `1px solid ${importHtml.trim() ? '#7C3AED' : '#1E1E2E'}`,
+                    borderRadius: 8,
+                    color: importHtml.trim() ? '#A78BFA' : '#64748B',
+                    fontFamily: mono, fontSize: 10, fontWeight: 700,
+                    cursor: importHtml.trim() ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  ✏️ Editar
+                </button>
+                {importPreview && (
+                  <button
+                    onClick={() => {
+                      const blob = new Blob([importPreview], { type: 'text/html' })
+                      window.open(URL.createObjectURL(blob), '_blank')
+                    }}
+                    style={{ padding: '7px 14px', background: 'transparent', border: '1px solid #1E1E2E', borderRadius: 8, color: '#94A3B8', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}
+                  >
+                    ↗ abrir
+                  </button>
+                )}
+                {importPreview && (
+                  <button
+                    onClick={() => setImportPreview('')}
+                    style={{ padding: '7px 10px', background: 'transparent', border: 'none', color: '#64748B', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+              {importPreview && (
+                <div>
+                  <div style={{ fontFamily: mono, fontSize: 10, color: '#64748B', marginBottom: 6 }}>// preview</div>
+                  <iframe
+                    srcDoc={importPreview}
+                    style={{ width: '100%', height: 420, border: '1px solid #1E1E2E', borderRadius: 8, background: '#fff' }}
+                    sandbox="allow-scripts allow-same-origin"
+                    title="Import Preview"
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Empty state */}
+          {!designPrototype && !showImport && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 8, opacity: 0.3 }}>
+              <span style={{ fontSize: 32 }}>🖼</span>
+              <span style={{ fontFamily: mono, fontSize: 11, color: '#64748B', textAlign: 'center' }}>El prototipo aparecerá aquí</span>
+            </div>
+          )}
+        </div>
+
       </div>
 
       {/* Footer */}
