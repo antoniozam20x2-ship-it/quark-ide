@@ -30,7 +30,7 @@ const GEMINI_MODELS = [
 ];
 
 export async function callAI(
-  task: 'fix' | 'generate' | 'analyze' | 'html' | 'designer' | 'warroom', | 'edit',
+  task: 'fix' | 'generate' | 'analyze' | 'html' | 'designer' | 'warroom' | 'edit',
   prompt: string,
   systemPrompt?: string,
 ): Promise<string> {
