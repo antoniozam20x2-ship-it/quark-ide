@@ -154,6 +154,21 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         files:   [{ path: fixResult.filePath, content: fixResult.fixedContent }],
         message: `fix: ${fixResult.filePath}`,
       });
+      if (activeProject.railwayProjectId) {
+        setTimeout(async () => {
+          try {
+            await fetch(`${API_BASE}/debugger/run`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                projectId:   activeProject.railwayProjectId,
+                projectName: activeProject.name,
+                repo:        selectedRepo,
+              }),
+            })
+          } catch {}
+        }, 180_000)
+      }
     } catch (err) {
       setFeed((prev) => [...prev, { event: 'error', text: err instanceof Error ? err.message : String(err) }]);
     } finally {
@@ -316,6 +331,21 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         files:   result.files ?? [],
         message: result.commitMessage ?? '',
       });
+      if (activeProject.railwayProjectId) {
+        setTimeout(async () => {
+          try {
+            await fetch(`${API_BASE}/debugger/run`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                projectId:   activeProject.railwayProjectId,
+                projectName: activeProject.name,
+                repo:        result?.repo ?? selectedRepo,
+              }),
+            })
+          } catch {}
+        }, 180_000)
+      }
     } catch (err) {
       setFeed((prev) => [...prev, { event: 'error', text: err instanceof Error ? err.message : String(err) }]);
     } finally {
