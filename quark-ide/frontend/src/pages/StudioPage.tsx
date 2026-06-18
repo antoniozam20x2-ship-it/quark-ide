@@ -107,7 +107,10 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
 
   function openSaveModal(target: 'import' | 'prototype') {
     setSaveHtmlTarget(target)
-    setSaveName('')
+    const suggested = target === 'prototype' && brief.trim()
+      ? brief.trim().split(/[\n.!?]/)[0].replace(/^(crea|genera|diseña|haz|quiero|necesito|dame)\s+/i, '').trim().slice(0, 50)
+      : ''
+    setSaveName(suggested)
     setSaveFolder('')
     setNewFolderMode(false)
     setNewFolderName('')
@@ -676,6 +679,21 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
                       }}>
                         ⛶ expandir
                       </div>
+                    </div>
+                    {/* Save prototype button */}
+                    <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
+                      <button
+                        onClick={() => openSaveModal('prototype')}
+                        style={{
+                          padding: '7px 16px',
+                          background: 'linear-gradient(135deg, #10B981, #059669)',
+                          border: 'none', borderRadius: 8,
+                          color: '#fff', fontFamily: mono, fontSize: 11, fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        💾 Guardar Proyecto
+                      </button>
                     </div>
                   </div>
 
