@@ -64,6 +64,49 @@ async function resolveImagePlaceholders(html: string): Promise<string> {
   return result
 }
 
+// ── Pexels video resolver ─────────────────────────────────────────────────────
+
+const videoCache = new Map<string, string>()
+
+async function resolveVideoPlaceholders(html: string): Promise<string> {
+  const key = process.env.PEXELS_API_KEY
+  const slotRegex = /<div class="video-slot" data-query="([^"]+)"[^>]*><\/div>/g
+  const matches = [...html.matchAll(slotRegex)]
+  if (matches.length === 0) return html
+
+  const uniqueQueries = [...new Set(matches.map(m => m[1]))]
+
+  await Promise.all(uniqueQueries.map(async (query) => {
+    const cached = videoCache.get(query)
+    if (cached && cached.startsWith('http')) return
+    if (!key) {
+      videoCache.set(query, '')
+      return
+    }
+    try {
+      const url = `https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&per_page=3&orientation=landscape&size=medium`
+      const r = await fetch(url, { headers: { Authorization: key } })
+      const data = await r.json() as any
+      const videoUrl = data?.videos?.[0]?.video_files?.find((f: any) =>
+        f.quality === 'hd' || f.quality === 'sd'
+      )?.link ?? ''
+      videoCache.set(query, videoUrl)
+    } catch (err) {
+      console.warn('[Pexels] fallo en query:', query, err)
+    }
+  }))
+
+  return html.replace(slotRegex, (_full, query) => {
+    const videoUrl = videoCache.get(query)
+    if (videoUrl && videoUrl.startsWith('http')) {
+      return `<video autoplay muted loop playsinline style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;z-index:0;">
+  <source src="${videoUrl}" type="video/mp4">
+</video>`
+    }
+    return `<div style="position:absolute;top:0;left:0;width:100%;height:100%;background:linear-gradient(135deg,#1a1a2e,#16213e);z-index:0;"></div>`
+  })
+}
+
 // ── HTML compressor para edición eficiente ───────────────────────────────────
 
 function compressHtmlForEditing(html: string): { compressed: string; styleBlock: string } {
@@ -129,11 +172,30 @@ Reglas:
 
 Devuelve ÚNICAMENTE el HTML — empieza con <!DOCTYPE html> y termina con </html>. Sin explicaciones, sin markdown.
 
-Usa tu criterio profesional para decidir qué tan complejo debe ser según el brief. Un restaurante merece navbar, hero animado, menú interactivo, reservaciones, galería con lightbox y footer completo. Un juego merece canvas y game loop. Una tienda merece carrito y productos. Sé ambicioso.
+CRÍTICO — NAVEGACIÓN FUNCIONAL:
+- Cada enlace del navbar debe tener href="#id-de-seccion"
+- Cada sección debe tener el id correspondiente: <section id="hero">, <section id="menu">, <section id="galeria">, <section id="reserva">, <section id="contacto">
+- NUNCA uses solo class sin id en secciones principales
+- El scroll debe funcionar suavemente: agrega html { scroll-behavior: smooth; } en el CSS
 
-CRÍTICO — IMÁGENES: Para cualquier imagen fotográfica que el diseño necesite (comida, productos, personas, lugares, etc.), usa este placeholder exacto en vez de <img>:
+CRÍTICO — VIDEO EN HERO:
+Para páginas de negocio con experiencia visual (restaurante, hotel, spa, tienda, café, bar), el hero DEBE tener un video de fondo en loop. Usa este placeholder exacto:
+<div class="video-slot" data-query="keyword1 keyword2" style="position:absolute;top:0;left:0;width:100%;height:100%;"></div>
+El data-query debe tener 2-3 keywords en inglés específicas al negocio (ej: "italian restaurant food" para pizzería, "luxury hotel lobby" para hotel). El backend resuelve este placeholder con un video real de Pexels.
+
+CRÍTICO — IMÁGENES:
+Para cualquier imagen fotográfica usa este placeholder:
 <div class="img-slot" data-query="keyword1,keyword2" style="width:100%;height:100%;background-size:cover;background-position:center;"></div>
-El atributo data-query debe tener 1-3 keywords en inglés específicas al contenido real (ej: data-query="croissant,bakery" para una panadería, data-query="sneakers,product" para zapatillas). No inventes URLs de imágenes ni uses la etiqueta <img> para fotos — el backend resuelve estos placeholders después. Para iconografía decorativa simple (no fotos) puedes seguir usando SVG inline.`,
+El data-query debe tener 1-3 keywords en inglés específicas al contenido real. No inventes URLs ni uses <img> para fotos.
+
+ESTRUCTURA DEL HERO CON VIDEO:
+<section id="hero" style="position:relative;height:100vh;overflow:hidden;display:flex;align-items:center;justify-content:center;">
+  <div class="video-slot" data-query="KEYWORDS_DEL_NEGOCIO" style="position:absolute;top:0;left:0;width:100%;height:100%;"></div>
+  <div style="position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1;"></div>
+  <div style="position:relative;z-index:2;text-align:center;color:white;">
+    <!-- Título, subtítulo, CTA -->
+  </div>
+</section>`,
 
   qa: `Eres un crítico de diseño senior. Recibes el BRIEF, la DIRECCIÓN CREATIVA y el HTML
 generado por el Designer. Evalúa con honestidad:
@@ -214,7 +276,7 @@ router.post('/analyze', async (req, res) => {
       if (criticText.trim().startsWith('REVISAR:')) {
         const revisionPrompt = `BRIEF: ${brief}\n\nDIRECCIÓN CREATIVA:\n${architectResult ?? ''}\n\nHTML ORIGINAL (referencia base, mejóralo sin partir de cero):\n${designerResult ?? ''}\n\nNOTAS DE REVISIÓN (correcciones obligatorias):\n${criticText}`
         const revisedRaw  = await callAI('html', revisionPrompt, SYSTEM_PROMPTS['designer'])
-        const revisedHtml = await resolveImagePlaceholders(sanitizeDesignerHtml(revisedRaw))
+        const revisedHtml = await resolveVideoPlaceholders(await resolveImagePlaceholders(sanitizeDesignerHtml(revisedRaw)))
         const useRevised  = revisedHtml.length > (designerResult ?? '').length * 0.5
         return res.json({ result: criticText, role, revisedHtml: useRevised ? revisedHtml : designerResult })
       }
@@ -238,7 +300,9 @@ router.post('/analyze', async (req, res) => {
     }
 
     const raw    = await callAI(task, userPrompt, systemPrompt)
-    const result = role === 'designer' ? await resolveImagePlaceholders(sanitizeDesignerHtml(raw)) : raw
+    const result = role === 'designer'
+      ? await resolveVideoPlaceholders(await resolveImagePlaceholders(sanitizeDesignerHtml(raw)))
+      : raw
     res.json({ result, role })
   } catch (err) {
     console.error('studio/analyze error:', err)
@@ -298,7 +362,7 @@ Aplica ÚNICAMENTE los cambios descritos. No toques /* CSS_PRESERVED */ ni UNSPL
     const restored = restoreHtmlAfterEditing(sanitized, currentHtml)
 
     // ── Resolver solo img-slot NUEVOS que Claude haya añadido ──
-    const finalHtml = await resolveImagePlaceholders(restored)
+    const finalHtml = await resolveVideoPlaceholders(await resolveImagePlaceholders(restored))
 
     console.log(`[Studio/Edit] Restaurado: ${finalHtml.length} chars`)
     res.json({ html: finalHtml })
