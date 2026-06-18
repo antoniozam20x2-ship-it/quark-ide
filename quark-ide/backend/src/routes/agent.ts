@@ -259,9 +259,22 @@ El campo content de cada archivo debe ser un string JSON válido con caracteres 
             throw new Error('no match');
           }
         } catch {
-          // Último recurso — AI repara el JSON roto
-          send('action', { text: '🔧 Reparando respuesta...' });
-          parsed = await repairJSON(raw, prompt);
+          try {
+            send('action', { text: '🔧 Reparando respuesta...' });
+            parsed = await repairJSON(raw, prompt);
+          } catch (repairErr) {
+            send('action', { text: '⚠️ El agente no pudo generar JSON válido. Intenta reformular el prompt.' });
+            send('done', {
+              files: [],
+              commitMessage: '',
+              mainComponent: '',
+              mainContent: '',
+              repo,
+              branch,
+            });
+            res.end();
+            return;
+          }
         }
       }
     }
