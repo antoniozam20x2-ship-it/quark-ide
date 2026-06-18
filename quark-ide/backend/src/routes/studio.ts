@@ -64,6 +64,42 @@ async function resolveImagePlaceholders(html: string): Promise<string> {
   return result
 }
 
+// ── HTML compressor para edición eficiente ───────────────────────────────────
+
+function compressHtmlForEditing(html: string): { compressed: string; styleBlock: string } {
+  const styleMatch = html.match(/<style[\s\S]*?<\/style>/gi) ?? []
+  const styleBlock = styleMatch.join('\n')
+
+  const compressed = html
+    .replace(/<style[\s\S]*?<\/style>/gi, '<style>/* CSS_PRESERVED */</style>')
+    .replace(/background-image:url\('[^']+'\)/g, "background-image:url('IMG_URL')")
+    .replace(/https:\/\/images\.unsplash\.com[^'")]+/g, 'UNSPLASH_URL')
+
+  return { compressed, styleBlock }
+}
+
+function restoreHtmlAfterEditing(editedCompressed: string, original: string): string {
+  const originalStyles = original.match(/<style[\s\S]*?<\/style>/gi) ?? []
+  const unsplashUrls = [...original.matchAll(/https:\/\/images\.unsplash\.com[^'")]+/g)].map(m => m[0])
+
+  let result = editedCompressed
+  let styleIndex = 0
+  let urlIndex = 0
+
+  result = result.replace(/<style>\/\* CSS_PRESERVED \*\/<\/style>/gi, () => {
+    return originalStyles[styleIndex++] ?? ''
+  })
+
+  result = result.replace(/background-image:url\('IMG_URL'\)/g, () => {
+    const url = unsplashUrls[urlIndex++]
+    return url ? `background-image:url('${url}')` : `background-image:url('IMG_URL')`
+  })
+
+  result = result.replace(/UNSPLASH_URL/g, () => unsplashUrls[urlIndex++] ?? '')
+
+  return result
+}
+
 // ── System prompts ────────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPTS: Record<string, string> = {
@@ -214,16 +250,15 @@ router.post('/analyze', async (req, res) => {
 
 const EDITOR_SYSTEM_PROMPT = `Eres un editor HTML quirúrgico. Tu única tarea es aplicar cambios específicos a un HTML existente.
 
-REGLAS ABSOLUTAS — VIOLACIÓN = RESPUESTA INVÁLIDA:
-1. El HTML original viene dentro de <html_original>. ESE es tu documento base.
-2. Los cambios vienen en <cambios_solicitados>. SOLO modifica lo que ahí se indica.
-3. NUNCA elimines, muevas ni reescribas secciones que no estén mencionadas en los cambios.
-4. NUNCA cambies la paleta de colores, tipografía ni estructura general.
-5. NUNCA elimines img-slot existentes — si el cambio requiere imágenes nuevas, añade img-slot con data-query apropiado.
-6. Devuelve SOLO el HTML completo resultante — empieza con <!DOCTYPE html>, termina con </html>.
-7. Sin texto explicativo, sin markdown, sin bloques de código.
-
-Tu output debe ser el HTML original con EXACTAMENTE los cambios pedidos aplicados, y nada más.`
+REGLAS ABSOLUTAS:
+1. El HTML viene en <html_original>. ESE es tu documento base — no lo reinterpretes.
+2. Los cambios vienen en <cambios_solicitados>. SOLO modifica lo indicado ahí.
+3. NUNCA toques bloques marcados como /* CSS_PRESERVED */ — son CSS que se restaura automáticamente.
+4. NUNCA cambies atributos marcados como UNSPLASH_URL ni IMG_URL — se restauran automáticamente.
+5. NUNCA elimines secciones, navegación, formularios ni elementos no mencionados en los cambios.
+6. Si el cambio requiere imágenes nuevas, usa: <div class="img-slot" data-query="keyword" style="width:100%;height:250px;background-size:cover;background-position:center;display:block;"></div>
+7. Devuelve SOLO el HTML completo — empieza con <!DOCTYPE html>, termina con </html>.
+8. Sin texto explicativo, sin markdown, sin bloques de código.`
 
 router.post('/edit', async (req, res) => {
   try {
@@ -242,19 +277,32 @@ router.post('/edit', async (req, res) => {
     }
     if (!currentHtml) return res.status(400).json({ error: 'html o projectId requerido' })
 
+    // ── Comprimir antes de mandar a Claude ──
+    const { compressed } = compressHtmlForEditing(currentHtml)
+    console.log(`[Studio/Edit] Original: ${currentHtml.length} chars → Comprimido: ${compressed.length} chars`)
+
     const userPrompt = `<html_original>
-${currentHtml}
+${compressed}
 </html_original>
 
 <cambios_solicitados>
 ${changes}
 </cambios_solicitados>
 
-Aplica ÚNICAMENTE los cambios descritos en <cambios_solicitados> al HTML dentro de <html_original>.
-Devuelve el HTML completo con los cambios aplicados. Sin explicaciones, sin markdown.`
+Aplica ÚNICAMENTE los cambios descritos. No toques /* CSS_PRESERVED */ ni UNSPLASH_URL ni IMG_URL. Devuelve el HTML completo con los cambios aplicados. Sin explicaciones, sin markdown.`
+
     const raw = await callAI('edit', userPrompt, EDITOR_SYSTEM_PROMPT)
-    const editedHtml = await resolveImagePlaceholders(sanitizeDesignerHtml(raw))
-    res.json({ html: editedHtml })
+    const sanitized = sanitizeDesignerHtml(raw)
+
+    // ── Restaurar CSS y URLs originales ──
+    const restored = restoreHtmlAfterEditing(sanitized, currentHtml)
+
+    // ── Resolver solo img-slot NUEVOS que Claude haya añadido ──
+    const finalHtml = await resolveImagePlaceholders(restored)
+
+    console.log(`[Studio/Edit] Restaurado: ${finalHtml.length} chars`)
+    res.json({ html: finalHtml })
+
   } catch (err) {
     console.error('studio/edit error:', err)
     res.status(500).json({ error: 'Error al editar proyecto' })
