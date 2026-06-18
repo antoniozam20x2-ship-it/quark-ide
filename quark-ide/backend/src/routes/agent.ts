@@ -348,6 +348,11 @@ Archivos existentes en el repo:
 ${filePaths}
 ${fileContextStr}
 
+REGLA CRÍTICA — PATCH VS NUEVO:
+- Si el archivo YA EXISTE en la lista de archivos del repo → PATCH: conserva TODO el código original y modifica ÚNICAMENTE las líneas necesarias para cumplir el prompt. No reescribas lo que no se pidió cambiar.
+- Si el archivo NO EXISTE en la lista → puedes crearlo completo desde cero.
+- Cuando hagas PATCH: usa el contenido de CONTENIDO REAL DE ARCHIVOS RELEVANTES como base exacta y aplica solo el cambio mínimo necesario.
+
 RESPONDE ÚNICAMENTE CON ESTE JSON (sin markdown, sin backticks, sin texto extra):
 {
   "files": [
