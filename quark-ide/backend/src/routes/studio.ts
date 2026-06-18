@@ -252,7 +252,7 @@ ${changes}
 
 Aplica ÚNICAMENTE los cambios descritos en <cambios_solicitados> al HTML dentro de <html_original>.
 Devuelve el HTML completo con los cambios aplicados. Sin explicaciones, sin markdown.`
-    const raw = await callAI('html', userPrompt, EDITOR_SYSTEM_PROMPT)
+    const raw = await callAI('edit', userPrompt, EDITOR_SYSTEM_PROMPT)
     const editedHtml = await resolveImagePlaceholders(sanitizeDesignerHtml(raw))
     res.json({ html: editedHtml })
   } catch (err) {
