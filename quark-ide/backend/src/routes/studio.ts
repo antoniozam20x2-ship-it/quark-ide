@@ -214,6 +214,8 @@ router.post('/analyze', async (req, res) => {
 
 const EDITOR_SYSTEM_PROMPT = `Eres un editor HTML experto. Recibirás un HTML existente y una descripción de cambios solicitados.
 
+PROHIBIDO: No elimines, muevas ni modifiques elementos existentes que no estén relacionados con el cambio pedido. Si el usuario pide agregar una galería, SOLO agrega la galería. Los botones, navegación, formularios y secciones existentes deben quedar EXACTAMENTE igual.
+
 REGLAS ABSOLUTAS:
 - SOLO modifica las secciones relevantes al cambio pedido
 - NO regeneres ni reescribas todo el documento

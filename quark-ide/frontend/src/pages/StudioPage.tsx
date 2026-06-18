@@ -58,6 +58,12 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
   const [running, setRunning] = useState(false)
   const [designPrototype, setDesignPrototype] = useState<string>(saved?.designPrototype ?? '')
   const [fullscreenPreview, setFullscreenPreview] = useState(false)
+  const [fullscreenHtml, setFullscreenHtml] = useState('')
+
+  function openFullscreen(html: string) {
+    setFullscreenHtml(html)
+    setFullscreenPreview(true)
+  }
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({})
   const [fastMode, setFastMode] = useState(false)
   const [showImport, setShowImport] = useState(false)
@@ -629,8 +635,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
-                    const blob = new Blob([designPrototype], { type: 'text/html' })
-                    window.open(URL.createObjectURL(blob), '_blank')
+                    openFullscreen(designPrototype)
                   }}
                   style={{
                     position: 'absolute', top: 8, left: 8,
@@ -714,10 +719,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
                 </button>
                 {importPreview && (
                   <button
-                    onClick={() => {
-                      const blob = new Blob([importPreview], { type: 'text/html' })
-                      window.open(URL.createObjectURL(blob), '_blank')
-                    }}
+                    onClick={() => openFullscreen(importPreview)}
                     style={{ padding: '7px 14px', background: 'transparent', border: '1px solid #1E1E2E', borderRadius: 8, color: '#94A3B8', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}
                   >
                     ↗ abrir
@@ -995,7 +997,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
             </button>
           </div>
           <iframe
-            srcDoc={designPrototype}
+            srcDoc={fullscreenHtml}
             style={{ flex: 1, border: 'none', width: '100%' }}
             sandbox="allow-scripts allow-same-origin"
             title="Studio Preview Fullscreen"
