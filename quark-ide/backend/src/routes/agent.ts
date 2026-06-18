@@ -285,6 +285,59 @@ router.post('/generate', async (req, res) => {
     }
 
     // ── GENERATION PATH — Gemini generates new/modified files ────────────────
+
+    // ── PRE-LECTURA INTELIGENTE ───────────────────────────────────────────────
+    send('action', { text: '🔎 Identificando archivos relevantes...' })
+
+    const relevantPathsRaw = await generateWithFallback(
+      `Dado este prompt: "${prompt}"
+
+Y estos archivos del repo:
+${filePaths}
+
+Devuelve un JSON array con máximo 5 paths de archivos que DEBES leer para responder correctamente.
+Solo paths que existen en la lista. Sin markdown.
+Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
+      'Eres un selector de archivos. Devuelve SOLO un JSON array de strings con los paths más relevantes. Sin explicaciones.'
+    )
+
+    let preloadedFiles: { path: string; content: string }[] = []
+    try {
+      const relevantPaths = JSON.parse(
+        relevantPathsRaw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim()
+      ) as string[]
+
+      if (Array.isArray(relevantPaths) && relevantPaths.length > 0) {
+        send('action', { text: `📂 Leyendo ${relevantPaths.length} archivo(s) clave...` })
+
+        const results = await Promise.allSettled(
+          relevantPaths.slice(0, 5).map(async (filePath) => {
+            const content = await getFileContent(filePath, repo)
+            return { path: filePath, content }
+          })
+        )
+
+        preloadedFiles = results
+          .filter((r): r is PromiseFulfilledResult<{ path: string; content: string }> => r.status === 'fulfilled')
+          .map((r) => r.value)
+
+        send('action', { text: `✅ Contexto real cargado — ${preloadedFiles.length} archivo(s)` })
+      }
+    } catch {
+      // Si falla la pre-lectura, continúa sin contexto adicional
+    }
+
+    const fileContextStr = preloadedFiles.length > 0
+      ? '\n\nCONTENIDO REAL DE ARCHIVOS RELEVANTES:\n' +
+        preloadedFiles.map((f) => {
+          const lines = f.content.split('\n')
+          const truncated = lines.length > 150
+            ? lines.slice(0, 150).join('\n') + `\n// ... (${lines.length - 150} líneas más)`
+            : f.content
+          return `--- ${f.path} ---\n${truncated}`
+        }).join('\n\n')
+      : ''
+
     send('action', { text: '🧠 Generando archivos con Gemini...' });
 
     const systemPrompt = `Eres un agente de código experto.
@@ -293,6 +346,7 @@ Tu tarea es generar archivos de código para un proyecto.
 Repo activo: ${projectName ?? repo} (${repo})
 Archivos existentes en el repo:
 ${filePaths}
+${fileContextStr}
 
 RESPONDE ÚNICAMENTE CON ESTE JSON (sin markdown, sin backticks, sin texto extra):
 {
