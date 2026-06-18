@@ -14,7 +14,21 @@ const GROQ_KEYS = [
   process.env.GROQ_API_KEY_3,
 ].filter(Boolean) as string[];
 
-let groqKeyIndex = 0;
+class AtomicGroqIndex {
+  private index = 0
+
+  next(total: number): number {
+    const current = this.index % total
+    this.index = (this.index + 1) % total
+    return current
+  }
+
+  current(total: number): number {
+    return this.index % total
+  }
+}
+
+const groqState = new AtomicGroqIndex()
 
 /** Stream a Groq chat completion as SSE chunks.
  *  Rotates keys on 429 (rate-limit). Throws on all other errors. */
@@ -25,12 +39,11 @@ async function streamGroq(
 ): Promise<void> {
   if (GROQ_KEYS.length === 0) throw new Error('No GROQ_API_KEY configured');
 
-  const startIndex = groqKeyIndex % GROQ_KEYS.length;
+  const startIndex = groqState.current(GROQ_KEYS.length);
   let attempts = 0;
 
   while (attempts < GROQ_KEYS.length) {
-    const key = GROQ_KEYS[groqKeyIndex % GROQ_KEYS.length];
-    groqKeyIndex++;
+    const key = GROQ_KEYS[groqState.next(GROQ_KEYS.length)];
     attempts++;
 
     const ctrl  = new AbortController();
