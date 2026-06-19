@@ -494,7 +494,17 @@ Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
       ? '\n\nCONTENIDO REAL DE ARCHIVOS RELEVANTES:\n' +
         (await Promise.all(preloadedFiles.map(async (f) => {
           const lines = f.content.split('\n')
-          if (lines.length <= 500) return `--- ${f.path} ---\n${f.content}`
+          if (lines.length <= 500) {
+            // Intentar extracción quirúrgica si hay función detectada
+            const fnName = extractFunctionNameFromPrompt(prompt)
+            if (fnName) {
+              const extracted = extractFunctionBlock(f.content, fnName)
+              if (extracted) {
+                return `--- ${f.path} (BLOQUE QUIRÚRGICO líneas ${extracted.startLine + 1}-${extracted.endLine + 1} de ${lines.length}) ---\n${extracted.block}\n// FULLFILE_LINES:${lines.length}|START:${extracted.startLine}|END:${extracted.endLine}|PATH:${f.path}`
+              }
+            }
+            return `--- ${f.path} ---\n${f.content}`
+          }
 
           // Archivo grande: extraer secciones relevantes por keywords
           let body: string
@@ -674,8 +684,15 @@ PROCESO OBLIGATORIO:
 SI NECESITAS >20 LÍNEAS:
 Usa commitMessage: "CONFIRMACIÓN REQUERIDA: Este cambio afecta N líneas — ¿confirmas que proceda?"
 
-ARCHIVOS TRUNCADOS (>150 líneas en contexto):
-Si el archivo fue truncado, indica en commitMessage: "ARCHIVO TRUNCADO: proporciona el archivo completo para proceder"
+ARCHIVOS CON BLOQUE QUIRÚRGICO:
+Si el contexto muestra '--- archivo (BLOQUE QUIRÚRGICO líneas X-Y de N) ---':
+- El archivo tiene N líneas totales pero SOLO te mandé el bloque relevante
+- Modifica SOLO ese bloque — devuélvelo corregido en content
+- NO intentes reconstruir el archivo completo — el backend hace el merge
+- En commitMessage indica: 'PATCH:X-Y' donde X e Y son las líneas del bloque
+
+ARCHIVOS COMPLETOS (sin etiqueta BLOQUE QUIRÚRGICO):
+- Devuelve el archivo completo con patch aplicado como siempre
 
 IMPORTS NUEVOS: agrégalos al inicio del archivo, nunca en el medio.
 
@@ -771,6 +788,23 @@ El campo content de cada archivo debe ser un string JSON válido con caracteres 
       files.find((f) => f.path === mainComponent) ??
       files.find((f) => f.path.endsWith('.tsx')) ??
       files[0];
+
+    // Merge quirúrgico — si el AI devolvió solo un bloque, reinsertarlo
+    for (const f of files) {
+      const patchMatch = (parsed.commitMessage ?? '').match(/PATCH:(\d+)-(\d+)/)
+      if (!patchMatch) continue
+      const startLine = parseInt(patchMatch[1]) - 1
+      const endLine = parseInt(patchMatch[2]) - 1
+      // Buscar el archivo original en preloadedFiles
+      const original = preloadedFiles.find(p => p.path === f.path)
+      if (!original) continue
+      const originalLines = original.content.split('\n')
+      const patchLines = f.content.split('\n')
+      // Reinsertar bloque modificado en el archivo original
+      originalLines.splice(startLine, endLine - startLine + 1, ...patchLines)
+      f.content = originalLines.join('\n')
+      send('action', { text: `🔬 Merge quirúrgico aplicado — ${patchLines.length} líneas reinsertadas en ${f.path}` })
+    }
 
     // ── VALIDACIÓN ANTES DEL DIFF ─────────────────────────────────────────────
     send('action', { text: '🔍 Validando código generado...' })

@@ -1,0 +1,79 @@
+Modifica backend/src/routes/agent.ts
+
+CAMBIO 1 — En fileContextStr (línea 497)
+Busca esta cadena exacta:
+
+"if (lines.length <= 500) return `--- ${f.path} ---\n${f.content}`"
+
+Reemplázala por:
+
+"if (lines.length <= 500) {
+  // Intentar extracción quirúrgica si hay función detectada
+  const fnName = extractFunctionNameFromPrompt(prompt)
+  if (fnName) {
+    const extracted = extractFunctionBlock(f.content, fnName)
+    if (extracted) {
+      return `--- ${f.path} (BLOQUE QUIRÚRGICO líneas ${extracted.startLine + 1}-${extracted.endLine + 1} de ${lines.length}) ---\n${extracted.block}\n// FULLFILE_LINES:${lines.length}|START:${extracted.startLine}|END:${extracted.endLine}|PATH:${f.path}`
+    }
+  }
+  return \`--- \${f.path} ---\n\${f.content}\`
+}"
+
+CAMBIO 2 — En el systemPrompt DEEP mode
+Busca esta cadena exacta:
+
+"ARCHIVOS TRUNCADOS (>150 líneas en contexto):
+Si el archivo fue truncado, indica en commitMessage: \"ARCHIVO TRUNCADO: proporciona el archivo completo para proceder\""
+
+Reemplázala por:
+
+"ARCHIVOS CON BLOQUE QUIRÚRGICO:
+Si el contexto muestra '--- archivo (BLOQUE QUIRÚRGICO líneas X-Y de N) ---':
+- El archivo tiene N líneas totales pero SOLO te mandé el bloque relevante
+- Modifica SOLO ese bloque — devuélvelo corregido en content
+- NO intentes reconstruir el archivo completo — el backend hace el merge
+- En commitMessage indica: 'PATCH:X-Y' donde X e Y son las líneas del bloque
+
+ARCHIVOS COMPLETOS (sin etiqueta BLOQUE QUIRÚRGICO):
+- Devuelve el archivo completo con patch aplicado como siempre"
+
+CAMBIO 3 — Después del bloque de parsed.files
+Busca esta cadena exacta:
+
+"const mainFile =
+      files.find((f) => f.path === mainComponent) ??
+      files.find((f) => f.path.endsWith('.tsx')) ??
+      files[0];"
+
+Reemplázala por:
+
+"const mainFile =
+      files.find((f) => f.path === mainComponent) ??
+      files.find((f) => f.path.endsWith('.tsx')) ??
+      files[0];
+
+// Merge quirúrgico — si el AI devolvió solo un bloque, reinsertarlo
+for (const f of files) {
+  const patchMatch = (parsed.commitMessage ?? '').match(/PATCH:(\d+)-(\d+)/)
+  if (!patchMatch) continue
+  const startLine = parseInt(patchMatch[1]) - 1
+  const endLine = parseInt(patchMatch[2]) - 1
+  // Buscar el archivo original en preloadedFiles
+  const original = preloadedFiles.find(p => p.path === f.path)
+  if (!original) continue
+  const originalLines = original.content.split('\n')
+  const patchLines = f.content.split('\n')
+  // Reinsertar bloque modificado en el archivo original
+  originalLines.splice(startLine, endLine - startLine + 1, ...patchLines)
+  f.content = originalLines.join('\n')
+  send('action', { text: `🔬 Merge quirúrgico aplicado — ${patchLines.length} líneas reinsertadas en ${f.path}` })
+}"
+
+CONDICIONES:
+1. Solo esos tres bloques, nada más
+2. No toques el READ PATH ni el FAST PATH
+3. Al terminar muéstrame:
+   - Línea 497 y su nuevo bloque completo
+   - El nuevo texto de ARCHIVOS CON BLOQUE QUIRÚRGICO en systemPrompt
+   - El bloque del merge quirúrgico después de mainFile
+   para verificar el diff
