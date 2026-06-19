@@ -844,7 +844,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                   {result.files.map((file, idx) => {
                     const origLines = (file.originalContent ?? '').split('\n');
                     const newLines  = file.content.split('\n');
-                    const isNew     = !file.originalContent;
+                    const isNew     = file.originalContent === undefined;
                     const diff      = isNew ? [] : computeLineDiff(origLines, newLines);
                     const pairs     = isNew ? [] : toPairedRows(diff);
                     const added     = isNew ? newLines.length : diff.filter((d) => d.type === 'added').length;
@@ -1090,7 +1090,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                 {result.files?.map((file, idx) => {
                   const origLines = (file.originalContent ?? '').split('\n');
                   const newLines  = file.content.split('\n');
-                  const isNew     = !file.originalContent;
+                  const isNew     = file.originalContent === undefined;
                   const diff      = isNew ? [] : computeLineDiff(origLines, newLines);
                   const pairs     = isNew ? [] : toPairedRows(diff);
                   const added     = isNew ? newLines.length : diff.filter((d) => d.type === 'added').length;

@@ -663,10 +663,34 @@ Responde con el mismo JSON de siempre:
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    const filesWithOriginal = parsed.files.map((f: { path: string; content: string }) => ({
-      ...f,
-      originalContent: preloadedFiles.find((p) => p.path === f.path)?.content ?? '',
-    }));
+    // Fuzzy match: exact path → suffix match → basename match
+    function findOriginal(fPath: string): string | undefined {
+      const exact = preloadedFiles.find((p) => p.path === fPath);
+      if (exact) return exact.content;
+      const bySuffix = preloadedFiles.find(
+        (p) => p.path.endsWith('/' + fPath) || fPath.endsWith('/' + p.path)
+      );
+      if (bySuffix) return bySuffix.content;
+      const base = fPath.split('/').pop();
+      const byBase = preloadedFiles.find((p) => p.path.split('/').pop() === base);
+      if (byBase) return byBase.content;
+      return undefined;
+    }
+
+    // For files with no preloaded original, fetch directly from GitHub
+    const filesWithOriginal = await Promise.all(
+      parsed.files.map(async (f: { path: string; content: string }) => {
+        let originalContent = findOriginal(f.path);
+        if (originalContent === undefined) {
+          try {
+            originalContent = await getFileContent(f.path, repo);
+          } catch {
+            // Truly new file — omit originalContent so diff shows single-column
+          }
+        }
+        return originalContent !== undefined ? { ...f, originalContent } : { ...f };
+      })
+    );
 
     send('done', {
       files: filesWithOriginal,
