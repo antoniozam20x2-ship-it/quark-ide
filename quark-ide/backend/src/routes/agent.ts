@@ -149,11 +149,12 @@ Responde SOLO con un JSON array de strings, sin markdown ni explicaciones. Ejemp
 }
 
 router.post('/generate', async (req, res) => {
-  const { prompt, repo: bodyRepo, branch = 'main', projectName } = req.body as {
+  const { prompt, repo: bodyRepo, branch = 'main', projectName, deepMode } = req.body as {
     prompt?: string;
     repo?: string;
     branch?: string;
     projectName?: string;
+    deepMode?: boolean;
   };
   const repo = bodyRepo ?? process.env.GITHUB_REPO;
   console.log(`[Agent/generate] repo recibido dinámicamente: ${repo}`);
@@ -341,24 +342,24 @@ Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
         }).join('\n\n')
       : ''
 
-    // ── RAZONAMIENTO CON CLAUDE — versión narrada ────────────────────────────
-    send('action', { text: `🧠 Analizando "${prompt.slice(0, 60)}${prompt.length > 60 ? '...' : ''}"` })
-
+    // ── RAZONAMIENTO CON CLAUDE — solo en deepMode ───────────────────────────
     let reasoningContext = ''
-    try {
-      const reasoningRes = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': process.env.ANTHROPIC_API_KEY!,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 1024,
-          messages: [{
-            role: 'user',
-            content: `Eres un arquitecto de software senior. Analiza este problema y decide el mejor enfoque ANTES de escribir código.
+    if (deepMode) {
+      send('action', { text: `🧠 Analizando "${prompt.slice(0, 60)}${prompt.length > 60 ? '...' : ''}"` })
+      try {
+        const reasoningRes = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.ANTHROPIC_API_KEY!,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-6',
+            max_tokens: 1024,
+            messages: [{
+              role: 'user',
+              content: `Eres un arquitecto de software senior. Analiza este problema y decide el mejor enfoque ANTES de escribir código.
 
 PROBLEMA: ${prompt}
 
@@ -372,23 +373,26 @@ Razona brevemente:
 4. ¿Qué riesgos tiene este cambio?
 
 Responde en máximo 150 palabras. Solo el razonamiento, sin código.`,
-          }],
-        }),
-      })
+            }],
+          }),
+        })
 
-      const reasoningData = await reasoningRes.json() as {
-        content?: Array<{ type: string; text: string }>
+        const reasoningData = await reasoningRes.json() as {
+          content?: Array<{ type: string; text: string }>
+        }
+
+        reasoningContext = reasoningData.content?.[0]?.text ?? ''
+
+        if (reasoningContext) {
+          send('action', { text: `🔎 Causa raíz identificada` })
+          send('action', { text: `💡 ${reasoningContext.slice(0, 200)}${reasoningContext.length > 200 ? '...' : ''}` })
+          send('action', { text: `🎯 Enfoque definido — procediendo con el cambio mínimo necesario` })
+        }
+      } catch {
+        send('action', { text: `⚡ Continuando sin razonamiento profundo (Claude no disponible)` })
       }
-
-      reasoningContext = reasoningData.content?.[0]?.text ?? ''
-
-      if (reasoningContext) {
-        send('action', { text: `🔎 Causa raíz identificada` })
-        send('action', { text: `💡 ${reasoningContext.slice(0, 200)}${reasoningContext.length > 200 ? '...' : ''}` })
-        send('action', { text: `🎯 Enfoque definido — procediendo con el cambio mínimo necesario` })
-      }
-    } catch {
-      send('action', { text: `⚡ Continuando sin razonamiento profundo (Claude no disponible)` })
+    } else {
+      send('action', { text: `⚡ Modo rápido — generando directo` })
     }
     // ─────────────────────────────────────────────────────────────────────────
 

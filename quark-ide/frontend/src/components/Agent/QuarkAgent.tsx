@@ -64,6 +64,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   const [commitResult, setCommitResult]   = useState<CommitResult | null>(null);
   const [isGeneratingHtml, setIsGeneratingHtml] = useState(false);
   const [fixResult, setFixResult]               = useState<FixResult | null>(null);
+  const [deepMode, setDeepMode]                 = useState(false);
   const previewTriggeredRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const agentTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -204,6 +205,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           repo:        selectedRepo,
           branch:      activeProject.branch,
           projectName: activeProject.name,
+          deepMode,
         }),
       });
 
@@ -759,6 +761,40 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 12px',
         borderTop: '1px solid #1e1e3f', flexShrink: 0, background: '#0d0d1a',
       }}>
+        {/* Modo de razonamiento */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <span style={{
+            color: '#3a3a5c', fontSize: 10, fontFamily: 'JetBrains Mono, monospace',
+            letterSpacing: '0.06em',
+          }}>
+            MODO
+          </span>
+          <button
+            onClick={() => setDeepMode(false)}
+            style={{
+              background: !deepMode ? 'rgba(0,255,136,0.15)' : 'transparent',
+              border: `1px solid ${!deepMode ? '#00ff88' : '#1e1e3f'}`,
+              borderRadius: 4, color: !deepMode ? '#00ff88' : '#3a3a5c',
+              fontSize: 10, fontWeight: 700, padding: '3px 8px', cursor: 'pointer',
+              fontFamily: 'JetBrains Mono, monospace',
+            }}
+          >
+            ⚡ FAST
+          </button>
+          <button
+            onClick={() => setDeepMode(true)}
+            style={{
+              background: deepMode ? 'rgba(124,58,237,0.15)' : 'transparent',
+              border: `1px solid ${deepMode ? '#7c3aed' : '#1e1e3f'}`,
+              borderRadius: 4, color: deepMode ? '#a78bfa' : '#3a3a5c',
+              fontSize: 10, fontWeight: 700, padding: '3px 8px', cursor: 'pointer',
+              fontFamily: 'JetBrains Mono, monospace',
+            }}
+          >
+            🧠 DEEP
+          </button>
+        </div>
+
         {/* Repo selector */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{
