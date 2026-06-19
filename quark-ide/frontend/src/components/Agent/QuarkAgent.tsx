@@ -576,13 +576,22 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         )}
 
         {feed.map((ev, i) => {
-          if (ev.event === 'action') return (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ color: '#00ff88', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
-                {ev.text}
-              </span>
-            </div>
-          );
+          if (ev.event === 'action') {
+            const t = ev.text ?? '';
+            const actionColor =
+              t.startsWith('CAUSA:')    ? '#FF6B6B' :
+              t.startsWith('DÓNDE:')    ? '#00D4FF' :
+              t.startsWith('POR QUÉ:') ? '#FFD93D' :
+              t.startsWith('SOLUCIÓN:') ? '#6BCB77' :
+              '#00ff88';
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ color: actionColor, fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
+                  {ev.text}
+                </span>
+              </div>
+            );
+          }
 
           if (ev.event === 'file') return (
             <div key={i} style={{
