@@ -1,6 +1,35 @@
 import { Router, Request, Response } from 'express';
 import { searchMemory } from '../services/rufloMemory.js';
 import { getFileTree, getFileContent } from '../services/github.js';
+import pool from '../services/db.js';
+
+// ── Chat history helpers ───────────────────────────────────────────────────────
+
+const CHAT_CONVERSATION_TITLE = 'quark-chat';
+
+async function getOrCreateConversation(): Promise<number> {
+  const existing = await pool.query<{ id: number }>(
+    `SELECT id FROM conversations WHERE title = $1 LIMIT 1`,
+    [CHAT_CONVERSATION_TITLE],
+  );
+  if (existing.rows.length > 0) return existing.rows[0].id;
+  const created = await pool.query<{ id: number }>(
+    `INSERT INTO conversations (title) VALUES ($1) RETURNING id`,
+    [CHAT_CONVERSATION_TITLE],
+  );
+  return created.rows[0].id;
+}
+
+async function saveMessage(conversationId: number, role: string, content: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO messages (conversation_id, role, content) VALUES ($1, $2, $3)`,
+    [conversationId, role, content],
+  );
+  await pool.query(
+    `UPDATE conversations SET updated_at = NOW() WHERE id = $1`,
+    [conversationId],
+  );
+}
 
 // ── Groq key rotation ─────────────────────────────────────────────────────────
 
@@ -120,6 +149,41 @@ async function streamGroq(
 // ── Router ────────────────────────────────────────────────────────────────────
 
 const router = Router();
+
+// GET /api/chat/history — return all messages for the persistent QUARK Chat session
+router.get('/history', async (_req: Request, res: Response) => {
+  try {
+    const convId = await getOrCreateConversation();
+    const result = await pool.query<{ role: string; content: string; created_at: string }>(
+      `SELECT role, content, created_at FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC`,
+      [convId],
+    );
+    res.json({ conversationId: convId, messages: result.rows });
+  } catch (err) {
+    console.error('[chat/history] error:', err);
+    res.status(500).json({ error: 'Failed to load chat history' });
+  }
+});
+
+// POST /api/chat/message — persist a single message (user or assistant)
+router.post('/message', async (req: Request, res: Response) => {
+  const { conversationId, role, content } = req.body as {
+    conversationId: number;
+    role: string;
+    content: string;
+  };
+  if (!conversationId || !role || !content) {
+    res.status(400).json({ error: 'conversationId, role and content are required' });
+    return;
+  }
+  try {
+    await saveMessage(conversationId, role, content);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[chat/message] error:', err);
+    res.status(500).json({ error: 'Failed to save message' });
+  }
+});
 
 const APP_REPOS: Record<string, string> = {
   'signal os':  'Ahorar',

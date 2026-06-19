@@ -112,12 +112,58 @@ export default function ClaudeChat({
   const [loadedContextLabel, setLoadedContextLabel] = useState<string | null>(null);
   const [contextLoading, setContextLoading] = useState(false);
   const [contextLoadingLabel, setContextLoadingLabel] = useState('');
+  const [historyLoading, setHistoryLoading] = useState(true);
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const projectsRef = useRef<HTMLDivElement>(null);
   const contextDataRef = useRef<RepoContextData | null>(null);
+  const conversationIdRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    async function loadHistory() {
+      try {
+        const res = await fetch(`${API_BASE}/api/chat/history`);
+        if (!res.ok) return;
+        const data: { conversationId: number; messages: { role: string; content: string; created_at: string }[] } = await res.json();
+        conversationIdRef.current = data.conversationId;
+        if (data.messages.length > 0) {
+          const loaded: Message[] = data.messages.map((m) => {
+            const { cleaned, options, allowCustom } = parseOptions(m.content);
+            const type = m.role === 'assistant' ? detectMessageType(cleaned) : undefined;
+            return {
+              role: m.role as 'user' | 'assistant',
+              content: cleaned,
+              timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              type,
+              options,
+              allowCustom,
+            };
+          });
+          setMessages(loaded);
+        }
+      } catch {
+        // fail silently — chat works without history
+      } finally {
+        setHistoryLoading(false);
+      }
+    }
+    loadHistory();
+  }, []);
+
+  async function saveMessageToDb(role: string, content: string) {
+    if (!conversationIdRef.current) return;
+    try {
+      await fetch(`${API_BASE}/api/chat/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: conversationIdRef.current, role, content }),
+      });
+    } catch {
+      // fail silently — UI still works
+    }
+  }
 
   useEffect(() => {
     const el = inputRef.current;
@@ -237,6 +283,8 @@ export default function ClaudeChat({
     if (inputRef.current) inputRef.current.style.height = '44px';
     setLoading(true);
 
+    saveMessageToDb('user', text);
+
     const assistantMsg: Message = {
       role: 'assistant',
       content: '',
@@ -294,6 +342,8 @@ export default function ClaudeChat({
         updated[updated.length - 1] = { ...assistantMsg, content: cleaned, type, options, allowCustom };
         return updated;
       });
+
+      saveMessageToDb('assistant', cleaned);
     } catch {
       setMessages((prev) => {
         const updated = [...prev];
@@ -367,7 +417,12 @@ export default function ClaudeChat({
         flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden',
         padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 10,
       }}>
-        {messages.length === 0 && !loading && (
+        {historyLoading && (
+          <p style={{ color: '#3a3a5c', fontSize: 11, margin: 0, fontFamily: 'JetBrains Mono, monospace' }}>
+            ⚛ Cargando historial...
+          </p>
+        )}
+        {!historyLoading && messages.length === 0 && !loading && (
           <p style={{ color: '#6b7280', fontSize: 12, margin: 0, lineHeight: 1.6 }}>
             Ask QUARK about{' '}
             <span style={{ color: '#00ff88' }}>{fileName}</span>{' '}
