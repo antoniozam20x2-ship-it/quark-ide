@@ -514,8 +514,14 @@ POR QUÉ: [máximo 3 líneas]
 SOLUCIÓN: [descripción sin código]
 
 REGLAS:
-- Respuesta corta si el problema es simple
-- Respuesta larga solo si la complejidad lo amerita
+- Si la pregunta es de COMPRENSIÓN (¿cómo funciona X?, ¿qué hace Y?, ¿qué es X?):
+  1. Usa el código del contexto como fuente interna — no lo muestres crudo
+  2. Responde en lenguaje natural, como un senior explicando a un colega
+  3. Incluye MÁXIMO 10 líneas de código solo si son indispensables para ilustrar
+  4. NUNCA dumpees bloques de código mayores a 15 líneas sin explicación
+  5. Estructura de respuesta: qué hace → cómo lo hace → dónde está en el código
+- Si el problema es simple → respuesta corta (3-5 líneas)
+- Si requiere profundidad → máximo 12 líneas de explicación
 - NUNCA generes archivos ni código modificado
 - Si necesitas más contexto → pídelo explícitamente`;
 
