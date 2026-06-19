@@ -391,13 +391,51 @@ Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
 
     const fileContextStr = preloadedFiles.length > 0
       ? '\n\nCONTENIDO REAL DE ARCHIVOS RELEVANTES:\n' +
-        preloadedFiles.map((f) => {
+        (await Promise.all(preloadedFiles.map(async (f) => {
           const lines = f.content.split('\n')
-          const truncated = lines.length > 500
-            ? lines.slice(0, 500).join('\n') + `\n// ... (${lines.length - 500} líneas más)`
-            : f.content
-          return `--- ${f.path} ---\n${truncated}`
-        }).join('\n\n')
+          if (lines.length <= 500) return `--- ${f.path} ---\n${f.content}`
+
+          // Archivo grande: extraer secciones relevantes por keywords
+          let body: string
+          try {
+            const kwRaw = await generateWithFallback(
+              `Dado este prompt de usuario: "${prompt}"\ny que estamos buscando en un archivo TypeScript,\ngenera 5-8 keywords técnicas que probablemente aparecen en el código relevante.\nResponde SOLO con las keywords separadas por coma. Sin explicación.`,
+              'Responde SOLO con keywords separadas por coma. Sin texto extra.',
+            )
+            const keywords = kwRaw.split(',').map((k) => k.trim().toLowerCase()).filter(Boolean)
+
+            // Líneas con hits + ±30 de contexto → rangos fusionados
+            const CTX = 30
+            const ranges: [number, number][] = []
+            lines.forEach((line, i) => {
+              if (keywords.some((kw) => line.toLowerCase().includes(kw))) {
+                const lo = Math.max(0, i - CTX)
+                const hi = Math.min(lines.length - 1, i + CTX)
+                if (ranges.length && lo <= ranges[ranges.length - 1][1] + 1) {
+                  ranges[ranges.length - 1][1] = Math.max(ranges[ranges.length - 1][1], hi)
+                } else {
+                  ranges.push([lo, hi])
+                }
+              }
+            })
+
+            if (ranges.length === 0) {
+              // Fallback: sin hits → slice(0,500)
+              body = lines.slice(0, 500).join('\n') +
+                `\n// ... (${lines.length - 500} líneas más — sin hits para: ${keywords.join(', ')})`
+            } else {
+              const sections = ranges.map(([lo, hi]) => lines.slice(lo, hi + 1).join('\n'))
+              const totalShown = ranges.reduce((acc, [lo, hi]) => acc + (hi - lo + 1), 0)
+              body = sections.join('\n\n// --- siguiente sección ---\n\n') +
+                `\n\n// (${lines.length} líneas totales — mostrando ${totalShown} líneas relevantes para: ${keywords.join(', ')})`
+            }
+          } catch {
+            // Fallback ante error en keyword extraction
+            body = lines.slice(0, 500).join('\n') + `\n// ... (${lines.length - 500} líneas más)`
+          }
+
+          return `--- ${f.path} ---\n${body}`
+        }))).join('\n\n')
       : ''
 
     // ── RAZONAMIENTO CON CLAUDE — solo en deepMode ───────────────────────────
