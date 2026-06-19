@@ -1,0 +1,153 @@
+Modifica backend/src/routes/agent.ts
+
+CAMBIO 1 — Ampliar saveAgentSession para guardar 
+contexto de archivos leídos.
+
+Busca esta cadena exacta:
+
+"async function saveAgentSession(content: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO memory_entries (key, content, namespace)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
+    [AGENT_SESSION_KEY, content, AGENT_SESSION_NS],
+  );
+}"
+
+Reemplázala por:
+
+"async function saveAgentSession(content: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO memory_entries (key, content, namespace)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
+    [AGENT_SESSION_KEY, content, AGENT_SESSION_NS],
+  );
+}
+
+async function saveAgentContext(ctx: {
+  preloadedFiles: { path: string; content: string; fullContent?: string; startLine?: number; endLine?: number }[]
+  functionName: string | null
+  prompt: string
+  repo: string
+}): Promise<void> {
+  await pool.query(
+    `INSERT INTO memory_entries (key, content, namespace)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
+    ['agent-context', JSON.stringify(ctx), AGENT_SESSION_NS],
+  );
+}
+
+async function loadAgentContext(): Promise<{
+  preloadedFiles: { path: string; content: string; fullContent?: string; startLine?: number; endLine?: number }[]
+  functionName: string | null
+  prompt: string
+  repo: string
+} | null> {
+  try {
+    const r = await pool.query<{ content: string }>(
+      `SELECT content FROM memory_entries WHERE key = $1 AND namespace = $2 LIMIT 1`,
+      ['agent-context', AGENT_SESSION_NS],
+    );
+    if (!r.rows[0]?.content) return null;
+    const ctx = JSON.parse(r.rows[0].content);
+    // Contexto válido por 10 minutos
+    return ctx;
+  } catch {
+    return null;
+  }
+}"
+
+─────────────────────────────────────
+CAMBIO 2 — Al final del READ PATH, guardar 
+contexto antes del send('done').
+
+Busca esta cadena exacta en el READ PATH:
+
+"send('done', {
+        files:         [],
+        commitMessage: '',
+        mainComponent: readFiles[0]?.path ?? '',
+        mainContent:   readFiles[0]?.content ?? '',
+        repo,
+        branch,
+      });"
+
+Reemplázala por:
+
+"// Guardar contexto para que DEEP mode lo reutilice
+      const fnNameForCtx = extractFunctionNameFromPrompt(prompt)
+      await saveAgentContext({
+        preloadedFiles: readFiles,
+        functionName: fnNameForCtx,
+        prompt,
+        repo,
+      }).catch(() => {/* no bloquear si falla */})
+
+      send('done', {
+        files:         [],
+        commitMessage: '',
+        mainComponent: readFiles[0]?.path ?? '',
+        mainContent:   readFiles[0]?.content ?? '',
+        repo,
+        branch,
+        contextSaved:  true,
+      });"
+
+─────────────────────────────────────
+CAMBIO 3 — Al inicio del GENERATION PATH,
+intentar cargar contexto de FAST antes de
+releer desde GitHub.
+
+Busca esta cadena exacta al inicio del 
+GENERATION PATH (después del detectReadIntent block):
+
+"send('action', { text: `🔎 Buscando archivos relacionados con: \"${prompt.slice(0, 50)}${prompt.length > 50 ? '...' : ''}\"` })"
+
+Reemplázala por:
+
+"// Intentar reutilizar contexto de FAST mode
+      let preloadedFiles: { path: string; content: string; fullContent?: string; startLine?: number; endLine?: number }[] = []
+      const savedCtx = await loadAgentContext().catch(() => null)
+
+      if (savedCtx && savedCtx.repo === repo) {
+        preloadedFiles = savedCtx.preloadedFiles
+        send('action', { text: `⚡ Contexto reutilizado de FAST mode — ${preloadedFiles.length} archivo(s) ya cargados` })
+        send('action', { text: `📋 Usando: ${preloadedFiles.map(f => f.path.split('/').pop()).join(', ')}` })
+        if (savedCtx.functionName) {
+          send('action', { text: `🎯 Función en scope: ${savedCtx.functionName}` })
+        }
+      } else {
+        send('action', { text: `🔎 Buscando archivos relacionados con: \"${prompt.slice(0, 50)}${prompt.length > 50 ? '...' : ''}\"` })"
+
+─────────────────────────────────────
+CAMBIO 4 — Cerrar el else del CAMBIO 3.
+
+Busca esta cadena exacta justo después 
+del bloque de preloadedFiles (donde termina
+el try/catch de relevantPaths):
+
+"    } catch {
+      // Si falla la pre-lectura, continúa sin contexto adicional
+    }"
+
+Reemplázala por:
+
+"    } catch {
+      // Si falla la pre-lectura, continúa sin contexto adicional
+    }
+      } // cierre del else — fin del bloque de carga desde GitHub"
+
+─────────────────────────────────────
+CONDICIONES:
+1. Solo esos 4 bloques, nada más
+2. No toques el FAST PATH directo ni el READ PATH 
+   excepto donde se indica
+3. Al terminar muéstrame:
+   - saveAgentContext y loadAgentContext completas
+   - El nuevo bloque después del send('done') del READ PATH
+   - El nuevo bloque al inicio del GENERATION PATH
+   - El cierre del else
+   para verificar el diff
+─────────────────────────────────────

@@ -30,6 +30,40 @@ async function saveAgentSession(content: string): Promise<void> {
   );
 }
 
+async function saveAgentContext(ctx: {
+  preloadedFiles: { path: string; content: string; fullContent?: string; startLine?: number; endLine?: number }[]
+  functionName: string | null
+  prompt: string
+  repo: string
+}): Promise<void> {
+  await pool.query(
+    `INSERT INTO memory_entries (key, content, namespace)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
+    ['agent-context', JSON.stringify(ctx), AGENT_SESSION_NS],
+  );
+}
+
+async function loadAgentContext(): Promise<{
+  preloadedFiles: { path: string; content: string; fullContent?: string; startLine?: number; endLine?: number }[]
+  functionName: string | null
+  prompt: string
+  repo: string
+} | null> {
+  try {
+    const r = await pool.query<{ content: string }>(
+      `SELECT content FROM memory_entries WHERE key = $1 AND namespace = $2 LIMIT 1`,
+      ['agent-context', AGENT_SESSION_NS],
+    );
+    if (!r.rows[0]?.content) return null;
+    const ctx = JSON.parse(r.rows[0].content);
+    // Contexto válido por 10 minutos
+    return ctx;
+  } catch {
+    return null;
+  }
+}
+
 // ── Agent provider fallback chain ─────────────────────────────────────────────
 
 const GROQ_URL       = 'https://api.groq.com/openai/v1/chat/completions'
@@ -431,6 +465,15 @@ Usa frases cortas. Cada idea en una línea separada.`,
         }
       }
 
+      // Guardar contexto para que DEEP mode lo reutilice
+      const fnNameForCtx = extractFunctionNameFromPrompt(prompt)
+      await saveAgentContext({
+        preloadedFiles: readFiles,
+        functionName: fnNameForCtx,
+        prompt,
+        repo,
+      }).catch(() => {/* no bloquear si falla */})
+
       // done with real file content — no commitMessage (read-only)
       send('done', {
         files:         [],
@@ -439,6 +482,7 @@ Usa frases cortas. Cada idea en una línea separada.`,
         mainContent:   readFiles[0]?.content ?? '',
         repo,
         branch,
+        contextSaved:  true,
       });
 
       await new Promise((r) => setTimeout(r, 100));
@@ -449,7 +493,19 @@ Usa frases cortas. Cada idea en una línea separada.`,
     // ── GENERATION PATH — Gemini generates new/modified files ────────────────
 
     // ── PRE-LECTURA INTELIGENTE ───────────────────────────────────────────────
-    send('action', { text: `🔎 Buscando archivos relacionados con: "${prompt.slice(0, 50)}${prompt.length > 50 ? '...' : ''}"` })
+    // Intentar reutilizar contexto de FAST mode
+    let preloadedFiles: { path: string; content: string; fullContent?: string; startLine?: number; endLine?: number }[] = []
+    const savedCtx = await loadAgentContext().catch(() => null)
+
+    if (savedCtx && savedCtx.repo === repo) {
+      preloadedFiles = savedCtx.preloadedFiles
+      send('action', { text: `⚡ Contexto reutilizado de FAST mode — ${preloadedFiles.length} archivo(s) ya cargados` })
+      send('action', { text: `📋 Usando: ${preloadedFiles.map(f => f.path.split('/').pop()).join(', ')}` })
+      if (savedCtx.functionName) {
+        send('action', { text: `🎯 Función en scope: ${savedCtx.functionName}` })
+      }
+    } else {
+      send('action', { text: `🔎 Buscando archivos relacionados con: "${prompt.slice(0, 50)}${prompt.length > 50 ? '...' : ''}"` })
 
     const relevantPathsRaw = await generateWithFallback(
       `Dado este prompt: "${prompt}"
@@ -462,8 +518,6 @@ Solo paths que existen en la lista. Sin markdown.
 Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
       'Eres un selector de archivos. Devuelve SOLO un JSON array de strings con los paths más relevantes. Sin explicaciones.'
     )
-
-    let preloadedFiles: { path: string; content: string }[] = []
     try {
       const relevantPaths = JSON.parse(
         relevantPathsRaw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim()
@@ -489,6 +543,7 @@ Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
     } catch {
       // Si falla la pre-lectura, continúa sin contexto adicional
     }
+      } // cierre del else — fin del bloque de carga desde GitHub
 
     const fileContextStr = preloadedFiles.length > 0
       ? '\n\nCONTENIDO REAL DE ARCHIVOS RELEVANTES:\n' +
