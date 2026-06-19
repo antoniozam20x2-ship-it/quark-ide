@@ -340,12 +340,62 @@ Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
         }).join('\n\n')
       : ''
 
-    send('action', { text: '🧠 Generando archivos con Gemini...' });
+    // ── RAZONAMIENTO CON CLAUDE ───────────────────────────────────────────────
+    send('action', { text: '🧠 Razonando el mejor enfoque...' })
+
+    let reasoningContext = ''
+    try {
+      const reasoningRes = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY!,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-5',
+          max_tokens: 1024,
+          messages: [{
+            role: 'user',
+            content: `Eres un arquitecto de software senior. Analiza este problema y decide el mejor enfoque ANTES de escribir código.
+
+PROBLEMA: ${prompt}
+
+ARCHIVOS RELEVANTES DISPONIBLES:
+${fileContextStr || filePaths}
+
+Razona brevemente:
+1. ¿Cuál es la causa raíz del problema?
+2. ¿Qué archivos exactos hay que modificar?
+3. ¿Cuál es el cambio mínimo necesario?
+4. ¿Qué riesgos tiene este cambio?
+
+Responde en máximo 150 palabras. Solo el razonamiento, sin código.`,
+          }],
+        }),
+      })
+
+      const reasoningData = await reasoningRes.json() as {
+        content?: Array<{ type: string; text: string }>
+      }
+
+      reasoningContext = reasoningData.content?.[0]?.text ?? ''
+
+      if (reasoningContext) {
+        send('action', { text: `💡 Enfoque: ${reasoningContext.slice(0, 80)}...` })
+      }
+    } catch {
+      // Si Claude falla, continúa sin razonamiento
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    send('action', { text: '🧠 Generando archivos...' });
 
     const systemPrompt = `Eres un agente de código experto.
 Tu tarea es generar archivos de código para un proyecto.
-
 Repo activo: ${projectName ?? repo} (${repo})
+
+${reasoningContext ? `ANÁLISIS PREVIO DEL ARQUITECTO:\n${reasoningContext}\n\nSigue este análisis para implementar el cambio.` : ''}
 Archivos existentes en el repo:
 ${filePaths}
 ${fileContextStr}
