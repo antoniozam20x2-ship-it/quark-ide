@@ -753,23 +753,48 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                     </span>
                   </div>
 
-                  {/* Botón aprobar */}
-                  <button
-                    onClick={commitToGitHub}
-                    disabled={committing}
-                    style={{
-                      background: committing ? '#1e1e3f' : 'rgba(124,58,237,0.12)',
-                      border: `1px solid ${committing ? '#1e1e3f' : '#4c1d95'}`,
-                      borderRadius: 6, color: committing ? '#3a3a5c' : '#a78bfa',
-                      fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700,
-                      padding: '9px 12px', cursor: committing ? 'not-allowed' : 'pointer',
-                      letterSpacing: '0.04em', transition: 'background 0.15s', width: '100%',
-                    }}
-                    onMouseEnter={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(124,58,237,0.22)'; }}
-                    onMouseLeave={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(124,58,237,0.12)'; }}
-                  >
-                    {committing ? '⟳ Committing…' : `✅ Aprobar y commitear ${result.files.length} archivo(s)`}
-                  </button>
+                  {/* Botones aprobar / cancelar */}
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      onClick={commitToGitHub}
+                      disabled={committing}
+                      style={{
+                        flex: 1,
+                        background: committing ? '#1e1e3f' : 'rgba(124,58,237,0.12)',
+                        border: `1px solid ${committing ? '#1e1e3f' : '#4c1d95'}`,
+                        borderRadius: 6, color: committing ? '#3a3a5c' : '#a78bfa',
+                        fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700,
+                        padding: '9px 12px', cursor: committing ? 'not-allowed' : 'pointer',
+                        letterSpacing: '0.04em', transition: 'background 0.15s',
+                      }}
+                      onMouseEnter={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(124,58,237,0.22)'; }}
+                      onMouseLeave={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(124,58,237,0.12)'; }}
+                    >
+                      {committing ? '⟳ Committing…' : `✅ Aprobar y commitear ${result.files.length} archivo(s)`}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setResult(null);
+                        setFeed([]);
+                        setCommitResult(null);
+                        setFixResult(null);
+                        saveSession([], null, null, null);
+                      }}
+                      disabled={committing}
+                      style={{
+                        background: 'rgba(239,68,68,0.08)',
+                        border: '1px solid rgba(239,68,68,0.3)',
+                        borderRadius: 6, color: committing ? '#3a3a5c' : '#f87171',
+                        fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700,
+                        padding: '9px 14px', cursor: committing ? 'not-allowed' : 'pointer',
+                        letterSpacing: '0.04em', transition: 'background 0.15s', whiteSpace: 'nowrap',
+                      }}
+                      onMouseEnter={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(239,68,68,0.18)'; }}
+                      onMouseLeave={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(239,68,68,0.08)'; }}
+                    >
+                      ✕ Cancelar
+                    </button>
+                  </div>
                 </div>
               ) : (
                 /* Read-only / diagnostic result — no files to commit */
