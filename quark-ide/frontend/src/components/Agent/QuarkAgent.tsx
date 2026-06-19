@@ -278,6 +278,13 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   // Auto-trigger preview — ONLY for UI (non-backend) projects
   // Uses isBackendRef so the closure always reads the current value even with [result] deps
   useEffect(() => {
+    console.log('[Agent] Preview trigger check:', {
+      hasResult: !!result,
+      isBackend: isBackendRef.current,
+      isGenerating: isGeneratingHtml,
+      alreadyTriggered: previewTriggeredRef.current,
+    })
+
     if (result && !isBackendRef.current && !isGeneratingHtml && !previewTriggeredRef.current) {
       previewTriggeredRef.current = true;
       generateHtml();
@@ -286,7 +293,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   }, [result]);
 
   async function generateHtml() {
-    if (!result || isBackendRef.current) return; // hard guard: never for backend
+    if (!result) return;
+    if (isBackendRef.current) return;
+    if (!result.mainContent) return;
     if (isGeneratingHtml) return;
     setIsGeneratingHtml(true);
     try {
