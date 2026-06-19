@@ -289,7 +289,7 @@ router.post('/generate', async (req, res) => {
     // ── GENERATION PATH — Gemini generates new/modified files ────────────────
 
     // ── PRE-LECTURA INTELIGENTE ───────────────────────────────────────────────
-    send('action', { text: '🔎 Identificando archivos relevantes...' })
+    send('action', { text: `🔎 Buscando archivos relacionados con: "${prompt.slice(0, 50)}${prompt.length > 50 ? '...' : ''}"` })
 
     const relevantPathsRaw = await generateWithFallback(
       `Dado este prompt: "${prompt}"
@@ -324,6 +324,7 @@ Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
           .map((r) => r.value)
 
         send('action', { text: `✅ Contexto real cargado — ${preloadedFiles.length} archivo(s)` })
+        send('action', { text: `📋 Revisando: ${preloadedFiles.map(f => f.path.split('/').pop()).join(', ')}` })
       }
     } catch {
       // Si falla la pre-lectura, continúa sin contexto adicional
@@ -340,8 +341,8 @@ Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
         }).join('\n\n')
       : ''
 
-    // ── RAZONAMIENTO CON CLAUDE ───────────────────────────────────────────────
-    send('action', { text: '🧠 Razonando el mejor enfoque...' })
+    // ── RAZONAMIENTO CON CLAUDE — versión narrada ────────────────────────────
+    send('action', { text: `🧠 Analizando "${prompt.slice(0, 60)}${prompt.length > 60 ? '...' : ''}"` })
 
     let reasoningContext = ''
     try {
@@ -353,7 +354,7 @@ Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-5',
+          model: 'claude-sonnet-4-6',
           max_tokens: 1024,
           messages: [{
             role: 'user',
@@ -382,10 +383,12 @@ Responde en máximo 150 palabras. Solo el razonamiento, sin código.`,
       reasoningContext = reasoningData.content?.[0]?.text ?? ''
 
       if (reasoningContext) {
-        send('action', { text: `💡 Enfoque: ${reasoningContext.slice(0, 80)}...` })
+        send('action', { text: `🔎 Causa raíz identificada` })
+        send('action', { text: `💡 ${reasoningContext.slice(0, 200)}${reasoningContext.length > 200 ? '...' : ''}` })
+        send('action', { text: `🎯 Enfoque definido — procediendo con el cambio mínimo necesario` })
       }
     } catch {
-      // Si Claude falla, continúa sin razonamiento
+      send('action', { text: `⚡ Continuando sin razonamiento profundo (Claude no disponible)` })
     }
     // ─────────────────────────────────────────────────────────────────────────
 
