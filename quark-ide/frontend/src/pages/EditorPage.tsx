@@ -142,13 +142,14 @@ interface EditorPageProps {
   onProjectChange: (p: Project) => void;
   onSendToBoard: (brief: import('../App').BoardBrief) => void;
   onSendToStudio?: (brief: string) => void;
+  onSendToAgent?: (prompt: string) => void;
   autoShowPreview?: boolean;
   onPreviewShown?: () => void;
   initialPrompt?: string;
   onPromptConsumed?: () => void;
 }
 
-export default function EditorPage({ activeProject, onProjectChange, onSendToBoard, onSendToStudio, autoShowPreview, onPreviewShown, initialPrompt, onPromptConsumed }: EditorPageProps) {
+export default function EditorPage({ activeProject, onProjectChange, onSendToBoard, onSendToStudio, onSendToAgent, autoShowPreview, onPreviewShown, initialPrompt, onPromptConsumed }: EditorPageProps) {
   const isMobile = useIsMobile();
   const [files, setFiles] = useState<FileEntry[]>(INITIAL_FILES);
   const [activeFile, setActiveFile] = useState<FileEntry>(INITIAL_FILES[0]);
@@ -476,6 +477,7 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
               }}
               onSendToBoard={onSendToBoard}
               onSendToStudio={onSendToStudio}
+              onSendToAgent={onSendToAgent}
               layout="fullscreen"
             />
           )}
@@ -586,6 +588,7 @@ export default function EditorPage({ activeProject, onProjectChange, onSendToBoa
                 onApplyToEditor={updateFile}
                 onSendToBoard={onSendToBoard}
                 onSendToStudio={onSendToStudio}
+                onSendToAgent={onSendToAgent}
                 layout="panel"
               />
             ) : panelTab === 'agent' ? (

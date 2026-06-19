@@ -40,6 +40,7 @@ interface Props {
   onApplyToEditor: (code: string) => void;
   onSendToBoard?: (brief: import('../../App').BoardBrief) => void;
   onSendToStudio?: (brief: string) => void;
+  onSendToAgent?: (prompt: string) => void;
   layout?: 'panel' | 'fullscreen';
   activeProject?: Project;
 }
@@ -92,6 +93,7 @@ export default function ClaudeChat({
   onApplyToEditor,
   onSendToBoard,
   onSendToStudio,
+  onSendToAgent,
   layout = 'panel',
   activeProject,
 }: Props) {
@@ -527,6 +529,30 @@ export default function ClaudeChat({
                   onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(6,182,212,0.12)')}
                 >
                   🎨 Enviar a Studio
+                </button>
+              )}
+              {isLastAssistant && onSendToAgent && msg.content && (
+                <button
+                  onClick={() => onSendToAgent(msg.content)}
+                  style={{
+                    marginTop: 8,
+                    padding: '6px 14px',
+                    background: 'rgba(0,255,136,0.1)',
+                    border: '1px solid rgba(0,255,136,0.3)',
+                    borderRadius: 6,
+                    color: '#00ff88',
+                    fontFamily: 'JetBrains Mono, monospace',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(0,255,136,0.2)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(0,255,136,0.1)')}
+                >
+                  ⚡ Enviar al Agent
                 </button>
               )}
             </div>

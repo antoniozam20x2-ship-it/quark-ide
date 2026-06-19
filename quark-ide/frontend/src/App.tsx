@@ -61,8 +61,8 @@ export default function App() {
             activeProject={activeProject}
             onProjectChange={setActiveProject}
             onSendToBoard={(brief) => { setBoardBrief(brief); setPage('warroom'); }}
-
             onSendToStudio={(brief) => { setStudioBrief(brief); setPage('studio'); }}
+            onSendToAgent={(prompt) => { setPipelinePrompt(prompt); setPage('agent'); }}
             autoShowPreview={agentPreviewPending}
             onPreviewShown={() => setAgentPreviewPending(false)}
             initialPrompt={pipelinePrompt}
