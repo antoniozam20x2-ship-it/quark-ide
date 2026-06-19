@@ -277,20 +277,6 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
   // Auto-trigger preview — ONLY for UI (non-backend) projects
   // Uses isBackendRef so the closure always reads the current value even with [result] deps
-  useEffect(() => {
-    console.log('[Agent] Preview trigger check:', {
-      hasResult: !!result,
-      isBackend: isBackendRef.current,
-      isGenerating: isGeneratingHtml,
-      alreadyTriggered: previewTriggeredRef.current,
-    })
-
-    if (result && !isBackendRef.current && !isGeneratingHtml && !previewTriggeredRef.current) {
-      previewTriggeredRef.current = true;
-      generateHtml();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [result]);
 
   async function generateHtml() {
     if (!result) return;
@@ -727,25 +713,6 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
             </div>
 
             <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                onClick={generateHtml}
-                disabled={isGeneratingHtml}
-                style={{
-                  flex: 1,
-                  background: isGeneratingHtml ? '#1e1e3f' : 'rgba(0,255,136,0.1)',
-                  border: '1px solid #1e3f2a',
-                  borderRadius: 6, color: isGeneratingHtml ? '#3a3a5c' : '#00ff88',
-                  fontFamily: 'JetBrains Mono, monospace',
-                  fontSize: 11, fontWeight: 700, padding: '8px 12px',
-                  cursor: isGeneratingHtml ? 'not-allowed' : 'pointer',
-                  letterSpacing: '0.04em', transition: 'background 0.15s',
-                }}
-                onMouseEnter={(e) => { if (!isGeneratingHtml) e.currentTarget.style.background = 'rgba(0,255,136,0.18)'; }}
-                onMouseLeave={(e) => { if (!isGeneratingHtml) e.currentTarget.style.background = 'rgba(0,255,136,0.1)'; }}
-              >
-                {isGeneratingHtml ? '⚡ Generando…' : '▶️ Ver Preview'}
-              </button>
-
               {!commitResult ? (
                 <button
                   onClick={commitToGitHub}
