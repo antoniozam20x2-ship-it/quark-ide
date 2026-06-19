@@ -715,6 +715,52 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                   </a>
                 </div>
               </div>
+            ) : !result.commitMessage && result.files?.length ? (
+              /* ── READ-ONLY viewer — no commit, just show file content ──────── */
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {result.files.map((file, idx) => {
+                  const lines = file.content.split('\n');
+                  return (
+                    <div key={idx} style={{
+                      border: '1px solid #1e3a2a',
+                      borderLeft: '2px solid #00ff88',
+                      borderRadius: 6, overflow: 'hidden', background: '#080f0a',
+                    }}>
+                      {/* header */}
+                      <div style={{
+                        padding: '5px 10px', borderBottom: '1px solid #1e3a2a',
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        background: '#060d08',
+                      }}>
+                        <span style={{ color: '#00ff88', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+                          📄 {file.path}
+                        </span>
+                        <span style={{ color: '#3a5c4a', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+                          {lines.length} líneas
+                        </span>
+                      </div>
+                      {/* content */}
+                      <div style={{
+                        fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                        lineHeight: 1.55, padding: '6px 8px',
+                        whiteSpace: 'pre-wrap', overflowX: 'auto',
+                      }}>
+                        {lines.map((line, i) => (
+                          <div key={i} style={{ display: 'flex', gap: 0 }}>
+                            <span style={{
+                              color: '#1e3a2a', userSelect: 'none',
+                              minWidth: 32, textAlign: 'right', marginRight: 10, flexShrink: 0,
+                            }}>
+                              {i + 1}
+                            </span>
+                            <span style={{ color: '#a0c0a8' }}>{line || ' '}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             ) : (
               /* Diff viewer + commit — shown before commit */
               result.files?.length ? (

@@ -299,6 +299,37 @@ router.post('/generate', async (req, res) => {
         }
       }
 
+      // ── AI analysis of read content ─────────────────────────────────────────
+      if (readFiles.length > 0) {
+        send('action', { text: '🔍 Analizando contenido...' });
+        try {
+          const fileContext = readFiles
+            .map((f) => {
+              const lines = f.content.split('\n');
+              const preview = lines.length > 120
+                ? lines.slice(0, 120).join('\n') + `\n// ... (${lines.length - 120} líneas más)`
+                : f.content;
+              return `--- ${f.path} (${lines.length} líneas) ---\n${preview}`;
+            })
+            .join('\n\n');
+
+          const analysis = await generateWithFallback(
+            `El usuario preguntó: "${prompt}"\n\nContenido de los archivos leídos:\n${fileContext}`,
+            `Eres un experto analista de código senior. Analiza los archivos leídos y responde directamente a lo que preguntó el usuario.
+Sé conciso y preciso — máximo 8 líneas. Sin markdown, sin headers con #, sin listas con *.
+Usa frases cortas. Cada idea en una línea separada.`,
+          );
+
+          // Stream each non-empty line as its own action event
+          const analysisLines = analysis.split('\n').map((l) => l.trim()).filter(Boolean);
+          for (const line of analysisLines) {
+            send('action', { text: `💡 ${line}` });
+          }
+        } catch {
+          send('action', { text: '⚠️ Análisis no disponible — revisa el contenido directamente' });
+        }
+      }
+
       // done with real file content — no commitMessage (read-only)
       send('done', {
         files:         readFiles,
