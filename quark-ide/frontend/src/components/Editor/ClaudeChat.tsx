@@ -113,6 +113,7 @@ export default function ClaudeChat({
   const [contextLoading, setContextLoading] = useState(false);
   const [contextLoadingLabel, setContextLoadingLabel] = useState('');
   const [historyLoading, setHistoryLoading] = useState(true);
+  const [clearing, setClearing] = useState(false);
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -171,6 +172,20 @@ export default function ClaudeChat({
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 200) + 'px';
   }, [input]);
+
+  async function clearHistory() {
+    if (clearing) return;
+    setClearing(true);
+    try {
+      await fetch(`${API_BASE}/api/chat/history`, { method: 'DELETE' });
+      setMessages([]);
+      conversationIdRef.current = null;
+    } catch {
+      // fail silently
+    } finally {
+      setClearing(false);
+    }
+  }
 
   async function loadRepoContext(repo: string, label: string) {
     if (loadedContext === repo) return;
@@ -407,9 +422,26 @@ export default function ClaudeChat({
             {activeProject.emoji} {activeProject.name}
           </span>
         )}
-        <span style={{ color: '#6b7280', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginLeft: 'auto' }}>
+        <span style={{ color: '#6b7280', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
           {fileName}
         </span>
+        {messages.length > 0 && (
+          <button
+            onClick={clearHistory}
+            disabled={clearing || loading}
+            style={{
+              background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.25)',
+              borderRadius: 4, color: clearing ? '#3a3a5c' : '#f87171',
+              fontFamily: 'JetBrains Mono, monospace', fontSize: 9, fontWeight: 700,
+              padding: '3px 8px', cursor: clearing ? 'not-allowed' : 'pointer',
+              letterSpacing: '0.04em', whiteSpace: 'nowrap', transition: 'background 0.15s', flexShrink: 0,
+            }}
+            onMouseEnter={(e) => { if (!clearing) e.currentTarget.style.background = 'rgba(239,68,68,0.16)'; }}
+            onMouseLeave={(e) => { if (!clearing) e.currentTarget.style.background = 'rgba(239,68,68,0.07)'; }}
+          >
+            {clearing ? '⟳' : '🗑 Limpiar'}
+          </button>
+        )}
       </div>
 
       {/* Messages */}

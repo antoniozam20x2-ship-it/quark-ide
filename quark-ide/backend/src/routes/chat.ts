@@ -165,6 +165,25 @@ router.get('/history', async (_req: Request, res: Response) => {
   }
 });
 
+// DELETE /api/chat/history — wipe all messages and the conversation row
+router.delete('/history', async (_req: Request, res: Response) => {
+  try {
+    const existing = await pool.query<{ id: number }>(
+      `SELECT id FROM conversations WHERE title = $1 LIMIT 1`,
+      [CHAT_CONVERSATION_TITLE],
+    );
+    if (existing.rows.length > 0) {
+      const convId = existing.rows[0].id;
+      await pool.query(`DELETE FROM messages WHERE conversation_id = $1`, [convId]);
+      await pool.query(`DELETE FROM conversations WHERE id = $1`, [convId]);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[chat/history DELETE] error:', err);
+    res.status(500).json({ error: 'Failed to clear chat history' });
+  }
+});
+
 // POST /api/chat/message — persist a single message (user or assistant)
 router.post('/message', async (req: Request, res: Response) => {
   const { conversationId, role, content } = req.body as {

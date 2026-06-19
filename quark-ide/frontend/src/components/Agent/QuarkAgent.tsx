@@ -73,6 +73,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     () => localStorage.getItem(LS_DEEPMODE_KEY) === 'true',
   );
   const [sessionLoading, setSessionLoading] = useState(true);
+  const [editableCommitMsg, setEditableCommitMsg] = useState('');
   const previewTriggeredRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const agentTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -145,6 +146,11 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 200) + 'px';
   }, [prompt]);
+
+  // Sync editable commit message whenever a new result arrives
+  useEffect(() => {
+    if (result?.commitMessage) setEditableCommitMsg(result.commitMessage);
+  }, [result?.commitMessage]);
 
   useEffect(() => {
     if (initialPrompt && initialPrompt.trim()) {
@@ -389,7 +395,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           files:   result.files,
-          message: result.commitMessage,
+          message: editableCommitMsg || result.commitMessage,
           repo:    result.repo ?? selectedRepo,
           branch:  result.branch ?? activeProject.branch,
         }),
@@ -446,12 +452,35 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         <span style={{ color: '#00ff88', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em' }}>
           🤖 QUARK AGENT
         </span>
-        <span style={{ color: '#3a3a5c', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ color: '#3a3a5c', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
           — {activeProject.emoji} {activeProject.name}
           {isBackend && (
             <span style={{ color: '#f59e0b', marginLeft: 6, fontSize: 10 }}>backend</span>
           )}
         </span>
+        {(feed.length > 0 || result || commitResult || fixResult) && !running && (
+          <button
+            onClick={() => {
+              setResult(null);
+              setFeed([]);
+              setCommitResult(null);
+              setFixResult(null);
+              setEditableCommitMsg('');
+              saveSession([], null, null, null);
+            }}
+            style={{
+              background: 'rgba(0,255,136,0.06)', border: '1px solid #1e3f2a',
+              borderRadius: 4, color: '#00ff88',
+              fontFamily: 'JetBrains Mono, monospace', fontSize: 9, fontWeight: 700,
+              padding: '3px 8px', cursor: 'pointer', letterSpacing: '0.04em',
+              whiteSpace: 'nowrap', transition: 'background 0.15s', flexShrink: 0,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(0,255,136,0.14)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(0,255,136,0.06)'; }}
+          >
+            ＋ Nueva sesión
+          </button>
+        )}
       </div>
 
       {/* Feed */}
@@ -796,17 +825,29 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                     );
                   })}
 
-                  {/* Stat bar */}
-                  <div style={{
-                    background: 'rgba(124,58,237,0.06)',
-                    border: '1px solid #4c1d95',
-                    borderRadius: 6, padding: '6px 12px',
-                    display: 'flex', alignItems: 'center', gap: 10,
-                    fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
-                  }}>
-                    <span style={{ color: '#a78bfa', fontWeight: 700 }}>
-                      📦 {result.files.length} archivo(s) · {result.commitMessage}
+                  {/* Editable commit message */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{
+                      color: '#4c1d95', fontSize: 9,
+                      fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.06em',
+                    }}>
+                      MENSAJE DEL COMMIT ({result.files.length} archivo(s))
                     </span>
+                    <textarea
+                      value={editableCommitMsg}
+                      onChange={(e) => setEditableCommitMsg(e.target.value)}
+                      disabled={committing}
+                      rows={2}
+                      style={{
+                        background: 'rgba(124,58,237,0.06)',
+                        border: '1px solid #4c1d95',
+                        borderRadius: 6, padding: '7px 10px',
+                        color: committing ? '#3a3a5c' : '#a78bfa',
+                        fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
+                        resize: 'vertical', width: '100%', boxSizing: 'border-box',
+                        outline: 'none', lineHeight: 1.5,
+                      }}
+                    />
                   </div>
 
                   {/* Botones aprobar / cancelar */}
