@@ -332,7 +332,7 @@ Usa frases cortas. Cada idea en una línea separada.`,
 
       // done with real file content — no commitMessage (read-only)
       send('done', {
-        files:         readFiles,
+        files:         [],
         commitMessage: '',
         mainComponent: readFiles[0]?.path ?? '',
         mainContent:   readFiles[0]?.content ?? '',
@@ -528,7 +528,7 @@ REGLAS:
       try {
         const analysis = await generateWithFallback(
           fastSystemPrompt + '\n\nPREGUNTA: ' + prompt,
-          'Eres un experto analista de código. Responde directo y conciso. Sin markdown innecesario.',
+          'Eres un experto analista de código senior.\nREGLAS ESTRICTAS DE OUTPUT:\n- Máximo 10 líneas en total\n- Lenguaje natural, como un senior explicando a un colega\n- CERO bloques de código crudos\n- Solo menciona el archivo y línea si es indispensable\n- Estructura: qué hace (2 líneas) → cómo funciona (4 líneas) → dónde está (2 líneas)',
         );
         const lines = analysis.split('\n').map((l) => l.trim()).filter(Boolean);
         for (const line of lines) {
