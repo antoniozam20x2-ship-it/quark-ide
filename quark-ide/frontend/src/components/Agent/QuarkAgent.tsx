@@ -321,7 +321,8 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                 });
               }
 
-              if (!isBackendRef.current && parsed.mainContent) {
+              // Only apply to editor when it's a real generation (not read-only)
+              if (!isBackendRef.current && parsed.mainContent && parsed.commitMessage) {
                 onApplyToEditor(parsed.mainContent);
               }
               setRunning(false);
@@ -956,50 +957,99 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         {/* ── UI PROJECT result panel ───────────────────────────────────────── */}
         {result && !running && !isBackend && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
-            <div style={{
-              background: 'rgba(0,255,136,0.06)', border: '1px solid #1e3f2a',
-              borderRadius: 6, padding: '8px 12px',
-              color: '#00ff88', fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
-            }}>
-              ✅ {result.files?.length} archivos listos · {result.commitMessage}
-            </div>
 
-            <div style={{ display: 'flex', gap: 8 }}>
-              {!commitResult ? (
-                <button
-                  onClick={commitToGitHub}
-                  disabled={committing}
-                  style={{
-                    flex: 1,
-                    background: committing ? '#1e1e3f' : 'rgba(124,58,237,0.12)',
-                    border: `1px solid ${committing ? '#1e1e3f' : '#4c1d95'}`,
-                    borderRadius: 6, color: committing ? '#3a3a5c' : '#a78bfa',
-                    fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700,
-                    padding: '8px 12px', cursor: committing ? 'not-allowed' : 'pointer',
-                    letterSpacing: '0.04em', transition: 'background 0.15s',
-                  }}
-                  onMouseEnter={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(124,58,237,0.22)'; }}
-                  onMouseLeave={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(124,58,237,0.12)'; }}
-                >
-                  {committing ? '⟳ Committing…' : '⚡ Commit a GitHub'}
-                </button>
-              ) : (
-                <a
-                  href={githubUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    background: 'rgba(124,58,237,0.12)', border: '1px solid #4c1d95',
-                    borderRadius: 6, color: '#a78bfa', fontFamily: 'JetBrains Mono, monospace',
-                    fontSize: 11, fontWeight: 700, padding: '8px 12px', textAlign: 'center',
-                    letterSpacing: '0.04em', textDecoration: 'none',
-                  }}
-                >
-                  ✅ Commit {shortSha}
-                </a>
-              )}
-            </div>
+            {/* READ-ONLY: no commitMessage → show file content viewer, no commit button */}
+            {!result.commitMessage && result.files?.length ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {result.files.map((file, idx) => {
+                  const lines = file.content.split('\n');
+                  return (
+                    <div key={idx} style={{
+                      border: '1px solid #1e3a2a', borderLeft: '2px solid #00ff88',
+                      borderRadius: 6, overflow: 'hidden', background: '#080f0a',
+                    }}>
+                      <div style={{
+                        padding: '5px 10px', borderBottom: '1px solid #1e3a2a',
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        background: '#060d08',
+                      }}>
+                        <span style={{ color: '#00ff88', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+                          📄 {file.path}
+                        </span>
+                        <span style={{ color: '#3a5c4a', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+                          {lines.length} líneas
+                        </span>
+                      </div>
+                      <div style={{
+                        fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                        lineHeight: 1.55, padding: '6px 8px',
+                        whiteSpace: 'pre-wrap', overflowX: 'auto',
+                      }}>
+                        {lines.map((line, i) => (
+                          <div key={i} style={{ display: 'flex' }}>
+                            <span style={{
+                              color: '#1e3a2a', userSelect: 'none',
+                              minWidth: 32, textAlign: 'right', marginRight: 10, flexShrink: 0,
+                            }}>
+                              {i + 1}
+                            </span>
+                            <span style={{ color: '#a0c0a8' }}>{line || ' '}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              /* GENERATE mode: show stat + commit button */
+              <>
+                <div style={{
+                  background: 'rgba(0,255,136,0.06)', border: '1px solid #1e3f2a',
+                  borderRadius: 6, padding: '8px 12px',
+                  color: '#00ff88', fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
+                }}>
+                  ✅ {result.files?.length} archivos listos · {result.commitMessage}
+                </div>
+
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {!commitResult ? (
+                    <button
+                      onClick={commitToGitHub}
+                      disabled={committing}
+                      style={{
+                        flex: 1,
+                        background: committing ? '#1e1e3f' : 'rgba(124,58,237,0.12)',
+                        border: `1px solid ${committing ? '#1e1e3f' : '#4c1d95'}`,
+                        borderRadius: 6, color: committing ? '#3a3a5c' : '#a78bfa',
+                        fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700,
+                        padding: '8px 12px', cursor: committing ? 'not-allowed' : 'pointer',
+                        letterSpacing: '0.04em', transition: 'background 0.15s',
+                      }}
+                      onMouseEnter={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(124,58,237,0.22)'; }}
+                      onMouseLeave={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(124,58,237,0.12)'; }}
+                    >
+                      {committing ? '⟳ Committing…' : '⚡ Commit a GitHub'}
+                    </button>
+                  ) : (
+                    <a
+                      href={githubUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: 'rgba(124,58,237,0.12)', border: '1px solid #4c1d95',
+                        borderRadius: 6, color: '#a78bfa', fontFamily: 'JetBrains Mono, monospace',
+                        fontSize: 11, fontWeight: 700, padding: '8px 12px', textAlign: 'center',
+                        letterSpacing: '0.04em', textDecoration: 'none',
+                      }}
+                    >
+                      ✅ Commit {shortSha}
+                    </a>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
 
