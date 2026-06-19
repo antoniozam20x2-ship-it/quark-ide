@@ -9,6 +9,79 @@ function isBackendProject(name: string): boolean {
   return BACKEND_PROJECTS.some((b) => name.includes(b));
 }
 
+// ── Diff helpers ─────────────────────────────────────────────────────────────
+type DiffLine = { type: 'same' | 'removed' | 'added'; text: string };
+
+function computeLineDiff(a: string[], b: string[]): DiffLine[] {
+  const m = a.length, n = b.length;
+  // For very large files fall back to positional comparison (still O(n))
+  if (m > 1500 || n > 1500) {
+    const result: DiffLine[] = [];
+    const max = Math.max(m, n);
+    for (let i = 0; i < max; i++) {
+      if (i < m && i < n) {
+        if (a[i] === b[i]) result.push({ type: 'same', text: a[i] });
+        else {
+          result.push({ type: 'removed', text: a[i] });
+          result.push({ type: 'added', text: b[i] });
+        }
+      } else if (i < m) result.push({ type: 'removed', text: a[i] });
+      else result.push({ type: 'added', text: b[i] });
+    }
+    return result;
+  }
+  // LCS-based diff
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1] + 1
+        : Math.max(dp[i - 1][j], dp[i][j - 1]);
+
+  const result: DiffLine[] = [];
+  let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
+      result.unshift({ type: 'same', text: a[i - 1] }); i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      result.unshift({ type: 'added', text: b[j - 1] }); j--;
+    } else {
+      result.unshift({ type: 'removed', text: a[i - 1] }); i--;
+    }
+  }
+  return result;
+}
+
+type PairedRow = {
+  leftNum: number | null; leftText: string | null; leftType: 'same' | 'removed' | null;
+  rightNum: number | null; rightText: string | null; rightType: 'same' | 'added' | null;
+};
+
+function toPairedRows(diff: DiffLine[]): PairedRow[] {
+  const rows: PairedRow[] = [];
+  let lNum = 1, rNum = 1, i = 0;
+  while (i < diff.length) {
+    const d = diff[i];
+    if (d.type === 'same') {
+      rows.push({ leftNum: lNum, leftText: d.text, leftType: 'same', rightNum: rNum, rightText: d.text, rightType: 'same' });
+      lNum++; rNum++; i++;
+    } else if (d.type === 'removed') {
+      const next = diff[i + 1];
+      if (next?.type === 'added') {
+        rows.push({ leftNum: lNum, leftText: d.text, leftType: 'removed', rightNum: rNum, rightText: next.text, rightType: 'added' });
+        lNum++; rNum++; i += 2;
+      } else {
+        rows.push({ leftNum: lNum, leftText: d.text, leftType: 'removed', rightNum: null, rightText: null, rightType: null });
+        lNum++; i++;
+      }
+    } else {
+      rows.push({ leftNum: null, leftText: null, leftType: null, rightNum: rNum, rightText: d.text, rightType: 'added' });
+      rNum++; i++;
+    }
+  }
+  return rows;
+}
+
 // Server-sent event shape
 interface AgentEvent {
   event: 'action' | 'file' | 'done' | 'error';
@@ -772,8 +845,10 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                     const origLines = (file.originalContent ?? '').split('\n');
                     const newLines  = file.content.split('\n');
                     const isNew     = !file.originalContent;
-                    const added     = newLines.filter((l) => !origLines.includes(l)).length;
-                    const removed   = isNew ? 0 : origLines.filter((l) => !newLines.includes(l)).length;
+                    const diff      = isNew ? [] : computeLineDiff(origLines, newLines);
+                    const pairs     = isNew ? [] : toPairedRows(diff);
+                    const added     = isNew ? newLines.length : diff.filter((d) => d.type === 'added').length;
+                    const removed   = isNew ? 0 : diff.filter((d) => d.type === 'removed').length;
                     return (
                       <div key={idx} style={{
                         border: '1px solid #1e1e3f',
@@ -792,82 +867,89 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                             📄 {file.path}
                           </span>
                           <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, display: 'flex', gap: 8 }}>
-                            {!isNew && <span style={{ color: '#f87171' }}>−{removed}</span>}
-                            <span style={{ color: '#86efac' }}>+{added}</span>
+                            {removed > 0 && <span style={{ color: '#f87171' }}>−{removed}</span>}
+                            {added   > 0 && <span style={{ color: '#86efac' }}>+{added}</span>}
                             {isNew && <span style={{ color: '#a78bfa' }}>nuevo archivo</span>}
+                            {!isNew && removed === 0 && added === 0 && <span style={{ color: '#3a3a5c' }}>sin cambios</span>}
                           </span>
                         </div>
                         {/* columns */}
-                        <div style={{ display: 'flex', gap: 0 }}>
-                          {/* LEFT — original */}
-                          <div style={{ flex: 1, minWidth: 0, borderRight: '1px solid #1a1a2e' }}>
-                            <div style={{
-                              padding: '2px 8px',
-                              color: '#3a3a5c', fontSize: 9,
-                              fontFamily: 'JetBrains Mono, monospace',
-                              borderBottom: '1px solid #1a1a2e',
-                              background: '#080810',
-                            }}>
-                              {isNew ? 'vacío' : 'ANTES'}
-                            </div>
-                            <div style={{
-                              fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-                              lineHeight: 1.55, padding: '6px 8px',
-                              whiteSpace: 'pre-wrap', overflowX: 'auto',
-                            }}>
-                              {isNew ? (
-                                <div style={{ color: '#2a2a4a', fontStyle: 'italic' }}>(archivo nuevo)</div>
-                              ) : origLines.map((line, i) => {
-                                const removed = !newLines.includes(line);
-                                return (
+                        {isNew ? (
+                          /* New file — single column */
+                          <div style={{
+                            fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                            lineHeight: 1.55, padding: '6px 8px',
+                            whiteSpace: 'pre-wrap', overflowX: 'auto',
+                          }}>
+                            {newLines.map((line, i) => (
+                              <div key={i} style={{ display: 'flex', background: 'rgba(34,197,94,0.06)' }}>
+                                <span style={{ color: '#2a2a4a', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 8, flexShrink: 0 }}>
+                                  {i + 1}
+                                </span>
+                                <span style={{ color: '#86efac' }}>{line || ' '}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', gap: 0 }}>
+                            {/* LEFT — original */}
+                            <div style={{ flex: 1, minWidth: 0, borderRight: '1px solid #1a1a2e' }}>
+                              <div style={{
+                                padding: '2px 8px', color: '#3a3a5c', fontSize: 9,
+                                fontFamily: 'JetBrains Mono, monospace',
+                                borderBottom: '1px solid #1a1a2e', background: '#080810',
+                              }}>ANTES</div>
+                              <div style={{
+                                fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                                lineHeight: 1.55, padding: '6px 4px',
+                                whiteSpace: 'pre-wrap', overflowX: 'auto',
+                              }}>
+                                {pairs.map((row, i) => (
                                   <div key={i} style={{
-                                    background: removed ? 'rgba(239,68,68,0.10)' : 'transparent',
-                                    color:      removed ? '#fca5a5' : '#3a3a5c',
-                                    paddingLeft: 2,
+                                    display: 'flex',
+                                    background: row.leftType === 'removed' ? 'rgba(239,68,68,0.12)' : 'transparent',
+                                    minHeight: '1.55em',
                                   }}>
-                                    <span style={{ color: '#2a2a4a', userSelect: 'none', marginRight: 6 }}>
-                                      {String(i + 1).padStart(3, ' ')}
+                                    <span style={{ color: '#2a2a4a', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>
+                                      {row.leftNum ?? ''}
                                     </span>
-                                    {line || ' '}
+                                    <span style={{ color: row.leftType === 'removed' ? '#fca5a5' : '#3a3a5c' }}>
+                                      {row.leftText ?? ''}
+                                    </span>
                                   </div>
-                                );
-                              })}
+                                ))}
+                              </div>
+                            </div>
+                            {/* RIGHT — new */}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{
+                                padding: '2px 8px', color: '#3a3a5c', fontSize: 9,
+                                fontFamily: 'JetBrains Mono, monospace',
+                                borderBottom: '1px solid #1a1a2e', background: '#080810',
+                              }}>DESPUÉS</div>
+                              <div style={{
+                                fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                                lineHeight: 1.55, padding: '6px 4px',
+                                whiteSpace: 'pre-wrap', overflowX: 'auto',
+                              }}>
+                                {pairs.map((row, i) => (
+                                  <div key={i} style={{
+                                    display: 'flex',
+                                    background: row.rightType === 'added' ? 'rgba(34,197,94,0.08)' : 'transparent',
+                                    minHeight: '1.55em',
+                                  }}>
+                                    <span style={{ color: '#2a2a4a', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>
+                                      {row.rightNum ?? ''}
+                                    </span>
+                                    <span style={{ color: row.rightType === 'added' ? '#86efac' : '#3a3a5c' }}>
+                                      {row.rightText ?? ''}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
                             </div>
                           </div>
-                          {/* RIGHT — new */}
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{
-                              padding: '2px 8px',
-                              color: '#3a3a5c', fontSize: 9,
-                              fontFamily: 'JetBrains Mono, monospace',
-                              borderBottom: '1px solid #1a1a2e',
-                              background: '#080810',
-                            }}>
-                              DESPUÉS
-                            </div>
-                            <div style={{
-                              fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-                              lineHeight: 1.55, padding: '6px 8px',
-                              whiteSpace: 'pre-wrap', overflowX: 'auto',
-                            }}>
-                              {newLines.map((line, i) => {
-                                const added = !origLines.includes(line);
-                                return (
-                                  <div key={i} style={{
-                                    background: added ? 'rgba(34,197,94,0.08)' : 'transparent',
-                                    color:      added ? '#86efac' : '#3a3a5c',
-                                    paddingLeft: 2,
-                                  }}>
-                                    <span style={{ color: '#2a2a4a', userSelect: 'none', marginRight: 6 }}>
-                                      {String(i + 1).padStart(3, ' ')}
-                                    </span>
-                                    {line || ' '}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        </div>
+                        )}
                       </div>
                     );
                   })}
@@ -1002,16 +1084,118 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                 })}
               </div>
             ) : (
-              /* GENERATE mode: show stat + commit button */
+              /* GENERATE mode: full 2-column diff viewer + commit */
               <>
-                <div style={{
-                  background: 'rgba(0,255,136,0.06)', border: '1px solid #1e3f2a',
-                  borderRadius: 6, padding: '8px 12px',
-                  color: '#00ff88', fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
-                }}>
-                  ✅ {result.files?.length} archivos listos · {result.commitMessage}
-                </div>
+                {/* Per-file diff */}
+                {result.files?.map((file, idx) => {
+                  const origLines = (file.originalContent ?? '').split('\n');
+                  const newLines  = file.content.split('\n');
+                  const isNew     = !file.originalContent;
+                  const diff      = isNew ? [] : computeLineDiff(origLines, newLines);
+                  const pairs     = isNew ? [] : toPairedRows(diff);
+                  const added     = isNew ? newLines.length : diff.filter((d) => d.type === 'added').length;
+                  const removed   = isNew ? 0 : diff.filter((d) => d.type === 'removed').length;
+                  return (
+                    <div key={idx} style={{
+                      border: '1px solid #1e1e3f', borderLeft: '2px solid #7c3aed',
+                      borderRadius: 6, overflow: 'hidden', background: '#0a0a16',
+                    }}>
+                      {/* header */}
+                      <div style={{
+                        padding: '5px 10px', borderBottom: '1px solid #1e1e3f',
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      }}>
+                        <span style={{ color: '#7c3aed', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+                          📄 {file.path}
+                        </span>
+                        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, display: 'flex', gap: 8 }}>
+                          {removed > 0 && <span style={{ color: '#f87171' }}>−{removed}</span>}
+                          {added   > 0 && <span style={{ color: '#86efac' }}>+{added}</span>}
+                          {isNew && <span style={{ color: '#a78bfa' }}>nuevo archivo</span>}
+                          {!isNew && removed === 0 && added === 0 && <span style={{ color: '#3a3a5c' }}>sin cambios</span>}
+                        </span>
+                      </div>
+                      {/* columns */}
+                      {isNew ? (
+                        <div style={{
+                          fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                          lineHeight: 1.55, padding: '6px 8px',
+                          whiteSpace: 'pre-wrap', overflowX: 'auto',
+                        }}>
+                          {newLines.map((line, i) => (
+                            <div key={i} style={{ display: 'flex', background: 'rgba(34,197,94,0.06)' }}>
+                              <span style={{ color: '#2a2a4a', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 8, flexShrink: 0 }}>
+                                {i + 1}
+                              </span>
+                              <span style={{ color: '#86efac' }}>{line || ' '}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', gap: 0 }}>
+                          {/* LEFT — original */}
+                          <div style={{ flex: 1, minWidth: 0, borderRight: '1px solid #1a1a2e' }}>
+                            <div style={{
+                              padding: '2px 8px', color: '#3a3a5c', fontSize: 9,
+                              fontFamily: 'JetBrains Mono, monospace',
+                              borderBottom: '1px solid #1a1a2e', background: '#080810',
+                            }}>ANTES</div>
+                            <div style={{
+                              fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                              lineHeight: 1.55, padding: '6px 4px',
+                              whiteSpace: 'pre-wrap', overflowX: 'auto',
+                            }}>
+                              {pairs.map((row, i) => (
+                                <div key={i} style={{
+                                  display: 'flex',
+                                  background: row.leftType === 'removed' ? 'rgba(239,68,68,0.12)' : 'transparent',
+                                  minHeight: '1.55em',
+                                }}>
+                                  <span style={{ color: '#2a2a4a', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>
+                                    {row.leftNum ?? ''}
+                                  </span>
+                                  <span style={{ color: row.leftType === 'removed' ? '#fca5a5' : '#3a3a5c' }}>
+                                    {row.leftText ?? ''}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                          {/* RIGHT — new */}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{
+                              padding: '2px 8px', color: '#3a3a5c', fontSize: 9,
+                              fontFamily: 'JetBrains Mono, monospace',
+                              borderBottom: '1px solid #1a1a2e', background: '#080810',
+                            }}>DESPUÉS</div>
+                            <div style={{
+                              fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                              lineHeight: 1.55, padding: '6px 4px',
+                              whiteSpace: 'pre-wrap', overflowX: 'auto',
+                            }}>
+                              {pairs.map((row, i) => (
+                                <div key={i} style={{
+                                  display: 'flex',
+                                  background: row.rightType === 'added' ? 'rgba(34,197,94,0.08)' : 'transparent',
+                                  minHeight: '1.55em',
+                                }}>
+                                  <span style={{ color: '#2a2a4a', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>
+                                    {row.rightNum ?? ''}
+                                  </span>
+                                  <span style={{ color: row.rightType === 'added' ? '#86efac' : '#3a3a5c' }}>
+                                    {row.rightText ?? ''}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
 
+                {/* Commit button */}
                 <div style={{ display: 'flex', gap: 8 }}>
                   {!commitResult ? (
                     <button
@@ -1023,13 +1207,13 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                         border: `1px solid ${committing ? '#1e1e3f' : '#4c1d95'}`,
                         borderRadius: 6, color: committing ? '#3a3a5c' : '#a78bfa',
                         fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700,
-                        padding: '8px 12px', cursor: committing ? 'not-allowed' : 'pointer',
+                        padding: '9px 12px', cursor: committing ? 'not-allowed' : 'pointer',
                         letterSpacing: '0.04em', transition: 'background 0.15s',
                       }}
                       onMouseEnter={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(124,58,237,0.22)'; }}
                       onMouseLeave={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(124,58,237,0.12)'; }}
                     >
-                      {committing ? '⟳ Committing…' : '⚡ Commit a GitHub'}
+                      {committing ? '⟳ Committing…' : `✅ Aprobar y commitear ${result.files?.length} archivo(s)`}
                     </button>
                   ) : (
                     <a
@@ -1040,7 +1224,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                         flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
                         background: 'rgba(124,58,237,0.12)', border: '1px solid #4c1d95',
                         borderRadius: 6, color: '#a78bfa', fontFamily: 'JetBrains Mono, monospace',
-                        fontSize: 11, fontWeight: 700, padding: '8px 12px', textAlign: 'center',
+                        fontSize: 11, fontWeight: 700, padding: '9px 12px', textAlign: 'center',
                         letterSpacing: '0.04em', textDecoration: 'none',
                       }}
                     >
