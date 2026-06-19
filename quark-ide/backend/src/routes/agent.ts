@@ -167,11 +167,11 @@ Responde SOLO con un JSON array de strings, sin markdown ni explicaciones. Ejemp
 
   try {
     const paths = JSON.parse(raw) as string[];
-    return Array.isArray(paths) ? paths.slice(0, 5) : [];
+    return Array.isArray(paths) ? paths.slice(0, 8) : [];
   } catch {
     // Fallback: extract anything that looks like a file path
     const matches = raw.match(/"([^"]+\.[a-z]{1,5})"/g) ?? [];
-    return matches.map((m: string) => m.replace(/"/g, '')).slice(0, 5);
+    return matches.map((m: string) => m.replace(/"/g, '')).slice(0, 8);
   }
 }
 
@@ -222,7 +222,7 @@ router.post('/generate', async (req, res) => {
             : `// No se encontró '${keyword}' en ${filePath}`;
           send('action', { text: `🔎 ${relevant.length} línea(s) con '${keyword}'` });
         } else {
-          finalContent = content.split('\n').slice(0, 200).join('\n');
+          finalContent = content.split('\n').slice(0, 500).join('\n');
         }
 
         send('done', {
@@ -372,7 +372,7 @@ Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
         send('action', { text: `📂 Leyendo ${relevantPaths.length} archivo(s) clave...` })
 
         const results = await Promise.allSettled(
-          relevantPaths.slice(0, 5).map(async (filePath) => {
+          relevantPaths.slice(0, 8).map(async (filePath) => {
             const content = await getFileContent(filePath, repo)
             return { path: filePath, content }
           })
@@ -393,8 +393,8 @@ Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
       ? '\n\nCONTENIDO REAL DE ARCHIVOS RELEVANTES:\n' +
         preloadedFiles.map((f) => {
           const lines = f.content.split('\n')
-          const truncated = lines.length > 150
-            ? lines.slice(0, 150).join('\n') + `\n// ... (${lines.length - 150} líneas más)`
+          const truncated = lines.length > 500
+            ? lines.slice(0, 500).join('\n') + `\n// ... (${lines.length - 500} líneas más)`
             : f.content
           return `--- ${f.path} ---\n${truncated}`
         }).join('\n\n')
@@ -961,7 +961,7 @@ router.get('/repo-context', async (req, res) => {
         const data = await r.json() as { content?: string; encoding?: string };
         if (!data.content || data.encoding !== 'base64') return { path, content: '(no disponible)' };
         const decoded = Buffer.from(data.content.replace(/\n/g, ''), 'base64').toString('utf-8');
-        const lines = decoded.split('\n').slice(0, 150).join('\n');
+        const lines = decoded.split('\n').slice(0, 500).join('\n');
         return { path, content: lines };
       }),
     );
