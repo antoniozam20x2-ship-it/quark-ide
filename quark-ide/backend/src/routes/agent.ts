@@ -450,13 +450,60 @@ Responde en máximo 150 palabras. Solo el razonamiento, sin código.`,
         send('action', { text: `⚡ Continuando sin razonamiento profundo (Claude no disponible)` })
       }
     } else {
-      send('action', { text: `⚡ Modo rápido — generando directo` })
+      send('action', { text: `⚡ Modo análisis — leyendo contexto` })
+    }
+
+    // ── FAST MODE — Análisis puro, sin generación de código ──────────────────
+    if (!deepMode) {
+      send('action', { text: '🔍 Analizando...' });
+
+      const fastSystemPrompt = `Eres QUARK Agent en modo ANÁLISIS.
+
+ROL: Leer, diagnosticar, explicar. NUNCA modificar código.
+
+CONTEXTO DISPONIBLE:
+Repo: ${projectName ?? repo} (${repo})
+
+Archivos existentes:
+${filePaths}
+${fileContextStr}
+
+CUANDO TE PREGUNTEN POR UN PROBLEMA, responde SIEMPRE en este formato:
+
+CAUSA: [1 línea exacta]
+DÓNDE: [archivo:línea si aplica]
+POR QUÉ: [máximo 3 líneas]
+SOLUCIÓN: [descripción sin código]
+
+REGLAS:
+- Respuesta corta si el problema es simple
+- Respuesta larga solo si la complejidad lo amerita
+- NUNCA generes archivos ni código modificado
+- Si necesitas más contexto → pídelo explícitamente`;
+
+      try {
+        const analysis = await generateWithFallback(
+          fastSystemPrompt + '\n\nPREGUNTA: ' + prompt,
+          'Eres un experto analista de código. Responde directo y conciso. Sin markdown innecesario.',
+        );
+        const lines = analysis.split('\n').map((l) => l.trim()).filter(Boolean);
+        for (const line of lines) {
+          send('action', { text: line });
+        }
+      } catch {
+        send('action', { text: '⚠️ Análisis no disponible — intenta reformular la pregunta' });
+      }
+
+      send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+      await new Promise((r) => setTimeout(r, 100));
+      res.end();
+      return;
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    send('action', { text: '🧠 Generando archivos...' });
+    send('action', { text: '🔬 Modo cirugía — preparando patch...' });
 
-    const systemPrompt = `Eres QUARK Agent — un agente de desarrollo QUIRÚRGICO que respeta código existente.
+    const systemPrompt = `Eres QUARK Agent en modo CIRUGÍA.
 Repo activo: ${projectName ?? repo} (${repo})
 
 ${reasoningContext ? `ANÁLISIS PREVIO DEL ARQUITECTO:\n${reasoningContext}\n\nSigue este análisis para implementar el cambio.` : ''}
@@ -464,39 +511,39 @@ Archivos existentes en el repo:
 ${filePaths}
 ${fileContextStr}
 
-REGLA FUNDAMENTAL — NUNCA REESCRIBAS ARCHIVOS COMPLETOS:
-Si el archivo YA EXISTE en el repo → OBLIGATORIAMENTE genera ÚNICAMENTE las líneas que cambian. NUNCA toques el 99% del archivo que no cambia.
+ROL: Corregir código con precisión quirúrgica.
 
-PROCESO OBLIGATORIO PARA ARCHIVOS EXISTENTES:
-1. Lee el archivo completo desde el contexto provisto arriba
-2. Identifica las LÍNEAS EXACTAS que necesitan cambiar (usa números de línea)
-3. Genera SOLO esas líneas en formato PATCH:
+REGLA #1 — PATCHES, NO REWRITES:
+El formato de salida es el archivo completo, PERO:
+- Lee el archivo completo primero desde el contexto provisto arriba
+- Cambia SOLO las líneas necesarias
+- El 99% del archivo debe ser idéntico al original
+- Máximo 20 líneas diferentes vs el original
 
-   Línea X:
-   - [código viejo]
-   + [código nuevo]
+PROCESO OBLIGATORIO:
+1. Lee el archivo completo desde el contexto
+2. Identifica exactamente qué líneas cambian (usa números de línea)
+3. Reconstruye el archivo completo con SOLO esos cambios aplicados
+4. Verifica: ¿Cambié más de 20 líneas? → DETENTE y comunícalo en commitMessage
 
-4. Incluye 2-3 líneas de contexto arriba y abajo del cambio (sin modificar)
-5. CRÍTICO: Verifica que el número total de líneas generadas sea < 20. Si necesitas cambiar más de 20 líneas, DETENTE y pide confirmación.
+SI NECESITAS >20 LÍNEAS:
+Usa commitMessage: "CONFIRMACIÓN REQUERIDA: Este cambio afecta N líneas — ¿confirmas que proceda?"
 
-ANTI-PATTERN FATAL — NUNCA HAGAS ESTO:
-❌ Devolver el archivo completo de 2000 líneas con pequeños cambios mezclados
-✅ Genera solo las líneas X-Y que cambian, dejando el resto del archivo intacto
+ARCHIVOS TRUNCADOS (>150 líneas en contexto):
+Si el archivo fue truncado, indica en commitMessage: "ARCHIVO TRUNCADO: proporciona el archivo completo para proceder"
 
-SI NO PUEDES HACER UN PATCH QUIRÚRGICO:
-- Es porque el cambio es demasiado grande o complejo
-- Di explícitamente: "Este cambio requiere modificar más de 20 líneas — necesito confirmación antes de proceder"
-- No intentes hacerlo de todas formas
+IMPORTS NUEVOS: agrégalos al inicio del archivo, nunca en el medio.
 
-VALIDACIÓN ANTES DE GENERAR:
-- ¿El archivo es nuevo? → Genera completo
-- ¿El archivo existe? → Genera SOLO el patch (las líneas que cambian + contexto)
-- ¿Necesito >20 líneas? → DETENTE y pide confirmación
-- ¿Compiló sin errores? → Continúa. ¿Error de sintaxis? → Revisa el patch
+NUNCA:
+❌ Reescribir desde cero
+❌ Cambiar lo que no te pidieron
+❌ Asumir contenido truncado o inventar líneas
+❌ Omitir partes del archivo original en el output
 
-FORMATO DE SALIDA — JSON OBLIGATORIO:
-El campo "content" de archivos EXISTENTES debe contener EL ARCHIVO COMPLETO con el patch ya aplicado (copia exacta del original con solo las líneas modificadas reemplazadas). NUNCA truncues, NUNCA omitas secciones. Si el archivo original tiene 2000 líneas y cambiaste 5, el content debe tener ~2000 líneas.
-El campo "content" de archivos NUEVOS contiene el archivo completo.
+SIEMPRE:
+✅ content = archivo COMPLETO con patch aplicado (todas las líneas originales + cambios)
+✅ Solo las líneas necesarias modificadas
+✅ Verificar que compila lógicamente antes de devolver
 
 RESPONDE ÚNICAMENTE CON ESTE JSON (sin markdown, sin backticks, sin texto extra):
 {
