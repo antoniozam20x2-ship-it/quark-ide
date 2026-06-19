@@ -443,11 +443,94 @@ El campo content de cada archivo debe ser un string JSON válido con caracteres 
       files.find((f) => f.path.endsWith('.tsx')) ??
       files[0];
 
+    // ── VALIDACIÓN ANTES DEL DIFF ─────────────────────────────────────────────
+    send('action', { text: '🔍 Validando código generado...' })
+
+    try {
+      const filesToValidate = parsed.files
+        .map((f: { path: string; content: string }) => `--- ${f.path} ---\n${f.content.split('\n').slice(0, 100).join('\n')}`)
+        .join('\n\n')
+
+      const validationRaw = await generateWithFallback(
+        `Analiza estos archivos de código TypeScript/JavaScript generados y detecta errores críticos.
+    
+${filesToValidate}
+
+Responde SOLO con este JSON:
+{
+  "valid": true/false,
+  "errors": ["descripción del error 1", "descripción del error 2"],
+  "affectedFiles": ["path/del/archivo"]
+}
+
+Busca ÚNICAMENTE errores críticos:
+- Imports rotos o referencias a módulos inexistentes
+- Variables o funciones usadas sin declarar
+- Sintaxis inválida obvia
+- Exports faltantes que otros archivos necesitan
+NO reportes advertencias de estilo ni errores menores.`,
+        'Eres un validador de código experto. Devuelve SOLO el JSON solicitado sin markdown ni explicaciones.'
+      )
+
+      const validation = JSON.parse(
+        validationRaw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim()
+      ) as { valid: boolean; errors: string[]; affectedFiles: string[] }
+
+      if (!validation.valid && validation.errors.length > 0) {
+        send('action', { text: `⚠️ ${validation.errors.length} error(es) detectado(s) — corrigiendo...` })
+
+        const filesToValidateStr = parsed.files
+          .map((f: { path: string; content: string }) => `--- ${f.path} ---\n${f.content.split('\n').slice(0, 100).join('\n')}`)
+          .join('\n\n')
+
+        const fixPrompt = `El código generado tiene estos errores críticos:
+${validation.errors.map((e: string, i: number) => `${i + 1}. ${e}`).join('\n')}
+
+Archivos afectados: ${validation.affectedFiles.join(', ')}
+
+Código original:
+${filesToValidateStr}
+
+Corrige ÚNICAMENTE los errores listados. Conserva toda la lógica existente.
+Responde con el mismo JSON de siempre:
+{
+  "files": [{"path": "...", "content": "..."}],
+  "commitMessage": "fix: corregir errores de validación",
+  "mainComponent": "..."
+}`
+
+        const fixedRaw = await generateWithFallback(fixPrompt,
+          'Eres un agente de corrección de código. Devuelve SOLO el JSON solicitado.'
+        )
+
+        try {
+          const fixedParsed = JSON.parse(
+            fixedRaw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim()
+          ) as typeof parsed
+
+          for (const fixedFile of fixedParsed.files) {
+            const idx = parsed.files.findIndex((f: { path: string }) => f.path === fixedFile.path)
+            if (idx >= 0) {
+              parsed.files[idx] = fixedFile
+            }
+          }
+          send('action', { text: '✅ Errores corregidos automáticamente' })
+        } catch {
+          send('action', { text: '⚠️ No se pudo auto-corregir — revisa el diff con cuidado' })
+        }
+      } else {
+        send('action', { text: '✅ Código validado — sin errores críticos' })
+      }
+    } catch {
+      send('action', { text: '⚡ Validación omitida — continúa con revisión manual' })
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     send('done', {
-      files,
-      commitMessage,
+      files: parsed.files,
+      commitMessage: parsed.commitMessage ?? commitMessage,
       mainComponent: mainFile?.path,
-      mainContent: mainFile?.content ?? '',
+      mainContent: parsed.files.find((f: { path: string }) => f.path === mainFile?.path)?.content ?? mainFile?.content ?? '',
       repo,
       branch,
     });

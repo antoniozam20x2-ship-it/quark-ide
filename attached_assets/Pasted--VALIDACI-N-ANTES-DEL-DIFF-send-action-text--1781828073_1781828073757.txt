@@ -1,0 +1,84 @@
+// ── VALIDACIÓN ANTES DEL DIFF ─────────────────────────────────────────────
+send('action', { text: '🔍 Validando código generado...' })
+
+let validationPassed = true
+try {
+  const filesToValidate = parsed.files
+    .map((f) => `--- ${f.path} ---\n${f.content.split('\n').slice(0, 100).join('\n')}`)
+    .join('\n\n')
+
+  const validationRaw = await generateWithFallback(
+    `Analiza estos archivos de código TypeScript/JavaScript generados y detecta errores críticos.
+    
+${filesToValidate}
+
+Responde SOLO con este JSON:
+{
+  "valid": true/false,
+  "errors": ["descripción del error 1", "descripción del error 2"],
+  "affectedFiles": ["path/del/archivo"]
+}
+
+Busca ÚNICAMENTE errores críticos:
+- Imports rotos o referencias a módulos inexistentes
+- Variables o funciones usadas sin declarar
+- Sintaxis inválida obvia
+- Exports faltantes que otros archivos necesitan
+NO reportes advertencias de estilo ni errores menores.`,
+    'Eres un validador de código experto. Devuelve SOLO el JSON solicitado sin markdown ni explicaciones.'
+  )
+
+  const validation = JSON.parse(
+    validationRaw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim()
+  ) as { valid: boolean; errors: string[]; affectedFiles: string[] }
+
+  if (!validation.valid && validation.errors.length > 0) {
+    validationPassed = false
+    send('action', { text: `⚠️ ${validation.errors.length} error(es) detectado(s) — corrigiendo...` })
+
+    // Auto-corrección con contexto del error
+    const fixPrompt = `El código generado tiene estos errores críticos:
+${validation.errors.map((e, i) => `${i + 1}. ${e}`).join('\n')}
+
+Archivos afectados: ${validation.affectedFiles.join(', ')}
+
+Código original:
+${filesToValidate}
+
+Corrige ÚNICAMENTE los errores listados. Conserva toda la lógica existente.
+Responde con el mismo JSON de siempre:
+{
+  "files": [{"path": "...", "content": "..."}],
+  "commitMessage": "fix: corregir errores de validación",
+  "mainComponent": "..."
+}`
+
+    const fixedRaw = await generateWithFallback(fixPrompt, 
+      'Eres un agente de corrección de código. Devuelve SOLO el JSON solicitado.'
+    )
+
+    try {
+      const fixedParsed = JSON.parse(
+        fixedRaw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim()
+      ) as typeof parsed
+
+      // Merge — solo reemplaza los archivos corregidos
+      for (const fixedFile of fixedParsed.files) {
+        const idx = parsed.files.findIndex((f) => f.path === fixedFile.path)
+        if (idx >= 0) {
+          parsed.files[idx] = fixedFile
+        }
+      }
+      validationPassed = true
+      send('action', { text: '✅ Errores corregidos automáticamente' })
+    } catch {
+      send('action', { text: '⚠️ No se pudo auto-corregir — revisa el diff con cuidado' })
+      validationPassed = true // continúa de todas formas para mostrar el diff
+    }
+  } else {
+    send('action', { text: '✅ Código validado — sin errores críticos' })
+  }
+} catch {
+  // Si la validación falla, continúa sin bloquear
+  send('action', { text: '⚡ Validación omitida — continúa con revisión manual' })
+}
