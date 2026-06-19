@@ -54,9 +54,14 @@ interface Props {
   initialPrompt?: string;
 }
 
+const LS_REPO_KEY      = 'quark-agent-repo';
+const LS_DEEPMODE_KEY  = 'quark-agent-deepmode';
+
 export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPreview, initialPrompt }: Props) {
   const [prompt, setPrompt]               = useState('');
-  const [selectedRepo, setSelectedRepo]   = useState(activeProject.repo || 'quark-ide');
+  const [selectedRepo, setSelectedRepo]   = useState(
+    () => localStorage.getItem(LS_REPO_KEY) ?? activeProject.repo ?? 'quark-ide',
+  );
   const [running, setRunning]             = useState(false);
   const [feed, setFeed]                   = useState<FeedItem[]>([]);
   const [result, setResult]               = useState<AgentEvent | null>(null);
@@ -64,7 +69,10 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   const [commitResult, setCommitResult]   = useState<CommitResult | null>(null);
   const [isGeneratingHtml, setIsGeneratingHtml] = useState(false);
   const [fixResult, setFixResult]               = useState<FixResult | null>(null);
-  const [deepMode, setDeepMode]                 = useState(false);
+  const [deepMode, setDeepMode]                 = useState(
+    () => localStorage.getItem(LS_DEEPMODE_KEY) === 'true',
+  );
+  const [sessionLoading, setSessionLoading] = useState(true);
   const previewTriggeredRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const agentTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -73,6 +81,59 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   const isBackend = isBackendProject(activeProject.name);
   const isBackendRef = useRef(isBackend);
   isBackendRef.current = isBackend;
+
+  // ── Session persistence ────────────────────────────────────────────────────
+
+  // Persist repo + deepMode prefs immediately to localStorage
+  useEffect(() => { localStorage.setItem(LS_REPO_KEY, selectedRepo); }, [selectedRepo]);
+  useEffect(() => { localStorage.setItem(LS_DEEPMODE_KEY, String(deepMode)); }, [deepMode]);
+
+  // Load feed + result from DB on mount
+  useEffect(() => {
+    async function loadSession() {
+      try {
+        const res = await fetch(`${API_BASE}/agent/session`);
+        if (!res.ok) return;
+        const data = await res.json() as { session: { feed: FeedItem[]; result: AgentEvent | null; commitResult: CommitResult | null; fixResult: FixResult | null } | null };
+        if (data.session) {
+          if (data.session.feed?.length)        setFeed(data.session.feed);
+          if (data.session.result)              setResult(data.session.result);
+          if (data.session.commitResult)        setCommitResult(data.session.commitResult);
+          if (data.session.fixResult)           setFixResult(data.session.fixResult);
+        }
+      } catch {
+        // fail silently — agent works without session
+      } finally {
+        setSessionLoading(false);
+      }
+    }
+    loadSession();
+  }, []);
+
+  async function saveSession(
+    feedSnapshot: FeedItem[],
+    resultSnapshot: AgentEvent | null,
+    commitResultSnapshot: CommitResult | null,
+    fixResultSnapshot: FixResult | null,
+  ) {
+    try {
+      await fetch(`${API_BASE}/agent/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          feed:         feedSnapshot,
+          result:       resultSnapshot,
+          commitResult: commitResultSnapshot,
+          fixResult:    fixResultSnapshot,
+          savedAt:      new Date().toISOString(),
+        }),
+      });
+    } catch {
+      // fail silently
+    }
+  }
+
+  // ── Scroll + textarea auto-height ─────────────────────────────────────────
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -118,13 +179,19 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         error?: string;
       };
       if (data.error || !data.fixedContent) throw new Error(data.error ?? 'Sin respuesta de Claude');
-      setFixResult({
+      const newFixResult: FixResult = {
         filePath:        data.filePath!,
         fixedContent:    data.fixedContent,
         originalContent: data.originalContent ?? '',
         branch:          data.branch ?? activeProject.branch,
+      };
+      const doneMsg: FeedItem = { event: 'action', text: '✅ Corrección lista — revisa el diff antes de hacer commit' };
+      setFixResult(newFixResult);
+      setFeed((prev) => {
+        const next = [...prev, doneMsg];
+        saveSession(next, null, null, newFixResult);
+        return next;
       });
-      setFeed((prev) => [...prev, { event: 'action', text: '✅ Corrección lista — revisa el diff antes de hacer commit' }]);
     } catch (err) {
       setFeed((prev) => [...prev, { event: 'error', text: err instanceof Error ? err.message : String(err) }]);
     } finally {
@@ -148,13 +215,15 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
       });
       const data = await res.json() as { sha?: string; owner?: string; error?: string };
       if (!data.sha) throw new Error(data.error ?? 'Commit failed');
-      setCommitResult({
+      const newCommitResult: CommitResult = {
         sha:     data.sha,
         owner:   data.owner ?? '',
         repo:    selectedRepo,
         files:   [{ path: fixResult.filePath, content: fixResult.fixedContent }],
         message: `fix: ${fixResult.filePath}`,
-      });
+      };
+      setCommitResult(newCommitResult);
+      setFeed((prev) => { saveSession(prev, null, newCommitResult, null); return prev; });
       if (activeProject.railwayProjectId) {
         setTimeout(async () => {
           try {
@@ -225,19 +294,25 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
               // For backend projects: inject code blocks into the feed from done.files
               if (isBackendRef.current && parsed.files?.length) {
-                setFeed((prev) => [
-                  ...prev,
-                  // separator
-                  { event: 'action', text: `📂 ${parsed.files!.length} archivo(s) generados:` },
-                  // one code block per file
-                  ...parsed.files!.map((f) => ({
-                    event: 'code' as const,
-                    path: f.path,
-                    content: f.content,
-                  })),
-                ]);
+                setFeed((prev) => {
+                  const next = [
+                    ...prev,
+                    { event: 'action' as const, text: `📂 ${parsed.files!.length} archivo(s) generados:` },
+                    ...parsed.files!.map((f) => ({
+                      event: 'code' as const,
+                      path: f.path,
+                      content: f.content,
+                    })),
+                  ];
+                  saveSession(next, parsed, null, null);
+                  return next;
+                });
               } else {
-                setFeed((prev) => [...prev, { event: parsed.event }]);
+                setFeed((prev) => {
+                  const next = [...prev, { event: parsed.event as FeedItem['event'] }];
+                  saveSession(next, parsed, null, null);
+                  return next;
+                });
               }
 
               if (!isBackendRef.current && parsed.mainContent) {
@@ -321,13 +396,15 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
       });
       const data = await res.json() as { sha?: string; owner?: string; error?: string };
       if (!data.sha) throw new Error(data.error ?? 'Commit failed');
-      setCommitResult({
+      const finalCommit: CommitResult = {
         sha:     data.sha,
         owner:   data.owner ?? '',
         repo:    result.repo ?? selectedRepo,
         files:   result.files ?? [],
         message: result.commitMessage ?? '',
-      });
+      };
+      setCommitResult(finalCommit);
+      setFeed((prev) => { saveSession(prev, result, finalCommit, null); return prev; });
       if (activeProject.railwayProjectId) {
         setTimeout(async () => {
           try {
@@ -382,7 +459,12 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         flex: 1, minHeight: 0, overflowY: 'auto', padding: '10px 12px',
         display: 'flex', flexDirection: 'column', gap: 6,
       }}>
-        {feed.length === 0 && !running && !result && (
+        {sessionLoading && (
+          <p style={{ color: '#3a3a5c', fontSize: 11, margin: 0, fontFamily: 'JetBrains Mono, monospace' }}>
+            ⚛ Cargando sesión...
+          </p>
+        )}
+        {!sessionLoading && feed.length === 0 && !running && !result && (
           <p style={{ color: '#3a3a5c', fontSize: 12, margin: 0, lineHeight: 1.6 }}>
             Describe lo que quieres construir en{' '}
             <span style={{ color: '#00ff88' }}>{activeProject.name}</span>.

@@ -2,6 +2,33 @@ import { Router } from 'express';
 import { getFileTree, getFileContent } from '../services/github.js';
 import { callAI } from '../lib/aiRouter.js';
 import { generateContent } from '../services/gemini.js';
+import pool from '../services/db.js';
+
+// ── Agent session persistence (reuses memory_entries table) ───────────────────
+
+const AGENT_SESSION_KEY = 'agent-session';
+const AGENT_SESSION_NS  = 'quark-agent';
+
+async function loadAgentSession(): Promise<string | null> {
+  try {
+    const r = await pool.query<{ content: string }>(
+      `SELECT content FROM memory_entries WHERE key = $1 AND namespace = $2 LIMIT 1`,
+      [AGENT_SESSION_KEY, AGENT_SESSION_NS],
+    );
+    return r.rows[0]?.content ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function saveAgentSession(content: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO memory_entries (key, content, namespace)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
+    [AGENT_SESSION_KEY, content, AGENT_SESSION_NS],
+  );
+}
 
 // ── Agent provider fallback chain ─────────────────────────────────────────────
 
@@ -817,6 +844,30 @@ router.get('/repo-context', async (req, res) => {
     res.json({ repo, tree: allPaths, keyFiles });
   } catch {
     res.json({ repo, tree: [], keyFiles: [] });
+  }
+});
+
+// GET /agent/session — load last persisted agent session
+router.get('/session', async (_req, res) => {
+  try {
+    const content = await loadAgentSession();
+    if (!content) { res.json({ session: null }); return; }
+    res.json({ session: JSON.parse(content) });
+  } catch {
+    res.json({ session: null });
+  }
+});
+
+// POST /agent/session — persist current agent session
+router.post('/session', async (req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>;
+    if (!body) { res.status(400).json({ error: 'No body' }); return; }
+    await saveAgentSession(JSON.stringify(body));
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[agent/session] save error:', err);
+    res.status(500).json({ error: 'Failed to save session' });
   }
 });
 
