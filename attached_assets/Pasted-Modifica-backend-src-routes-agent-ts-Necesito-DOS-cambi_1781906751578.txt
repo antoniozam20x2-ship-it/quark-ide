@@ -1,0 +1,130 @@
+Modifica backend/src/routes/agent.ts
+
+Necesito DOS cambios quirúrgicos:
+
+─────────────────────────────────────
+CAMBIO 1 — Agregar función extractFunctionBlock
+antes de la función identifyFilesToRead (línea 152)
+─────────────────────────────────────
+
+Inserta esta función nueva justo antes de 
+"async function identifyFilesToRead":
+
+function extractFunctionBlock(
+  content: string,
+  functionName: string
+): { block: string; startLine: number; endLine: number } | null {
+  const lines = content.split('\n')
+  const patterns = [
+    new RegExp(`^(export\\s+)?(async\\s+)?function\\s+${functionName}\\s*[\\(<]`),
+    new RegExp(`^(export\\s+)?const\\s+${functionName}\\s*=\\s*(async\\s+)?`),
+    new RegExp(`^\\s+(async\\s+)?${functionName}\\s*[\\(<]`),
+  ]
+  let startLine = -1
+  for (let i = 0; i < lines.length; i++) {
+    if (patterns.some(p => p.test(lines[i]))) {
+      startLine = i
+      break
+    }
+  }
+  if (startLine === -1) return null
+
+  let depth = 0
+  let endLine = startLine
+  for (let i = startLine; i < lines.length; i++) {
+    depth += (lines[i].match(/\{/g) ?? []).length
+    depth -= (lines[i].match(/\}/g) ?? []).length
+    if (depth <= 0 && i > startLine) {
+      endLine = i
+      break
+    }
+  }
+  return {
+    block: lines.slice(startLine, endLine + 1).join('\n'),
+    startLine,
+    endLine,
+  }
+}
+
+function extractFunctionNameFromPrompt(prompt: string): string | null {
+  const patterns = [
+    /\b(?:función|function|func|fn|método|method)\s+([a-zA-Z_][a-zA-Z0-9_]*)/i,
+    /\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/,
+    /\b(place[A-Z][a-zA-Z]+|check[A-Z][a-zA-Z]+|fetch[A-Z][a-zA-Z]+|handle[A-Z][a-zA-Z]+|get[A-Z][a-zA-Z]+|set[A-Z][a-zA-Z]+|update[A-Z][a-zA-Z]+|calc[A-Z][a-zA-Z]+|run[A-Z][a-zA-Z]+|execute[A-Z][a-zA-Z]+)\b/,
+  ]
+  for (const p of patterns) {
+    const m = prompt.match(p)
+    if (m?.[1]) return m[1]
+  }
+  return null
+}
+
+─────────────────────────────────────
+CAMBIO 2 — Reemplazar el for...of secuencial 
+del READ PATH por Promise.all + block extractor
+─────────────────────────────────────
+
+Busca esta cadena exacta:
+
+"const readFiles: { path: string; content: string }[] = [];
+
+for (const filePath of pathsToRead) {
+  try {
+    send('file', { path: filePath });
+    const content = await getFileContent(filePath, repo);
+    readFiles.push({ path: filePath, content });
+    console.log(`[Agent/Read] ✅ ${filePath} (${content.length} chars)`);
+  } catch (e: any) {
+    console.warn(`[Agent/Read] ⚠️ Could not read ${filePath}:`, e.message);
+    send('action', { text: `⚠️ No se pudo leer: ${filePath}` });
+  }
+}"
+
+Reemplázala por:
+
+"const functionName = extractFunctionNameFromPrompt(prompt)
+if (functionName) {
+  send('action', { text: `🎯 Función detectada: ${functionName} — búsqueda quirúrgica` })
+}
+
+const readResults = await Promise.all(
+  pathsToRead.map(async (filePath) => {
+    try {
+      send('file', { path: filePath })
+      const content = await getFileContent(filePath, repo)
+      console.log(`[Agent/Read] ✅ ${filePath} (${content.length} chars)`)
+
+      // Si hay función detectada, extraer solo ese bloque
+      if (functionName) {
+        const extracted = extractFunctionBlock(content, functionName)
+        if (extracted) {
+          send('action', { text: `✂️ Extrayendo ${functionName} (líneas ${extracted.startLine + 1}-${extracted.endLine + 1})` })
+          return {
+            path: filePath,
+            content: extracted.block,
+            fullContent: content,
+            startLine: extracted.startLine,
+            endLine: extracted.endLine,
+          }
+        }
+      }
+      return { path: filePath, content, fullContent: content }
+    } catch (e: any) {
+      console.warn(`[Agent/Read] ⚠️ Could not read ${filePath}:`, e.message)
+      send('action', { text: `⚠️ No se pudo leer: ${filePath}` })
+      return null
+    }
+  })
+)
+
+const readFiles = readResults.filter((r): r is NonNullable<typeof r> => r !== null)"
+
+─────────────────────────────────────
+CONDICIONES:
+1. Toca SOLO esos dos bloques
+2. No toques el GENERATION PATH ni el FAST PATH
+3. Al terminar muéstrame:
+   - Las líneas de extractFunctionBlock completa
+   - Las líneas del nuevo Promise.all del READ PATH
+   para verificar el diff
+─────────────────────────────────────
