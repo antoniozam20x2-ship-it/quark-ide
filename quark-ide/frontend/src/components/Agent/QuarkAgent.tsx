@@ -14,7 +14,7 @@ interface AgentEvent {
   event: 'action' | 'file' | 'done' | 'error';
   text?: string;
   path?: string;
-  files?: { path: string; content: string }[];
+  files?: { path: string; content: string; originalContent?: string }[];
   commitMessage?: string;
   mainComponent?: string;
   mainContent?: string;
@@ -691,17 +691,22 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               result.files?.length ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
 
-                  {/* Diff por archivo */}
+                  {/* Diff por archivo — 2 columnas side-by-side */}
                   {result.files.map((file, idx) => {
-                    const newLines = file.content.split('\n')
+                    const origLines = (file.originalContent ?? '').split('\n');
+                    const newLines  = file.content.split('\n');
+                    const isNew     = !file.originalContent;
+                    const added     = newLines.filter((l) => !origLines.includes(l)).length;
+                    const removed   = isNew ? 0 : origLines.filter((l) => !newLines.includes(l)).length;
                     return (
                       <div key={idx} style={{
-                        background: '#0a0a16',
                         border: '1px solid #1e1e3f',
                         borderLeft: '2px solid #7c3aed',
                         borderRadius: 6,
                         overflow: 'hidden',
+                        background: '#0a0a16',
                       }}>
+                        {/* header */}
                         <div style={{
                           padding: '5px 10px',
                           borderBottom: '1px solid #1e1e3f',
@@ -710,34 +715,85 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                           <span style={{ color: '#7c3aed', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
                             📄 {file.path}
                           </span>
-                          <span style={{ color: '#22c55e', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
-                            +{newLines.length} líneas
+                          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, display: 'flex', gap: 8 }}>
+                            {!isNew && <span style={{ color: '#f87171' }}>−{removed}</span>}
+                            <span style={{ color: '#86efac' }}>+{added}</span>
+                            {isNew && <span style={{ color: '#a78bfa' }}>nuevo archivo</span>}
                           </span>
                         </div>
-                        <div style={{
-                          padding: '8px 12px',
-                          fontFamily: 'JetBrains Mono, monospace',
-                          fontSize: 10, color: '#a0a0c0',
-                          whiteSpace: 'pre-wrap', overflowX: 'auto',
-                          maxHeight: 200, overflowY: 'auto',
-                          lineHeight: 1.6,
-                        }}>
-                          {newLines.slice(0, 40).map((line, i) => (
-                            <div key={i} style={{ background: 'rgba(34,197,94,0.06)', color: '#86efac' }}>
-                              <span style={{ color: '#3a3a5c', userSelect: 'none' }}>
-                                {String(i + 1).padStart(3, ' ')} │{' '}
-                              </span>
-                              {line || ' '}
+                        {/* columns */}
+                        <div style={{ display: 'flex', gap: 0 }}>
+                          {/* LEFT — original */}
+                          <div style={{ flex: 1, minWidth: 0, borderRight: '1px solid #1a1a2e' }}>
+                            <div style={{
+                              padding: '2px 8px',
+                              color: '#3a3a5c', fontSize: 9,
+                              fontFamily: 'JetBrains Mono, monospace',
+                              borderBottom: '1px solid #1a1a2e',
+                              background: '#080810',
+                            }}>
+                              {isNew ? 'vacío' : 'ANTES'}
                             </div>
-                          ))}
-                          {newLines.length > 40 && (
-                            <div style={{ color: '#3a3a5c', padding: '4px 0' }}>
-                              // ... {newLines.length - 40} líneas más
+                            <div style={{
+                              fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                              lineHeight: 1.55, padding: '6px 8px',
+                              whiteSpace: 'pre-wrap', overflowX: 'auto',
+                            }}>
+                              {isNew ? (
+                                <div style={{ color: '#2a2a4a', fontStyle: 'italic' }}>(archivo nuevo)</div>
+                              ) : origLines.map((line, i) => {
+                                const removed = !newLines.includes(line);
+                                return (
+                                  <div key={i} style={{
+                                    background: removed ? 'rgba(239,68,68,0.10)' : 'transparent',
+                                    color:      removed ? '#fca5a5' : '#3a3a5c',
+                                    paddingLeft: 2,
+                                  }}>
+                                    <span style={{ color: '#2a2a4a', userSelect: 'none', marginRight: 6 }}>
+                                      {String(i + 1).padStart(3, ' ')}
+                                    </span>
+                                    {line || ' '}
+                                  </div>
+                                );
+                              })}
                             </div>
-                          )}
+                          </div>
+                          {/* RIGHT — new */}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{
+                              padding: '2px 8px',
+                              color: '#3a3a5c', fontSize: 9,
+                              fontFamily: 'JetBrains Mono, monospace',
+                              borderBottom: '1px solid #1a1a2e',
+                              background: '#080810',
+                            }}>
+                              DESPUÉS
+                            </div>
+                            <div style={{
+                              fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                              lineHeight: 1.55, padding: '6px 8px',
+                              whiteSpace: 'pre-wrap', overflowX: 'auto',
+                            }}>
+                              {newLines.map((line, i) => {
+                                const added = !origLines.includes(line);
+                                return (
+                                  <div key={i} style={{
+                                    background: added ? 'rgba(34,197,94,0.08)' : 'transparent',
+                                    color:      added ? '#86efac' : '#3a3a5c',
+                                    paddingLeft: 2,
+                                  }}>
+                                    <span style={{ color: '#2a2a4a', userSelect: 'none', marginRight: 6 }}>
+                                      {String(i + 1).padStart(3, ' ')}
+                                    </span>
+                                    {line || ' '}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    )
+                    );
                   })}
 
                   {/* Stat bar */}

@@ -610,11 +610,16 @@ Responde con el mismo JSON de siempre:
     }
     // ─────────────────────────────────────────────────────────────────────────
 
+    const filesWithOriginal = parsed.files.map((f: { path: string; content: string }) => ({
+      ...f,
+      originalContent: preloadedFiles.find((p) => p.path === f.path)?.content ?? '',
+    }));
+
     send('done', {
-      files: parsed.files,
+      files: filesWithOriginal,
       commitMessage: parsed.commitMessage ?? commitMessage,
       mainComponent: mainFile?.path,
-      mainContent: parsed.files.find((f: { path: string }) => f.path === mainFile?.path)?.content ?? mainFile?.content ?? '',
+      mainContent: filesWithOriginal.find((f: { path: string }) => f.path === mainFile?.path)?.content ?? mainFile?.content ?? '',
       repo,
       branch,
     });
