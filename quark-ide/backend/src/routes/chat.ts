@@ -234,7 +234,13 @@ async function fetchRepoContext(repoName: string): Promise<string> {
   const shared = await loadSharedAgentContext(repoName)
   if (shared && shared.preloadedFiles.length > 0) {
     const filesStr = shared.preloadedFiles
-      .map((f) => `--- ${f.path} ---\n${f.content}`)
+      .map((f) => {
+        const lines = f.content.split('\n')
+        const truncated = lines.length > 300
+          ? lines.slice(0, 300).join('\n') + `\n// ... (${lines.length - 300} líneas más)`
+          : f.content
+        return `--- ${f.path} ---\n${truncated}`
+      })
       .join('\n\n')
     return `
 === CONTEXTO DE APP: ${repoName} (reutilizado de QUARK Agent) ===
