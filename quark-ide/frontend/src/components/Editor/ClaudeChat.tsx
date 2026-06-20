@@ -337,7 +337,14 @@ export default function ClaudeChat({
           if (data === '[DONE]') break;
           try {
             const parsed = JSON.parse(data);
-            if (parsed.text) {
+            if (parsed.error) {
+              assistantContent = `⚠ ${parsed.error}`;
+              setMessages((prev) => {
+                const updated = [...prev];
+                updated[updated.length - 1] = { ...assistantMsg, content: assistantContent };
+                return updated;
+              });
+            } else if (parsed.text) {
               assistantContent += parsed.text;
               setMessages((prev) => {
                 const updated = [...prev];

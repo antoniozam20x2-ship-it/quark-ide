@@ -300,6 +300,48 @@ function buildProviderChain(
   ];
 }
 
+// ── Claude Extended Thinking ──────────────────────────────────────────────────
+
+async function callClaudeWithThinking(
+  prompt: string,
+  systemPrompt: string,
+  budgetTokens: number,
+): Promise<string> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
+
+  const res = await fetchWithTimeout('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-beta': 'interleaved-thinking-2025-05-14',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 16000,
+      thinking: {
+        type: 'enabled',
+        budget_tokens: budgetTokens,
+      },
+      system: systemPrompt,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  }, PROVIDER_TIMEOUT_MS);
+
+  if (!res.ok) throw new Error(`Claude error: ${res.status} ${res.statusText}`);
+  const data = await res.json() as { content?: Array<{ type: string; text?: string }> };
+  return (data.content ?? [])
+    .filter((block) => block.type === 'text')
+    .map((block) => block.text ?? '')
+    .join('\n');
+}
+
+const THINKING_BUDGETS: Record<string, number> = {
+  CEO: 3000, CTO: 4000, Designer: 1500, QA: 2000, DEBUGGER: 2000,
+};
+
 // ── Board member dispatch ─────────────────────────────────────────────────────
 
 const DESIGNER_TRADING_ROLE = `Eres el especialista en visualización de datos y experiencia de monitoreo del War Room.
@@ -329,6 +371,15 @@ async function callBoardMember(
   const contextForMember = needsCode ? repoContext : undefined;
 
   const systemPrompt = `${roleDesc}\n\n${buildContext(appName, contextForMember, signalReport, sniperReport)}`;
+
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      return await callClaudeWithThinking(challenge, systemPrompt, THINKING_BUDGETS[member] ?? 2000);
+    } catch (err) {
+      console.warn(`[warroom] Claude thinking failed for ${member}: ${(err as Error).message} — falling back`);
+    }
+  }
+
   return withFallbackChain(
     buildProviderChain(challenge, systemPrompt, 1024, `/api/warroom/board/${member}`)
   );
@@ -354,6 +405,15 @@ QA: ${responses.QA}
 Synthesize all four perspectives into 3-5 clear, actionable consensus items. Be decisive and specific. Reference the actual content from each board member's input. Jefferson needs a clear action plan.`;
 
   const systemPrompt = `${BOARD_ROLES.CEO}\n\n${BASE_CONTEXT}`;
+
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      return await callClaudeWithThinking(synthesis, systemPrompt, 3000);
+    } catch (err) {
+      console.warn(`[warroom] Claude thinking failed for consensus: ${(err as Error).message} — falling back`);
+    }
+  }
+
   return withFallbackChain(
     buildProviderChain(synthesis, systemPrompt, 1024, '/api/warroom/consensus')
   );
