@@ -381,6 +381,11 @@ export default function ClaudeChat({
     }
   }
 
+  function extractBrief(content: string): string {
+    const match = content.match(/BRIEF_START\s*([\s\S]*?)\s*BRIEF_END/);
+    return match ? match[1].trim() : content;
+  }
+
   const isFullscreen = layout === 'fullscreen';
 
   const containerStyle: React.CSSProperties = isFullscreen
@@ -577,7 +582,7 @@ export default function ClaudeChat({
               {isLastAssistant && onSendToBoard && msg.content && (
                 <button
                   onClick={() => onSendToBoard({
-                    challenge: msg.content,
+                    challenge: extractBrief(msg.content),
                     appName: loadedContext ?? undefined,
                     repoContext: contextDataRef.current ?? undefined,
                   })}
@@ -603,7 +608,7 @@ export default function ClaudeChat({
               )}
               {isLastAssistant && onSendToStudio && msg.content && (
                 <button
-                  onClick={() => onSendToStudio(msg.content)}
+                  onClick={() => onSendToStudio(extractBrief(msg.content))}
                   style={{
                     marginTop: 8,
                     padding: '6px 14px',
@@ -627,7 +632,7 @@ export default function ClaudeChat({
               )}
               {isLastAssistant && onSendToAgent && msg.content && (
                 <button
-                  onClick={() => onSendToAgent(msg.content)}
+                  onClick={() => onSendToAgent(extractBrief(msg.content))}
                   style={{
                     marginTop: 8,
                     padding: '6px 14px',
