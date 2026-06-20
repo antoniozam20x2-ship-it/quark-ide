@@ -346,7 +346,8 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     const results        = await searchMemory(lastUserMessage, 'quark-ide');
     const projectResults = await searchMemory(lastUserMessage, 'jefferson-projects');
-    const allResults     = [...results, ...projectResults].slice(0, 4);
+    const warRoomResults = await searchMemory(lastUserMessage, 'war-room');
+    const allResults     = [...results, ...projectResults, ...warRoomResults].slice(0, 5);
     if (allResults.length > 0) {
       memoryContext = '\n\nRELEVANT CONTEXT FROM MEMORY:\n' + allResults.join('\n\n');
     }

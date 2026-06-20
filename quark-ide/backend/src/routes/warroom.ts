@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { generateContent, GeminiAuthError } from '../services/gemini.js';
+import { saveToMemory } from '../services/rufloMemory.js';
 
 // ── Provider constants ────────────────────────────────────────────────────────
 
@@ -446,6 +447,16 @@ router.post('/swarm', async (req: Request, res: Response) => {
     ]);
 
     const consensus = await generateConsensus(challenge, { CEO: ceo, CTO: cto, Designer: designer, QA: qa });
+
+    // Guardar consensus en memoria persistente
+    try {
+      const memoryKey = `warroom-${(resolvedApp ?? 'general').toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
+      await saveToMemory(
+        memoryKey,
+        `[War Room - ${resolvedApp ?? 'General'} - ${new Date().toISOString()}]\n${consensus}`,
+        'war-room'
+      );
+    } catch { /* no bloquear la respuesta si falla */ }
 
     res.json({
       ceo,
