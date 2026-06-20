@@ -1,0 +1,66 @@
+# Contexto para Replit — Gap #1: Edición directa sin JSON
+
+## Quién soy y qué estoy construyendo
+
+Estoy desarrollando **QUARK IDE**, un IDE personal deployado en Railway con backend Node.js/TypeScript y frontend React. El módulo clave para esta pregunta es el **Quark Agent** (`backend/src/routes/agent.ts`).
+
+## Cómo funciona el Agent hoy
+
+El Agent tiene dos modos que comparten memoria:
+
+- **Fast Mode (Groq)**: Lee el archivo de GitHub, detecta el problema, identifica las líneas exactas a corregir.
+- **Deep Mode (Claude)**: Recibe el contexto de Fast Mode y genera el fix.
+
+El problema está en **cómo Deep Mode devuelve el fix**: actualmente le pedimos al modelo que devuelva el archivo **completo corregido** dentro de un JSON string así:
+
+```json
+{
+  "files": [
+    {
+      "path": "backend/src/routes/chat.ts",
+      "content": "...archivo completo con 300+ líneas escapadas..."
+    }
+  ],
+  "commitMessage": "fix: descripción"
+}
+```
+
+Esto es frágil. Si el archivo tiene 300–500 líneas, el modelo tiene que escapar correctamente cada `"`, `\n` y backtick dentro del string. Cuando falla, el JSON se rompe y entramos al `repairJSON` de emergencia (otra llamada al AI). Lo vemos como: `"el agente no pudo generar JSON válido"`.
+
+## La mejora que quiero implementar
+
+En vez de devolver el archivo completo, que Deep Mode devuelva **solo las operaciones de patch**:
+
+```json
+{
+  "operations": [
+    {
+      "type": "str_replace",
+      "path": "backend/src/routes/chat.ts",
+      "old_str": "const GROQ_MODEL = 'llama-3.3-70b-versatile';",
+      "new_str": "const GROQ_MODEL = 'llama-3.1-70b-versatile';"
+    }
+  ],
+  "commitMessage": "fix: update groq model"
+}
+```
+
+El backend aplica el `str_replace` sobre el contenido real del archivo (que ya tiene de GitHub), y hace el commit con el resultado.
+
+## Mis preguntas para ti
+
+Necesito que me respondas estas preguntas antes de implementar:
+
+1. **¿Dónde vive el prompt que le manda a Claude en Deep Mode?**
+- ¿Está en `agent.ts` directamente, o en un archivo separado como `lib/prompts.ts` o `lib/aiRouter.ts`?
+1. **¿Cómo se aplica el fix hoy después de que el modelo devuelve el JSON?**
+- ¿Hay una función que toma `files[].content` y lo sube a GitHub con la GitHub API?
+- ¿Qué endpoint de GitHub usa — `PUT /repos/{owner}/{repo}/contents/{path}` con el SHA del archivo?
+1. **¿Fast Mode le pasa a Deep Mode el contenido real del archivo o solo las líneas detectadas?**
+- Necesito saber qué contexto exacto tiene Claude cuando genera el fix, para que `old_str` sea texto que realmente existe en el archivo.
+1. **¿El Agent ya tiene acceso al SHA del archivo para hacer el commit?**
+- El `str_replace` sobre el contenido en memoria es fácil, pero para hacer `PUT` a GitHub necesito el SHA del blob actual.
+1. **¿Qué pasa si `old_str` no encuentra match en el archivo?**
+- ¿Quieres que falle silenciosamente, que notifique al usuario, o que haga fallback al método actual (archivo completo)?
+
+Con estas respuestas puedo diseñar el cambio exacto sin introducir regresiones en el flujo actual.
