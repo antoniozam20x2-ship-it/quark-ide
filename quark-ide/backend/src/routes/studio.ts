@@ -387,6 +387,26 @@ router.get('/projects', async (_req, res) => {
   }
 })
 
+router.get('/projects/search', async (req, res) => {
+  const query = (req.query.name as string | undefined)?.trim()
+  if (!query) {
+    res.status(400).json({ error: 'name query param required' })
+    return
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, name, folder, created_at 
+       FROM studio_projects 
+       WHERE name ILIKE $1 
+       ORDER BY created_at DESC`,
+      [`%${query}%`]
+    )
+    res.json({ projects: rows })
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+  }
+})
+
 router.post('/projects', async (req, res) => {
   try {
     const { name, folder, html } = req.body as { name: string; folder: string; html: string }
