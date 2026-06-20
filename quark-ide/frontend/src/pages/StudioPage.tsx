@@ -14,6 +14,8 @@ interface StudioProject {
 
 interface Props {
   initialBrief?: string
+  initialHtml?: string
+  initialProjectId?: number
   onBriefConsumed?: () => void
   onSendToAgent?: (prompt: string) => void
 }
@@ -50,7 +52,7 @@ function saveState(brief: string, agents: AgentResult[], designPrototype: string
   } catch {}
 }
 
-export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
+export default function StudioPage({ initialBrief, initialHtml, initialProjectId, onBriefConsumed, onSendToAgent }: Props) {
   const saved = loadState()
 
   const [brief, setBrief] = useState(saved?.brief ?? '')
@@ -100,10 +102,19 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
     if (initialBrief) {
       setBrief(initialBrief)
       onBriefConsumed?.()
-      runStudio(initialBrief)
+      runStudio(initialBrief, undefined, initialHtml)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialBrief])
+
+  useEffect(() => {
+    if (initialHtml) {
+      setImportHtml(initialHtml)
+      setImportPreview(initialHtml)
+      setShowImport(true)
+      if (initialProjectId) setActiveProjectId(initialProjectId)
+    }
+  }, [initialHtml])
 
   async function loadProjects() {
     try {
@@ -224,7 +235,7 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
     })
   }
 
-  async function runStudio(text?: string, overrideFastMode?: boolean) {
+  async function runStudio(text?: string, overrideFastMode?: boolean, baseHtml?: string) {
     const input = (text ?? brief).trim()
     if (!input || running) return
     const isFast = overrideFastMode ?? fastMode
@@ -239,46 +250,55 @@ export default function StudioPage({ initialBrief, onBriefConsumed }: Props) {
     let architectResult = ''
     let finalHtml = ''
 
-    // ── Step 1: Architect (skipped in Fast Mode) ───────────────────────────────
-    if (!isFast) {
-      updateAgent('architect', { status: 'thinking' })
+    if (baseHtml) {
+      // ── Improvement mode: skip Architect + Designer ────────────────────────
+      finalHtml = baseHtml
+      setDesignPrototype(finalHtml)
+      updateAgent('architect', { status: 'done', content: '(skipped — improving existing design)' })
+      updateAgent('designer',  { status: 'done', content: '(skipped — using existing HTML as base)' })
+      saveState(input, freshAgents, finalHtml)
+    } else {
+      // ── Step 1: Architect (skipped in Fast Mode) ───────────────────────────
+      if (!isFast) {
+        updateAgent('architect', { status: 'thinking' })
+        try {
+          const res = await fetch(`${API_BASE}/api/studio/analyze`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ brief: input, role: 'architect' }),
+          })
+          const data = await res.json()
+          architectResult = data.result ?? ''
+          setAgents(prev => {
+            const next = prev.map(a => a.role === 'architect' ? { ...a, content: architectResult, status: 'done' as const } : a)
+            saveState(input, next, '')
+            return next
+          })
+          setExpandedCards(prev => ({ ...prev, architect: true }))
+        } catch {
+          updateAgent('architect', { status: 'error', content: 'Error al analizar' })
+        }
+      }
+
+      // ── Step 2: Designer ─────────────────────────────────────────────────────
+      updateAgent('designer', { status: 'thinking' })
       try {
         const res = await fetch(`${API_BASE}/api/studio/analyze`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ brief: input, role: 'architect' }),
+          body: JSON.stringify({ brief: input, role: 'designer', architectResult, fastMode: isFast }),
         })
         const data = await res.json()
-        architectResult = data.result ?? ''
+        finalHtml = data.result ?? ''
+        setDesignPrototype(finalHtml)
         setAgents(prev => {
-          const next = prev.map(a => a.role === 'architect' ? { ...a, content: architectResult, status: 'done' as const } : a)
-          saveState(input, next, '')
+          const next = prev.map(a => a.role === 'designer' ? { ...a, content: finalHtml, status: 'done' as const } : a)
+          saveState(input, next, finalHtml)
           return next
         })
-        setExpandedCards(prev => ({ ...prev, architect: true }))
       } catch {
-        updateAgent('architect', { status: 'error', content: 'Error al analizar' })
+        updateAgent('designer', { status: 'error', content: 'Error al generar prototipo' })
       }
-    }
-
-    // ── Step 2: Designer ───────────────────────────────────────────────────────
-    updateAgent('designer', { status: 'thinking' })
-    try {
-      const res = await fetch(`${API_BASE}/api/studio/analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brief: input, role: 'designer', architectResult, fastMode: isFast }),
-      })
-      const data = await res.json()
-      finalHtml = data.result ?? ''
-      setDesignPrototype(finalHtml)
-      setAgents(prev => {
-        const next = prev.map(a => a.role === 'designer' ? { ...a, content: finalHtml, status: 'done' as const } : a)
-        saveState(input, next, finalHtml)
-        return next
-      })
-    } catch {
-      updateAgent('designer', { status: 'error', content: 'Error al generar prototipo' })
     }
 
     // ── Step 3: Critic (skipped in Fast Mode) ─────────────────────────────────

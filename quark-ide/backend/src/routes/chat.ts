@@ -398,7 +398,20 @@ ${filesStr}
 Usa este contexto para dar respuestas precisas y específicas al código real. Cuando sugieras cambios, referencia los archivos exactos.`;
   }
 
-  const systemPrompt = `${JEFFERSON_CONTEXT}${projectContext}${enrichedContext}${repoContext}${memoryContext}`;
+  let studioProjectsContext = '';
+  const improveKeywords = /\b(mejora|mejorar|editar|edita|actualiza|actualizar|cambia|cambiar|arregla|arreglar|modifica|modificar)\b/i;
+  if (improveKeywords.test(lastUserMessage)) {
+    try {
+      const { rows } = await pool.query<{ id: number; name: string; folder: string }>(
+        'SELECT id, name, folder FROM studio_projects ORDER BY created_at DESC',
+      );
+      if (rows.length > 0) {
+        studioProjectsContext = `\n\nPROYECTOS GUARDADOS EN STUDIO:\n${rows.map((p) => `- ID:${p.id} "${p.name}" (carpeta: ${p.folder})`).join('\n')}\nSi el usuario quiere mejorar uno de estos proyectos, menciona que lo encontraste y pregunta si es ese. Cuando confirme, incluye PROJECT_ID:{el_id} en el BRIEF_START para que Studio lo cargue automáticamente.`;
+      }
+    } catch { /* no bloquear el chat si falla */ }
+  }
+
+  const systemPrompt = `${JEFFERSON_CONTEXT}${projectContext}${enrichedContext}${repoContext}${memoryContext}${studioProjectsContext}`;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');

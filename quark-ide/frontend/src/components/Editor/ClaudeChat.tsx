@@ -40,6 +40,7 @@ interface Props {
   onApplyToEditor: (code: string) => void;
   onSendToBoard?: (brief: import('../../App').BoardBrief) => void;
   onSendToStudio?: (brief: string) => void;
+  onSendToStudioWithProject?: (brief: string, projectId: number) => void;
   onSendToAgent?: (prompt: string) => void;
   layout?: 'panel' | 'fullscreen';
   activeProject?: Project;
@@ -383,7 +384,13 @@ export default function ClaudeChat({
 
   function extractBrief(content: string): string {
     const match = content.match(/BRIEF_START\s*([\s\S]*?)\s*BRIEF_END/);
-    return match ? match[1].trim() : content;
+    const raw = match ? match[1].trim() : content;
+    return raw.replace(/PROJECT_ID:\d+\s*\n?/g, '').trim();
+  }
+
+  function extractProjectId(content: string): number | undefined {
+    const match = content.match(/PROJECT_ID:(\d+)/);
+    return match ? parseInt(match[1], 10) : undefined;
   }
 
   const isFullscreen = layout === 'fullscreen';
@@ -608,7 +615,14 @@ export default function ClaudeChat({
               )}
               {isLastAssistant && onSendToStudio && msg.content && (
                 <button
-                  onClick={() => onSendToStudio(extractBrief(msg.content))}
+                  onClick={() => {
+                    const pid = extractProjectId(msg.content);
+                    if (pid && onSendToStudioWithProject) {
+                      onSendToStudioWithProject(extractBrief(msg.content), pid);
+                    } else {
+                      onSendToStudio(extractBrief(msg.content));
+                    }
+                  }}
                   style={{
                     marginTop: 8,
                     padding: '6px 14px',

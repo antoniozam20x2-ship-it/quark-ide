@@ -38,6 +38,23 @@ export default function App() {
   const [agentPreviewPending, setAgentPreviewPending] = useState(false);
   const [pipelinePrompt, setPipelinePrompt] = useState<string>('');
   const [studioBrief, setStudioBrief] = useState<string>('');
+  const [studioInitialHtml, setStudioInitialHtml] = useState<string | undefined>();
+  const [studioInitialProjectId, setStudioInitialProjectId] = useState<number | undefined>();
+
+  const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
+
+  async function handleSendToStudioWithProject(brief: string, projectId: number) {
+    try {
+      const res = await fetch(`${API_BASE}/api/studio/projects/${projectId}/html`);
+      const data = await res.json() as { html?: string };
+      if (data.html) {
+        setStudioInitialHtml(data.html);
+        setStudioInitialProjectId(projectId);
+      }
+    } catch { /* si falla, Studio arranca sin HTML base */ }
+    setStudioBrief(brief);
+    setPage('studio');
+  }
 
   return (
     <div
@@ -63,6 +80,7 @@ export default function App() {
             onProjectChange={setActiveProject}
             onSendToBoard={(brief) => { setBoardBrief(brief); setPage('warroom'); }}
             onSendToStudio={(brief) => { setStudioBrief(brief); setPage('studio'); }}
+            onSendToStudioWithProject={handleSendToStudioWithProject}
             onSendToAgent={(prompt) => { setPipelinePrompt(prompt); setPage('agent'); }}
             autoShowPreview={agentPreviewPending}
             onPreviewShown={() => setAgentPreviewPending(false)}
@@ -94,7 +112,13 @@ export default function App() {
         {page === 'studio' && (
           <StudioPage
             initialBrief={studioBrief}
-            onBriefConsumed={() => setStudioBrief('')}
+            initialHtml={studioInitialHtml}
+            initialProjectId={studioInitialProjectId}
+            onBriefConsumed={() => {
+              setStudioBrief('');
+              setStudioInitialHtml(undefined);
+              setStudioInitialProjectId(undefined);
+            }}
             onSendToAgent={(prompt) => {
               setPipelinePrompt(prompt);
               setPage('editor');
