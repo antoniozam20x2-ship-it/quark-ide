@@ -25,8 +25,8 @@ let geminiModelIndex = 0;
 
 const GEMINI_MODELS = [
   'gemini-3.1-flash-lite',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
+  'gemini-3.1-flash-lite',
+  'gemini-3.1-flash-lite',
 ];
 
 export async function callAI(
