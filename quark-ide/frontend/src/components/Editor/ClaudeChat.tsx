@@ -94,6 +94,7 @@ export default function ClaudeChat({
   onApplyToEditor,
   onSendToBoard,
   onSendToStudio,
+  onSendToStudioWithProject,
   onSendToAgent,
   layout = 'panel',
   activeProject,
