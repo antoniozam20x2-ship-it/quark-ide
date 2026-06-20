@@ -357,6 +357,7 @@ async function callBoardMember(
   repoContext?: RepoContextPayload,
   signalReport?: string | null,
   sniperReport?: string | null,
+  useClaudeThinking?: boolean,
 ): Promise<string> {
   let roleDesc = BOARD_ROLES[member];
   if (!roleDesc) throw new Error(`Invalid member: ${member}`);
@@ -372,7 +373,7 @@ async function callBoardMember(
 
   const systemPrompt = `${roleDesc}\n\n${buildContext(appName, contextForMember, signalReport, sniperReport)}`;
 
-  if (process.env.ANTHROPIC_API_KEY) {
+  if (useClaudeThinking && process.env.ANTHROPIC_API_KEY) {
     try {
       return await callClaudeWithThinking(challenge, systemPrompt, THINKING_BUDGETS[member] ?? 2000);
     } catch (err) {
@@ -390,6 +391,7 @@ async function callBoardMember(
 async function generateConsensus(
   challenge: string,
   responses: Record<string, string>,
+  useClaudeThinking?: boolean,
 ): Promise<string> {
   const synthesis = `Original challenge: ${challenge}
 
@@ -406,7 +408,7 @@ Synthesize all four perspectives into 3-5 clear, actionable consensus items. Be 
 
   const systemPrompt = `${BOARD_ROLES.CEO}\n\n${BASE_CONTEXT}`;
 
-  if (process.env.ANTHROPIC_API_KEY) {
+  if (useClaudeThinking && process.env.ANTHROPIC_API_KEY) {
     try {
       return await callClaudeWithThinking(synthesis, systemPrompt, 3000);
     } catch (err) {
@@ -477,10 +479,11 @@ router.post('/board', async (req: Request, res: Response) => {
 });
 
 router.post('/swarm', async (req: Request, res: Response) => {
-  const { challenge, appName, repoContext } = req.body as {
+  const { challenge, appName, repoContext, useClaudeThinking } = req.body as {
     challenge: string;
     appName?: string;
     repoContext?: RepoContextPayload;
+    useClaudeThinking?: boolean;
   };
   if (!challenge?.trim()) {
     res.status(400).json({ error: 'challenge is required' });
@@ -500,13 +503,13 @@ router.post('/swarm', async (req: Request, res: Response) => {
     }
 
     const [ceo, cto, designer, qa] = await Promise.all([
-      callBoardMember('CEO',      challenge, resolvedApp, repoContext, signalReport, sniperReport),
-      callBoardMember('CTO',      challenge, resolvedApp, repoContext, signalReport, sniperReport),
-      callBoardMember('Designer', challenge, resolvedApp, repoContext, signalReport, sniperReport),
-      callBoardMember('QA',       challenge, resolvedApp, repoContext, signalReport, sniperReport),
+      callBoardMember('CEO',      challenge, resolvedApp, repoContext, signalReport, sniperReport, useClaudeThinking),
+      callBoardMember('CTO',      challenge, resolvedApp, repoContext, signalReport, sniperReport, useClaudeThinking),
+      callBoardMember('Designer', challenge, resolvedApp, repoContext, signalReport, sniperReport, useClaudeThinking),
+      callBoardMember('QA',       challenge, resolvedApp, repoContext, signalReport, sniperReport, useClaudeThinking),
     ]);
 
-    const consensus = await generateConsensus(challenge, { CEO: ceo, CTO: cto, Designer: designer, QA: qa });
+    const consensus = await generateConsensus(challenge, { CEO: ceo, CTO: cto, Designer: designer, QA: qa }, useClaudeThinking);
 
     // Guardar consensus en memoria persistente
     try {

@@ -56,6 +56,7 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
     CEO: false, CTO: false, Designer: false, QA: false,
   });
   const [swarmMode, setSwarmMode] = useState(true);
+  const [useClaudeThinking, setUseClaudeThinking] = useState(false);
   const [processingTime, setProcessingTime] = useState<number | null>(null);
   const [targetRepo, setTargetRepo] = useState('');
   const [showRepoSelector, setShowRepoSelector] = useState(false);
@@ -125,6 +126,7 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
           challenge: text,
           appName: appNameRef.current ?? detectRepo(text) ?? undefined,
           repoContext: repoContextRef.current ?? undefined,
+          useClaudeThinking,
         }),
       });
       const data = await res.json();
@@ -318,6 +320,32 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
           />
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                onClick={() => setUseClaudeThinking(false)}
+                disabled={running}
+                style={{
+                  background: !useClaudeThinking ? 'rgba(0,255,136,0.12)' : 'transparent',
+                  border: `1px solid ${!useClaudeThinking ? '#00ff88' : '#1e1e3f'}`,
+                  borderRadius: 4, color: !useClaudeThinking ? '#00ff88' : '#6b7280',
+                  fontFamily: 'JetBrains Mono, monospace', fontSize: 10, fontWeight: 700,
+                  padding: '3px 8px', cursor: 'pointer', letterSpacing: '0.04em',
+                }}
+              >
+                ⚡ Groq
+              </button>
+              <button
+                onClick={() => setUseClaudeThinking(true)}
+                disabled={running}
+                style={{
+                  background: useClaudeThinking ? 'rgba(139,92,246,0.15)' : 'transparent',
+                  border: `1px solid ${useClaudeThinking ? '#8b5cf6' : '#1e1e3f'}`,
+                  borderRadius: 4, color: useClaudeThinking ? '#a78bfa' : '#6b7280',
+                  fontFamily: 'JetBrains Mono, monospace', fontSize: 10, fontWeight: 700,
+                  padding: '3px 8px', cursor: 'pointer', letterSpacing: '0.04em',
+                }}
+              >
+                🧠 Claude
+              </button>
               {swarmMode && (
                 <span style={{
                   background: 'rgba(0,255,136,0.08)', border: '1px solid #1e3f2a',
