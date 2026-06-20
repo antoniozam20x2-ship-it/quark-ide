@@ -1,0 +1,107 @@
+Modifica quark-ide/backend/src/routes/agent.ts
+
+─────────────────────────────────────
+CAMBIO 1 — Validación de compilación 
+antes del commit
+─────────────────────────────────────
+
+Busca el endpoint POST '/commit' completo. 
+Debe verse similar a:
+
+"router.post('/commit', async (req, res) => {
+  const { files, message, repo, branch } = req.body;
+  const sha = await commitMultipleFiles(files, message, repo, branch);
+  res.json({ sha });
+});"
+
+Reemplázalo por:
+
+"router.post('/commit', async (req, res) => {
+  const { files, message, repo, branch } = req.body as {
+    files: { path: string; content: string }[];
+    message: string;
+    repo?: string;
+    branch?: string;
+  };
+
+  // Validar compilación TypeScript antes de hacer commit
+  const tsFiles = files.filter(f => f.path.endsWith('.ts') || f.path.endsWith('.tsx'));
+  if (tsFiles.length > 0) {
+    const tmpDir = path.join('/tmp', `quark-validate-${Date.now()}`);
+    try {
+      fs.mkdirSync(tmpDir, { recursive: true });
+      for (const f of tsFiles) {
+        const filePath = path.join(tmpDir, path.basename(f.path));
+        fs.writeFileSync(filePath, f.content);
+      }
+      execSync(`npx tsc --noEmit --skipLibCheck --jsx react ${tsFiles.map(f => path.join(tmpDir, path.basename(f.path))).join(' ')}`, {
+        timeout: 15000,
+        stdio: 'pipe',
+      });
+    } catch (err: any) {
+      const errorOutput = err.stdout?.toString() || err.message || 'Error de compilación desconocido';
+      res.status(400).json({
+        error: 'Validación de TypeScript falló — commit bloqueado',
+        details: errorOutput.slice(0, 2000),
+      });
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
+      return;
+    }
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
+  }
+
+  const sha = await commitMultipleFiles(files, message, repo, branch);
+  res.json({ sha });
+});"
+
+CONDICIONES:
+1. Si no hay 'import fs' o 'import path' o 'execSync' 
+   al inicio del archivo, agrégalos como imports nuevos 
+   sin tocar los existentes
+2. Solo modifica el endpoint POST '/commit'
+3. Muéstrame el endpoint completo actualizado 
+   y los imports nuevos para verificar
+
+─────────────────────────────────────
+CAMBIO 2 — Alerta de límite de ejecución
+─────────────────────────────────────
+
+Busca esta cadena exacta cerca del inicio 
+del router.post('/generate' (antes de 
+"const repo = bodyRepo ?? process.env.GITHUB_REPO;"):
+
+"if (!prompt || !repo) {
+    res.status(400).json({ error: 'prompt and repo are required' });
+    return;
+  }"
+
+Reemplázala por:
+
+"if (!prompt || !repo) {
+    res.status(400).json({ error: 'prompt and repo are required' });
+    return;
+  }
+
+  const EXECUTION_KEYWORDS = /\b(ejecuta|ejecutar|corre los tests|correr los tests|run tests|verifica que funcione en vivo|verifica en producción|dame el resultado real|prueba en vivo|despliega|deploy)\b/i;
+  if (EXECUTION_KEYWORDS.test(prompt)) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+    res.write(`data: ${JSON.stringify({
+      event: 'action',
+      text: '⚠️ LÍMITE DE QUARK: no puedo ejecutar código en tiempo real, solo leo, analizo y edito. Para correr y probar este cambio en vivo, usa Replit.',
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({ event: 'done', files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch })}\n\n`);
+    res.end();
+    return;
+  }"
+
+CONDICIONES:
+1. Solo ese bloque, justo después de la 
+   validación de prompt/repo existente
+2. Muéstrame el bloque actualizado para verificar
+
+─────────────────────────────────────
+TOTAL: 2 cambios. Confírmame ambos diffs.
+─────────────────────────────────────

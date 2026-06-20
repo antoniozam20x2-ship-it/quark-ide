@@ -1,4 +1,7 @@
 import 'dotenv/config';
+import fs from 'fs';
+import path from 'path';
+import { execSync } from 'child_process';
 import express from 'express';
 import cors from 'cors';
 import chatRouter from './routes/chat.js';
@@ -109,14 +112,41 @@ app.post('/github/switch-project', (req, res) => {
 
 app.post('/github/commit-multiple', async (req, res) => {
   const { files, message, repo, branch } = req.body as {
-    files?: { path: string; content: string }[];
-    message?: string;
+    files: { path: string; content: string }[];
+    message: string;
     repo?: string;
     branch?: string;
   };
   if (!files?.length || !message) {
     res.status(400).json({ error: 'files and message are required' }); return;
   }
+
+  // Validar compilación TypeScript antes de hacer commit
+  const tsFiles = files.filter(f => f.path.endsWith('.ts') || f.path.endsWith('.tsx'));
+  if (tsFiles.length > 0) {
+    const tmpDir = path.join('/tmp', `quark-validate-${Date.now()}`);
+    try {
+      fs.mkdirSync(tmpDir, { recursive: true });
+      for (const f of tsFiles) {
+        const filePath = path.join(tmpDir, path.basename(f.path));
+        fs.writeFileSync(filePath, f.content);
+      }
+      execSync(`npx tsc --noEmit --skipLibCheck --jsx react ${tsFiles.map(f => path.join(tmpDir, path.basename(f.path))).join(' ')}`, {
+        timeout: 15000,
+        stdio: 'pipe',
+      });
+    } catch (err: any) {
+      const errorOutput = err.stdout?.toString() || err.message || 'Error de compilación desconocido';
+      res.status(400).json({
+        error: 'Validación de TypeScript falló — commit bloqueado',
+        details: errorOutput.slice(0, 2000),
+      });
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+      return;
+    }
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+  }
+
   try {
     const sha = await commitMultipleFiles(files, message, repo, branch);
     res.json({ sha, owner: process.env.GITHUB_OWNER ?? '' });
