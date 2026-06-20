@@ -584,6 +584,10 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               t.startsWith('DÓNDE:')    ? '#00D4FF' :
               t.startsWith('POR QUÉ:') ? '#FFD93D' :
               t.startsWith('SOLUCIÓN:') ? '#6BCB77' :
+              t.startsWith('💡')          ? '#00ff88' :
+              t.startsWith('⚠️')          ? '#FFD93D' :
+              t.startsWith('🎯')          ? '#00D4FF' :
+              (t.startsWith('🔍') || t.startsWith('📖') || t.startsWith('📂') || t.startsWith('⚡')) ? '#6b7280' :
               '#00ff88';
             return (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

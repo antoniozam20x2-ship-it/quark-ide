@@ -1,0 +1,72 @@
+Modifica quark-ide/frontend/src/components/Agent/QuarkAgent.tsx
+
+─────────────────────────────────────
+CAMBIO 1 — Colores del feed (gris para pasos, 
+verde brillante para conclusiones)
+─────────────────────────────────────
+
+Busca esta cadena exacta:
+
+"const actionColor =
+              t.startsWith('CAUSA:')    ? '#FF6B6B' :
+              t.startsWith('DÓNDE:')    ? '#00D4FF' :
+              t.startsWith('POR QUÉ:') ? '#FFD93D' :
+              t.startsWith('SOLUCIÓN:') ? '#6BCB77' :
+              '#00ff88';"
+
+Reemplázala por:
+
+"const actionColor =
+              t.startsWith('CAUSA:')    ? '#FF6B6B' :
+              t.startsWith('DÓNDE:')    ? '#00D4FF' :
+              t.startsWith('POR QUÉ:') ? '#FFD93D' :
+              t.startsWith('SOLUCIÓN:') ? '#6BCB77' :
+              t.startsWith('💡')          ? '#00ff88' :
+              t.startsWith('⚠️')          ? '#FFD93D' :
+              t.startsWith('🎯')          ? '#00D4FF' :
+              (t.startsWith('🔍') || t.startsWith('📖') || t.startsWith('📂') || t.startsWith('⚡')) ? '#6b7280' :
+              '#00ff88';"
+
+CONDICIONES:
+1. Solo ese bloque de actionColor
+2. No toques event:'file', event:'code', 
+   ni event:'error'
+3. Muéstrame el bloque actualizado para verificar
+
+─────────────────────────────────────
+CAMBIO 2 — Fix lectura directa: respetar 
+rango de líneas cuando se piden explícitamente
+(en backend/src/routes/agent.ts)
+─────────────────────────────────────
+
+Busca esta cadena exacta en el FAST_FILE_MATCH 
+(donde dice "finalContent = content.split..."):
+
+"} else {
+          finalContent = content.split('\n').slice(0, 500).join('\n');
+        }"
+
+Reemplázala por:
+
+"} else {
+          const rangeMatch = prompt.match(/l[íi]neas?\s+(\d+)\s*(?:a|-|hasta)\s*(\d+)/i);
+          if (rangeMatch) {
+            const start = Math.max(0, parseInt(rangeMatch[1]) - 1);
+            const end = Math.min(content.split('\n').length, parseInt(rangeMatch[2]));
+            const lines = content.split('\n').slice(start, end);
+            finalContent = lines.map((l, idx) => `L${start + idx + 1}: ${l}`).join('\n');
+            send('action', { text: `📍 Mostrando líneas ${start + 1}-${end} exactas` });
+          } else {
+            finalContent = content.split('\n').slice(0, 500).join('\n');
+          }
+        }"
+
+CONDICIONES:
+1. Solo ese bloque del FAST_FILE_MATCH
+2. No toques el resto del READ PATH
+3. Muéstrame el bloque actualizado para verificar
+
+─────────────────────────────────────
+TOTAL: 2 cambios, en 2 archivos distintos. 
+Confírmame ambos diffs al terminar.
+─────────────────────────────────────

@@ -351,7 +351,16 @@ router.post('/generate', async (req, res) => {
             : `// No se encontró '${keyword}' en ${filePath}`;
           send('action', { text: `🔎 ${relevant.length} línea(s) con '${keyword}'` });
         } else {
-          finalContent = content.split('\n').slice(0, 500).join('\n');
+          const rangeMatch = prompt.match(/l[íi]neas?\s+(\d+)\s*(?:a|-|hasta)\s*(\d+)/i);
+          if (rangeMatch) {
+            const start = Math.max(0, parseInt(rangeMatch[1]) - 1);
+            const end = Math.min(content.split('\n').length, parseInt(rangeMatch[2]));
+            const lines = content.split('\n').slice(start, end);
+            finalContent = lines.map((l, idx) => `L${start + idx + 1}: ${l}`).join('\n');
+            send('action', { text: `📍 Mostrando líneas ${start + 1}-${end} exactas` });
+          } else {
+            finalContent = content.split('\n').slice(0, 500).join('\n');
+          }
         }
 
         send('done', {
