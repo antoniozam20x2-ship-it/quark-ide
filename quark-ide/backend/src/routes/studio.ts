@@ -252,25 +252,33 @@ NUNCA uses background-color como reemplazo de imágenes.`
 
 router.post('/analyze', async (req, res) => {
   try {
-    const { brief, role, architectResult, designerResult, fastMode } = req.body as {
+    const { brief, role, architectResult, designerResult, fastMode, improveMode } = req.body as {
       brief: string
       role: string
       architectResult?: string
       designerResult?: string
       fastMode?: boolean
+      improveMode?: boolean
     }
 
     if (!brief || !role) return res.status(400).json({ error: 'brief y role requeridos' })
 
     const basePrompt = SYSTEM_PROMPTS[role]
     if (!basePrompt) return res.status(400).json({ error: 'role inválido' })
-    const systemPrompt = (fastMode && role === 'designer')
-      ? basePrompt + FAST_MODE_IMAGE_RULES
-      : basePrompt
+    let systemPrompt: string
+    if (fastMode && role === 'designer') {
+      systemPrompt = basePrompt + FAST_MODE_IMAGE_RULES
+    } else if (improveMode && role === 'engineer') {
+      systemPrompt = `IMPORTANTE: Estás en modo MEJORA de proyecto existente.\nEl HTML de referencia ya fue aprobado por el usuario — NO lo reinterpretes ni rediseñes.\nTu spec debe describir SOLO los cambios específicos solicitados, preservando todo lo demás.\n\n` + basePrompt
+    } else {
+      systemPrompt = basePrompt
+    }
 
     // ── Critic (qa): evaluate + optional 1 revision round ─────────────────────
     if (role === 'qa') {
-      const criticPrompt = `BRIEF: ${brief}\n\nDIRECCIÓN CREATIVA:\n${architectResult ?? ''}\n\nHTML DEL DESIGNER:\n${designerResult ?? ''}`
+      const criticPrompt = improveMode
+        ? `PROYECTO EXISTENTE (NO rediseñar — solo evaluar la mejora solicitada):\n${designerResult ?? ''}\n\nMEJORA SOLICITADA:\n${brief}\n\nEvalúa ÚNICAMENTE si la mejora solicitada se aplicó correctamente sin romper el diseño existente.\nNO evalúes la paleta, tipografía ni estructura general — esas ya fueron aprobadas por el usuario.\nSi la mejora está bien aplicada → responde EXACTAMENTE: APROBADO\nSi algo está roto o la mejora no se aplicó → responde REVISAR: [máximo 2 líneas específicas]`
+        : `BRIEF: ${brief}\n\nDIRECCIÓN CREATIVA:\n${architectResult ?? ''}\n\nHTML DEL DESIGNER:\n${designerResult ?? ''}`
       const criticText = await callAI('analyze', criticPrompt, systemPrompt)
 
       if (criticText.trim().startsWith('REVISAR:')) {
@@ -292,7 +300,10 @@ router.post('/analyze', async (req, res) => {
       userPrompt = `BRIEF: ${brief}\n\nDIRECCIÓN CREATIVA:\n${architectResult ?? ''}`
       task = 'html'
     } else if (role === 'engineer') {
-      userPrompt = `BRIEF: ${brief}\n\nDIRECCIÓN CREATIVA:\n${architectResult ?? ''}\n\nHTML APROBADO DEL DESIGNER:\n${designerResult ?? ''}`
+      const engineerArchitectContext = improveMode
+        ? `MODO MEJORA — trabajando sobre proyecto existente.\nLa estructura, paleta y tipografía del proyecto existente deben preservarse intactas.\nSolo implementar la mejora específica solicitada en el brief.`
+        : (architectResult ?? '')
+      userPrompt = `BRIEF: ${brief}\n\nDIRECCIÓN CREATIVA:\n${engineerArchitectContext}\n\nHTML APROBADO DEL DESIGNER:\n${designerResult ?? ''}`
       task = 'analyze'
     } else {
       userPrompt = `BRIEF: ${brief}`

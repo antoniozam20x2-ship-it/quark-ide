@@ -239,6 +239,7 @@ export default function StudioPage({ initialBrief, initialHtml, initialProjectId
     const input = (text ?? brief).trim()
     if (!input || running) return
     const isFast = overrideFastMode ?? fastMode
+    const isImproveMode = !!baseHtml
 
     setRunning(true)
     setDesignPrototype('')
@@ -308,7 +309,7 @@ export default function StudioPage({ initialBrief, initialHtml, initialProjectId
         const res = await fetch(`${API_BASE}/api/studio/analyze`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ brief: input, role: 'qa', architectResult, designerResult: finalHtml }),
+          body: JSON.stringify({ brief: input, role: 'qa', architectResult, designerResult: finalHtml, improveMode: isImproveMode }),
         })
         const data = await res.json()
         const criticNote = data.result ?? ''
@@ -333,7 +334,7 @@ export default function StudioPage({ initialBrief, initialHtml, initialProjectId
       const res = await fetch(`${API_BASE}/api/studio/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brief: input, role: 'engineer', architectResult, designerResult: finalHtml }),
+        body: JSON.stringify({ brief: input, role: 'engineer', architectResult, designerResult: finalHtml, improveMode: isImproveMode }),
       })
       const data = await res.json()
       const spec = data.result ?? ''
