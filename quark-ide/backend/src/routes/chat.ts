@@ -520,14 +520,17 @@ Usa este contexto para dar respuestas precisas y específicas al código real. C
 
   const emit = (chunk: string) => res.write(`data: ${JSON.stringify({ text: chunk })}\n\n`);
 
+  // Limitar historial a últimos 10 mensajes para no saturar TPM de Groq
+  const trimmedMessages = messages.slice(-10);
+
   try {
     try {
-      await streamGroq(messages, systemPrompt, emit);
+      await streamGroq(trimmedMessages, systemPrompt, emit);
     } catch (groqErr) {
       const groqMsg = groqErr instanceof Error ? groqErr.message : '';
       if (groqMsg.includes('exhausted') || groqMsg.includes('429') || groqMsg.includes('No GROQ_API_KEY')) {
         console.log('[chat] Groq exhausted — switching to OpenRouter');
-        await streamOpenRouter(messages, systemPrompt, emit);
+        await streamOpenRouter(trimmedMessages, systemPrompt, emit);
       } else {
         throw groqErr;
       }
