@@ -31,6 +31,23 @@ async function saveMessage(conversationId: number, role: string, content: string
   );
 }
 
+async function loadSharedAgentContext(repo: string): Promise<{
+  preloadedFiles: { path: string; content: string }[]
+} | null> {
+  try {
+    const r = await pool.query<{ content: string }>(
+      `SELECT content FROM memory_entries WHERE key = $1 AND namespace = $2 LIMIT 1`,
+      ['agent-context', 'quark-agent'],
+    );
+    if (!r.rows[0]?.content) return null;
+    const ctx = JSON.parse(r.rows[0].content);
+    if (ctx.repo !== repo) return null;
+    return { preloadedFiles: ctx.preloadedFiles ?? [] };
+  } catch {
+    return null;
+  }
+}
+
 // ── Groq key rotation ─────────────────────────────────────────────────────────
 
 const GROQ_URL   = 'https://api.groq.com/openai/v1/chat/completions';
@@ -213,6 +230,19 @@ const APP_REPOS: Record<string, string> = {
 };
 
 async function fetchRepoContext(repoName: string): Promise<string> {
+  // Intentar reutilizar contexto ya cargado por QUARK Agent
+  const shared = await loadSharedAgentContext(repoName)
+  if (shared && shared.preloadedFiles.length > 0) {
+    const filesStr = shared.preloadedFiles
+      .map((f) => `--- ${f.path} ---\n${f.content}`)
+      .join('\n\n')
+    return `
+=== CONTEXTO DE APP: ${repoName} (reutilizado de QUARK Agent) ===
+Archivos ya analizados:
+${filesStr}
+=== FIN CONTEXTO ===`
+  }
+
   const results = await Promise.allSettled([
     getFileTree(repoName, 'main'),
     getFileContent('README.md', repoName, 'main'),
