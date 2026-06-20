@@ -14,6 +14,7 @@ import { runDebugger } from './services/debugger.js';
 import previewRouter from './routes/preview.js';
 import editorRouter from './routes/editor.js';
 import studioRouter from './routes/studio.js';
+import healthRouter from './routes/health.js';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3001);
@@ -40,6 +41,7 @@ app.use('/api/memory', memoryRouter);
 app.use('/agent', agentRouter);
 app.use('/api/editor', editorRouter);
 app.use('/api/studio', studioRouter);
+app.use('/api/health', healthRouter);
 
 app.get('/api/costs', (_req, res) => {
   res.json(getCosts());

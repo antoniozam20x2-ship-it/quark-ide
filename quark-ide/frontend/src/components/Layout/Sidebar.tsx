@@ -63,6 +63,14 @@ export default function Sidebar({ activePage, onNavigate }: Props) {
         violet
       />
 
+      {/* Health Nav */}
+      <NavItem
+        icon="🔑"
+        label="API Health"
+        active={activePage === 'health'}
+        onClick={() => onNavigate('health')}
+      />
+
       <div className="flex-1" />
 
       {/* Settings */}
