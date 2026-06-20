@@ -331,7 +331,7 @@ router.post('/generate', async (req, res) => {
 
   try {
     // ── FAST READ PATH — explicit filename in prompt, skip tree + Gemini ──────
-    const fastFileMatch = prompt.match(/[\w/\-\.]+\.(ts|tsx|js|jsx|json|py|md|yml|yaml|env|sh|css|html)/);
+    const fastFileMatch = prompt.match(/[\w/\-\.]+\.(tsx|jsx|yaml|json|html|css|yml|env|py|md|ts|js|sh)/);
     if (fastFileMatch && READ_KEYWORDS.test(prompt) && !GEN_KEYWORDS.test(prompt)) {
       const filePath = fastFileMatch[0];
       send('action', { text: `📖 Modo lectura directa — ${filePath}` });
