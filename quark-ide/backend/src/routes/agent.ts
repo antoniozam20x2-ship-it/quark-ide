@@ -335,6 +335,12 @@ router.post('/generate', async (req, res) => {
       /engine\.(ts|js)$/,
       /detector\.(ts|js)$/,
     ]
+    const FRONTEND_PATTERNS = [
+      /components\//,
+      /pages\//,
+      /\.tsx$/,
+      /hooks\//,
+    ]
 
     const filePaths = tree
       .filter((f) => f.type === 'blob')
@@ -344,11 +350,12 @@ router.post('/generate', async (req, res) => {
         !f.path.includes('dist/')
       )
       .sort((a, b) => {
-        const aScore = PRIORITY_PATTERNS.some(p => p.test(a.path)) ? 0 : 1
-        const bScore = PRIORITY_PATTERNS.some(p => p.test(b.path)) ? 0 : 1
-        return aScore - bScore
+        const score = (path: string) =>
+          PRIORITY_PATTERNS.some(p => p.test(path)) ? 0 :
+          FRONTEND_PATTERNS.some(p => p.test(path)) ? 1 : 2
+        return score(a.path) - score(b.path)
       })
-      .slice(0, 40)
+      .slice(0, 80)
       .map((f) => f.path)
       .join('\n');
 
