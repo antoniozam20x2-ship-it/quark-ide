@@ -137,6 +137,8 @@ async function analyzeLogsWithAI(logs: string): Promise<LogAnalysis> {
   const token = process.env.GROQ_API_KEY;
   if (!token) throw new Error('GROQ_API_KEY is not set');
 
+  console.log('[debugger] logs recibidos:', logs?.slice(0, 500));
+
   const res = await fetch(GROQ_URL, {
     method: 'POST',
     headers: {
