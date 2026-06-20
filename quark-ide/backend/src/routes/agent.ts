@@ -171,6 +171,52 @@ async function repairJSON(rawResponse: string, originalPrompt: string): Promise<
   return JSON.parse(text.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim());
 }
 
+async function repairOperationsJSON(rawResponse: string): Promise<{
+  operations: Array<{ type: string; path: string; old_str: string; new_str: string }>;
+  commitMessage: string;
+}> {
+  const REPAIR_OPS_SYSTEM = `Eres un agente de reparación de JSON.
+Recibes una respuesta malformada y debes devolver JSON válido.
+REGLAS:
+- Devuelve SOLO el JSON, sin markdown ni explicaciones
+- El JSON debe tener exactamente: { "operations": [{"type": "str_replace", "path": string, "old_str": string, "new_str": string}], "commitMessage": string }
+- Escapa correctamente las comillas dentro de old_str y new_str`;
+
+  const text = await callAI(
+    'fix',
+    `Respuesta rota:\n${rawResponse.slice(0, 4000)}\n\nRepara el JSON de operaciones y devuélvelo válido.`,
+    REPAIR_OPS_SYSTEM,
+  );
+  return JSON.parse(text.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim());
+}
+
+function applyOperations(
+  originalContent: string,
+  operations: Array<{ type: string; old_str: string; new_str: string }>,
+  filePath: string,
+  sendFn: (event: string, data: Record<string, unknown>) => void,
+): string {
+  let content = originalContent;
+
+  for (const op of operations) {
+    if (op.type !== 'str_replace') {
+      sendFn('action', { text: `⚠️ Operación desconocida '${op.type}' — omitida` });
+      continue;
+    }
+
+    const idx = content.indexOf(op.old_str);
+    if (idx === -1) {
+      sendFn('action', { text: `⚠️ str_replace sin match en ${filePath} — operación omitida` });
+      continue;
+    }
+
+    content = content.slice(0, idx) + op.new_str + content.slice(idx + op.old_str.length);
+    sendFn('action', { text: `✅ Patch aplicado en ${filePath}` });
+  }
+
+  return content;
+}
+
 // ── Read intent detection ────────────────────────────────────────────────────
 const READ_KEYWORDS  = /\b(lee|leer|muéstrame|muestra|busca|buscar|encuentra|ver|dime|qué tiene|qué hay|analiza|analizar|diagnóstico|diagnóstica|revisa|revisar|explica|explicar|describe|describir|inspecciona|inspeccionar|abre|abrir|lista|listar|qué hace|cómo está|cómo funciona|show me|read|find|look at)\b/i;
 const GEN_KEYWORDS   = /\b(genera|generar|crea|crear|escribe|escribir|implementa|implementar|añade|añadir|agrega|agregar|cambia|cambiar|modifica|modificar|fix|arregla|arreglar|refactoriza|refactorizar|construye|construir|desarrolla|desarrollar|actualiza|actualizar|add|create|write|implement|modify|change|build)\b/i;
@@ -720,159 +766,106 @@ REGLAS:
 
     send('action', { text: '🔬 Modo cirugía — preparando patch...' });
 
-    const systemPrompt = `Eres QUARK Agent en modo CIRUGÍA.
-Repo activo: ${projectName ?? repo} (${repo})
+    // Variables para el contexto quirúrgico
+    const mainPreloaded = preloadedFiles[0];
+    const blockStartLine = mainPreloaded?.startLine ?? 1;
+    const blockEndLine = mainPreloaded?.endLine ?? 0;
+    const mainFilePath = mainPreloaded?.path ?? '';
 
-${reasoningContext ? `ANÁLISIS PREVIO DEL ARQUITECTO:\n${reasoningContext}\n\nSigue este análisis para implementar el cambio.` : ''}
-Archivos existentes en el repo:
-${filePaths}
+    const systemPrompt = `Eres QUARK Agent en modo CIRUGÍA QUIRÚRGICA.
+Tu trabajo es generar las operaciones mínimas para corregir un problema específico.
+
+BLOQUE DEL ARCHIVO (líneas ${blockStartLine}–${blockEndLine} de ${mainFilePath}):
+\`\`\`
 ${fileContextStr}
+\`\`\`
 
-ROL: Corregir código con precisión quirúrgica.
-
-REGLA #1 — PATCHES, NO REWRITES:
-El formato de salida es el archivo completo, PERO:
-- Lee el archivo completo primero desde el contexto provisto arriba
-- Cambia SOLO las líneas necesarias
-- El 99% del archivo debe ser idéntico al original
-- Máximo 20 líneas diferentes vs el original
-
-PROCESO OBLIGATORIO:
-1. Lee el archivo completo desde el contexto
-2. Identifica exactamente qué líneas cambian (usa números de línea)
-3. Reconstruye el archivo completo con SOLO esos cambios aplicados
-4. Verifica: ¿Cambié más de 20 líneas? → DETENTE y comunícalo en commitMessage
-
-SI NECESITAS >20 LÍNEAS:
-Usa commitMessage: "CONFIRMACIÓN REQUERIDA: Este cambio afecta N líneas — ¿confirmas que proceda?"
-
-ARCHIVOS CON BLOQUE QUIRÚRGICO:
-Si el contexto muestra '--- archivo (BLOQUE QUIRÚRGICO líneas X-Y de N) ---':
-- El archivo tiene N líneas totales pero SOLO te mandé el bloque relevante
-- Modifica SOLO ese bloque — devuélvelo corregido en content
-- NO intentes reconstruir el archivo completo — el backend hace el merge
-- En commitMessage indica: 'PATCH:X-Y' donde X e Y son las líneas del bloque
-
-ARCHIVOS COMPLETOS (sin etiqueta BLOQUE QUIRÚRGICO):
-- Devuelve el archivo completo con patch aplicado como siempre
-
-IMPORTS NUEVOS: agrégalos al inicio del archivo, nunca en el medio.
-
-NUNCA:
-❌ Reescribir desde cero
-❌ Cambiar lo que no te pidieron
-❌ Asumir contenido truncado o inventar líneas
-❌ Omitir partes del archivo original en el output
-
-SIEMPRE:
-✅ content = archivo COMPLETO con patch aplicado (todas las líneas originales + cambios)
-✅ Solo las líneas necesarias modificadas
-✅ Verificar que compila lógicamente antes de devolver
+RAZONAMIENTO PREVIO:
+${reasoningContext}
 
 RESPONDE ÚNICAMENTE CON ESTE JSON (sin markdown, sin backticks, sin texto extra):
 {
-  "files": [
-    {"path": "src/components/App.tsx", "content": "archivo completo con patch aplicado — TODAS las líneas originales más los cambios"},
-    {"path": "src/nuevo.ts", "content": "contenido completo del archivo nuevo"}
+  "operations": [
+    {
+      "type": "str_replace",
+      "path": "${mainFilePath}",
+      "old_str": "texto exacto que existe en el bloque de arriba",
+      "new_str": "texto corregido"
+    }
   ],
-  "commitMessage": "feat: descripción precisa del cambio mínimo realizado",
-  "mainComponent": "src/components/App.tsx"
+  "commitMessage": "fix: descripción del cambio"
 }
 
-CRÍTICO: El JSON debe usar SOLO comillas dobles.
-NUNCA uses comillas simples en property names ni values.
-NUNCA incluyas comentarios dentro del JSON.
-El campo content de cada archivo debe ser un string JSON válido con caracteres escapados correctamente.`;
+REGLAS CRÍTICAS:
+- old_str debe ser texto que existe LITERALMENTE en el bloque de arriba
+- Incluye suficiente contexto en old_str para que sea único (mínimo 1 línea completa)
+- Máximo 3 operaciones por respuesta
+- Si el fix requiere más de 3 operaciones, agrúpalas en menos str_replace con más contexto
+- NUNCA inventes old_str — cópialo exactamente del bloque
+- El JSON debe usar SOLO comillas dobles`;
 
     const raw = (await generateWithFallback(systemPrompt + '\n\nTAREA: ' + prompt, systemPrompt)).trim();
 
     console.log('[Agent] Raw length:', raw.length);
     console.log('[Agent] Raw preview:', raw.slice(0, 300));
 
-    let parsed: {
-      files: { path: string; content: string }[];
-      commitMessage: string;
-      mainComponent: string;
-    };
+    // Parsear respuesta de operaciones
+    let operations: Array<{ type: string; path: string; old_str: string; new_str: string }> = [];
+    let commitMessage = 'fix: patch aplicado por QUARK Agent';
+
     try {
-      // Intento 1: JSON directo
-      parsed = JSON.parse(raw);
+      const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
+      const parsedOps = JSON.parse(cleaned);
+      operations = parsedOps.operations ?? [];
+      commitMessage = parsedOps.commitMessage ?? commitMessage;
     } catch {
+      send('action', { text: '⚠️ JSON malformado — intentando reparar...' });
       try {
-        // Intento 2: limpiar backticks y markdown
-        const cleaned = raw
-          .replace(/```json\s*/gi, '')
-          .replace(/```\s*/gi, '')
-          .trim();
-        parsed = JSON.parse(cleaned);
+        const repaired = await repairOperationsJSON(raw);
+        operations = repaired.operations ?? [];
+        commitMessage = repaired.commitMessage ?? commitMessage;
       } catch {
-        try {
-          // Intento 3: extraer el primer objeto JSON que contenga "files"
-          const match = raw.match(/\{[\s\S]*"files"[\s\S]*\}/);
-          if (match) {
-            parsed = JSON.parse(match[0]);
-          } else {
-            throw new Error('no match');
-          }
-        } catch {
-          try {
-            send('action', { text: '🔧 Reparando respuesta...' });
-            parsed = await repairJSON(raw, prompt);
-          } catch (repairErr) {
-            send('action', { text: '⚠️ El agente no pudo generar JSON válido. Intenta reformular el prompt.' });
-            send('done', {
-              files: [],
-              commitMessage: '',
-              mainComponent: '',
-              mainContent: '',
-              repo,
-              branch,
-            });
-            res.end();
-            return;
-          }
-        }
+        send('action', { text: '❌ No se pudo parsear el patch — abortando' });
+        send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+        res.end();
+        return;
       }
     }
 
-    console.log('[Agent] Parsed files count:', parsed?.files?.length);
+    // Construir archivos finales aplicando operaciones str_replace
+    const finalFiles: { path: string; content: string }[] = [];
 
-    const { files, commitMessage, mainComponent } = parsed;
+    for (const op of operations) {
+      const preloaded = preloadedFiles.find(f => f.path === op.path);
+      const originalContent = preloaded?.fullContent ?? preloaded?.content ?? '';
 
-    // Step 3: reportar archivos generados
-    send('action', { text: `✏️ ${files.length} archivos generados:` });
-    for (const f of files) {
+      if (!originalContent) {
+        send('action', { text: `⚠️ No se encontró contenido original para ${op.path}` });
+        continue;
+      }
+
+      const opsForFile = operations.filter(o => o.path === op.path);
+      const patchedContent = applyOperations(originalContent, opsForFile, op.path, send);
+
+      if (!finalFiles.find(f => f.path === op.path)) {
+        finalFiles.push({ path: op.path, content: patchedContent });
+      }
+    }
+
+    // Step 3: reportar archivos modificados
+    send('action', { text: `✏️ ${finalFiles.length} archivo(s) modificado(s):` });
+    for (const f of finalFiles) {
       send('file', { path: f.path });
     }
 
-    // Step 4: devolver resultado (sin commit aún)
-    const mainFile =
-      files.find((f) => f.path === mainComponent) ??
-      files.find((f) => f.path.endsWith('.tsx')) ??
-      files[0];
-
-    // Merge quirúrgico — si el AI devolvió solo un bloque, reinsertarlo
-    for (const f of files) {
-      const patchMatch = (parsed.commitMessage ?? '').match(/PATCH:(\d+)-(\d+)/)
-      if (!patchMatch) continue
-      const startLine = parseInt(patchMatch[1]) - 1
-      const endLine = parseInt(patchMatch[2]) - 1
-      // Buscar el archivo original en preloadedFiles
-      const original = preloadedFiles.find(p => p.path === f.path)
-      if (!original) continue
-      const originalLines = original.content.split('\n')
-      const patchLines = f.content.split('\n')
-      // Reinsertar bloque modificado en el archivo original
-      originalLines.splice(startLine, endLine - startLine + 1, ...patchLines)
-      f.content = originalLines.join('\n')
-      send('action', { text: `🔬 Merge quirúrgico aplicado — ${patchLines.length} líneas reinsertadas en ${f.path}` })
-    }
+    // Step 4: archivo principal para el diff
+    const mainFile = finalFiles.find((f) => f.path.endsWith('.tsx')) ?? finalFiles[0];
 
     // ── VALIDACIÓN ANTES DEL DIFF ─────────────────────────────────────────────
     send('action', { text: '🔍 Validando código generado...' })
 
     try {
-      const filesToValidate = parsed.files
+      const filesToValidate = finalFiles
         .map((f: { path: string; content: string }) => `--- ${f.path} ---\n${f.content.split('\n').slice(0, 100).join('\n')}`)
         .join('\n\n')
 
@@ -904,7 +897,7 @@ NO reportes advertencias de estilo ni errores menores.`,
       if (!validation.valid && validation.errors.length > 0) {
         send('action', { text: `⚠️ ${validation.errors.length} error(es) detectado(s) — corrigiendo...` })
 
-        const filesToValidateStr = parsed.files
+        const filesToValidateStr = finalFiles
           .map((f: { path: string; content: string }) => `--- ${f.path} ---\n${f.content.split('\n').slice(0, 100).join('\n')}`)
           .join('\n\n')
 
@@ -931,12 +924,12 @@ Responde con el mismo JSON de siempre:
         try {
           const fixedParsed = JSON.parse(
             fixedRaw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim()
-          ) as typeof parsed
+          ) as { files: { path: string; content: string }[]; commitMessage: string; mainComponent: string }
 
           for (const fixedFile of fixedParsed.files) {
-            const idx = parsed.files.findIndex((f: { path: string }) => f.path === fixedFile.path)
+            const idx = finalFiles.findIndex((f: { path: string }) => f.path === fixedFile.path)
             if (idx >= 0) {
-              parsed.files[idx] = fixedFile
+              finalFiles[idx] = fixedFile
             }
           }
           send('action', { text: '✅ Errores corregidos automáticamente' })
@@ -967,7 +960,7 @@ Responde con el mismo JSON de siempre:
 
     // For files with no preloaded original, fetch directly from GitHub
     const filesWithOriginal = await Promise.all(
-      parsed.files.map(async (f: { path: string; content: string }) => {
+      finalFiles.map(async (f: { path: string; content: string }) => {
         let originalContent = findOriginal(f.path);
         if (originalContent === undefined) {
           try {
@@ -982,7 +975,7 @@ Responde con el mismo JSON de siempre:
 
     send('done', {
       files: filesWithOriginal,
-      commitMessage: parsed.commitMessage ?? commitMessage,
+      commitMessage,
       mainComponent: mainFile?.path,
       mainContent: filesWithOriginal.find((f: { path: string }) => f.path === mainFile?.path)?.content ?? mainFile?.content ?? '',
       repo,

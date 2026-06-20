@@ -1,0 +1,205 @@
+# Implementación: Deep Mode str_replace patch (Gap #1)
+
+## Contexto
+
+En `agent.ts` Deep Mode tiene dos llamadas a Claude:
+
+- **Llamada 1** (líneas ~619–647): devuelve razonamiento en texto plano → no tocar
+- **Llamada 2** (líneas ~723–787): devuelve JSON con archivo completo → **esto es lo que cambiamos**
+
+El merge actual usa `PATCH:X-Y` en commitMessage + splice sobre `fullContent`. Lo reemplazamos por `str_replace` en memoria sobre `fullContent`, más simple y más robusto.
+
+-----
+
+## Cambio 1: Nuevo systemPrompt en la llamada 2 (línea ~723)
+
+Reemplaza el systemPrompt actual de la llamada 2 por este:
+
+```typescript
+const systemPrompt = `Eres QUARK Agent en modo CIRUGÍA QUIRÚRGICA.
+Tu trabajo es generar las operaciones mínimas para corregir un problema específico.
+
+BLOQUE DEL ARCHIVO (líneas ${blockStartLine}–${blockEndLine} de ${mainFilePath}):
+\`\`\`
+${fileContextStr}
+\`\`\`
+
+RAZONAMIENTO PREVIO:
+${reasoningContext}
+
+RESPONDE ÚNICAMENTE CON ESTE JSON (sin markdown, sin backticks, sin texto extra):
+{
+  "operations": [
+    {
+      "type": "str_replace",
+      "path": "${mainFilePath}",
+      "old_str": "texto exacto que existe en el bloque de arriba",
+      "new_str": "texto corregido"
+    }
+  ],
+  "commitMessage": "fix: descripción del cambio"
+}
+
+REGLAS CRÍTICAS:
+- old_str debe ser texto que existe LITERALMENTE en el bloque de arriba
+- Incluye suficiente contexto en old_str para que sea único (mínimo 1 línea completa)
+- Máximo 3 operaciones por respuesta
+- Si el fix requiere más de 3 operaciones, agrúpalas en menos str_replace con más contexto
+- NUNCA inventes old_str — cópialo exactamente del bloque
+- El JSON debe usar SOLO comillas dobles`;
+```
+
+**Variables que necesitas tener disponibles en ese scope:**
+
+- `blockStartLine` y `blockEndLine` — vienen de `preloadedFiles[0].startLine` y `endLine`
+- `mainFilePath` — el path del archivo principal (ya lo tienes)
+- `fileContextStr` — el bloque quirúrgico (ya lo tienes)
+- `reasoningContext` — output de la llamada 1 (ya lo tienes)
+
+-----
+
+## Cambio 2: Nuevo parser del JSON de la llamada 2
+
+Después de recibir la respuesta de Claude, reemplaza el parser actual por este:
+
+```typescript
+// Parsear respuesta de operaciones
+let operations: Array<{ type: string; path: string; old_str: string; new_str: string }> = [];
+let commitMessage = 'fix: patch aplicado por QUARK Agent';
+
+try {
+  const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
+  const parsed = JSON.parse(cleaned);
+  operations = parsed.operations ?? [];
+  commitMessage = parsed.commitMessage ?? commitMessage;
+} catch {
+  // Fallback: intentar extraer operaciones con regex
+  send('action', { text: '⚠️ JSON malformado — intentando reparar...' });
+  try {
+    const repaired = await repairOperationsJSON(raw);
+    operations = repaired.operations ?? [];
+    commitMessage = repaired.commitMessage ?? commitMessage;
+  } catch {
+    send('action', { text: '❌ No se pudo parsear el patch — abortando' });
+    send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+    res.end();
+    return;
+  }
+}
+```
+
+-----
+
+## Cambio 3: Función applyOperations (añadir cerca de repairJSON)
+
+Añade esta función en `agent.ts` cerca de donde está `repairJSON`:
+
+```typescript
+function applyOperations(
+  originalContent: string,
+  operations: Array<{ type: string; old_str: string; new_str: string }>,
+  filePath: string,
+  sendFn: (event: string, data: Record<string, unknown>) => void,
+): string {
+  let content = originalContent;
+
+  for (const op of operations) {
+    if (op.type !== 'str_replace') {
+      sendFn('action', { text: `⚠️ Operación desconocida '${op.type}' — omitida` });
+      continue;
+    }
+
+    const idx = content.indexOf(op.old_str);
+    if (idx === -1) {
+      sendFn('action', { text: `⚠️ str_replace sin match en ${filePath} — operación omitida` });
+      // NO aplicar — continuar con el contenido sin cambios
+      continue;
+    }
+
+    content = content.slice(0, idx) + op.new_str + content.slice(idx + op.old_str.length);
+    sendFn('action', { text: `✅ Patch aplicado en ${filePath}` });
+  }
+
+  return content;
+}
+```
+
+-----
+
+## Cambio 4: Reemplazar el merge quirúrgico actual por applyOperations
+
+Busca el bloque actual de merge (alrededor de línea 855) que usa `PATCH:X-Y` + splice, y reemplázalo por:
+
+```typescript
+// Construir archivos finales aplicando operaciones
+const finalFiles: { path: string; content: string }[] = [];
+
+for (const op of operations) {
+  // Buscar el fullContent del archivo en preloadedFiles
+  const preloaded = preloadedFiles.find(f => f.path === op.path);
+  const originalContent = preloaded?.fullContent ?? preloaded?.content ?? '';
+
+  if (!originalContent) {
+    send('action', { text: `⚠️ No se encontró contenido original para ${op.path}` });
+    continue;
+  }
+
+  // Aplicar todas las operaciones de este path
+  const opsForFile = operations.filter(o => o.path === op.path);
+  const patchedContent = applyOperations(originalContent, opsForFile, op.path, send);
+
+  // Evitar duplicados si hay múltiples ops para el mismo archivo
+  if (!finalFiles.find(f => f.path === op.path)) {
+    finalFiles.push({ path: op.path, content: patchedContent });
+  }
+}
+
+// Continuar con validación y send('done') usando finalFiles
+// (el resto del flujo — validación AI, send('done') — no cambia)
+```
+
+-----
+
+## Cambio 5: Función repairOperationsJSON (fallback)
+
+Añade esta función cerca de `repairJSON` existente:
+
+```typescript
+async function repairOperationsJSON(rawResponse: string): Promise<{
+  operations: Array<{ type: string; path: string; old_str: string; new_str: string }>;
+  commitMessage: string;
+}> {
+  const REPAIR_OPS_SYSTEM = `Eres un agente de reparación de JSON.
+Recibes una respuesta malformada y debes devolver JSON válido.
+REGLAS:
+- Devuelve SOLO el JSON, sin markdown ni explicaciones
+- El JSON debe tener exactamente: { "operations": [{"type": "str_replace", "path": string, "old_str": string, "new_str": string}], "commitMessage": string }
+- Escapa correctamente las comillas dentro de old_str y new_str`;
+
+  const text = await callAI(
+    'fix',
+    `Respuesta rota:\n${rawResponse.slice(0, 4000)}\n\nRepara el JSON de operaciones y devuélvelo válido.`,
+    REPAIR_OPS_SYSTEM,
+  );
+  return JSON.parse(text.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim());
+}
+```
+
+-----
+
+## Resumen de lo que NO cambia
+
+- `commitMultipleFiles()` en `github.ts` — igual, recibe `{ path, content }[]`
+- La llamada 1 de razonamiento — igual
+- Fast Mode completo — igual
+- El diff que ve el usuario en frontend — igual
+- `send('done', { files, commitMessage, ... })` — igual, solo cambia cómo se construye `files`
+- La validación AI post-patch — igual, opera sobre el contenido final
+
+## Orden de implementación sugerido
+
+1. Añadir `applyOperations()` y `repairOperationsJSON()`
+1. Cambiar el systemPrompt de la llamada 2
+1. Cambiar el parser del JSON
+1. Reemplazar el merge quirúrgico por `applyOperations`
+1. Probar con un archivo grande (+300 líneas) pidiendo un cambio de 1 línea
