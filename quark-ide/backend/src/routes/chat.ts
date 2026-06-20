@@ -163,6 +163,91 @@ async function streamGroq(
   throw new Error(`All ${GROQ_KEYS.length} Groq keys exhausted (started at key index ${startIndex})`);
 }
 
+const OPENROUTER_URL   = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_MODEL = 'meta-llama/llama-3.3-70b-instruct:free';
+const OPENROUTER_TIMEOUT_MS = 25_000;
+
+const OPENROUTER_KEYS = [
+  process.env.OPENROUTER_API_KEY,
+  process.env.OPENROUTER_API_KEY_2,
+  process.env.OPENROUTER_API_KEY_3,
+].filter(Boolean) as string[];
+
+async function streamOpenRouter(
+  messages: { role: string; content: string }[],
+  systemPrompt: string,
+  onChunk: (text: string) => void,
+): Promise<void> {
+  if (OPENROUTER_KEYS.length === 0) throw new Error('No OPENROUTER_API_KEY configured');
+
+  for (const key of OPENROUTER_KEYS) {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), OPENROUTER_TIMEOUT_MS);
+
+    try {
+      const res = await fetch(OPENROUTER_URL, {
+        method: 'POST',
+        signal: ctrl.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({
+          model: OPENROUTER_MODEL,
+          max_tokens: 1000,
+          stream: true,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            ...messages.map((m) => ({
+              role: m.role === 'assistant' ? 'assistant' : 'user',
+              content: m.content,
+            })),
+          ],
+        }),
+      });
+
+      if (res.status === 429) {
+        console.warn(`[chat] OpenRouter key …${key.slice(-4)} hit 429 — rotating`);
+        clearTimeout(timer);
+        continue;
+      }
+
+      if (!res.ok) throw new Error(`OpenRouter error: ${res.status} ${res.statusText}`);
+      if (!res.body) throw new Error('OpenRouter: no response body');
+
+      const reader  = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() ?? '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data:')) continue;
+          const data = trimmed.slice(5).trim();
+          if (data === '[DONE]') return;
+          try {
+            const json = JSON.parse(data) as {
+              choices?: Array<{ delta?: { content?: string } }>;
+            };
+            const chunk = json.choices?.[0]?.delta?.content;
+            if (chunk) onChunk(chunk);
+          } catch { /* ignore malformed SSE lines */ }
+        }
+      }
+      return;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  throw new Error('All OpenRouter keys exhausted');
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 const router = Router();
@@ -436,7 +521,17 @@ Usa este contexto para dar respuestas precisas y específicas al código real. C
   const emit = (chunk: string) => res.write(`data: ${JSON.stringify({ text: chunk })}\n\n`);
 
   try {
-    await streamGroq(messages, systemPrompt, emit);
+    try {
+      await streamGroq(messages, systemPrompt, emit);
+    } catch (groqErr) {
+      const groqMsg = groqErr instanceof Error ? groqErr.message : '';
+      if (groqMsg.includes('exhausted') || groqMsg.includes('429') || groqMsg.includes('No GROQ_API_KEY')) {
+        console.log('[chat] Groq exhausted — switching to OpenRouter');
+        await streamOpenRouter(messages, systemPrompt, emit);
+      } else {
+        throw groqErr;
+      }
+    }
     res.write('data: [DONE]\n\n');
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
