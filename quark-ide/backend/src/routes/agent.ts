@@ -435,6 +435,8 @@ router.post('/generate', async (req, res) => {
         send('action', { text: `🎯 Función detectada: ${functionName} — búsqueda quirúrgica` })
       }
 
+      let foundInPreSelected = false
+
       const readResults = await Promise.all(
         pathsToRead.map(async (filePath) => {
           try {
@@ -446,6 +448,7 @@ router.post('/generate', async (req, res) => {
             if (functionName) {
               const extracted = extractFunctionBlock(content, functionName)
               if (extracted) {
+                foundInPreSelected = true
                 send('action', { text: `✂️ Extrayendo ${functionName} (líneas ${extracted.startLine + 1}-${extracted.endLine + 1})` })
                 return {
                   path: filePath,
@@ -465,7 +468,41 @@ router.post('/generate', async (req, res) => {
         })
       )
 
-      const readFiles = readResults.filter((r): r is NonNullable<typeof r> => r !== null)
+      let readFiles = readResults.filter((r): r is NonNullable<typeof r> => r !== null)
+
+      // Fallback: si se buscaba una función específica y no apareció
+      // en los archivos pre-seleccionados, ampliar la búsqueda a TODO el árbol
+      if (functionName && !foundInPreSelected) {
+        send('action', { text: `🔬 ${functionName} no está en los archivos esperados — ampliando búsqueda al repo completo...` })
+
+        const allPaths = filePaths.split('\n').filter(p => p && !pathsToRead.includes(p))
+        const widerResults = await Promise.all(
+          allPaths.slice(0, 30).map(async (filePath) => {
+            try {
+              const content = await getFileContent(filePath, repo)
+              const extracted = extractFunctionBlock(content, functionName)
+              if (extracted) return { filePath, content, extracted }
+              return null
+            } catch {
+              return null
+            }
+          })
+        )
+
+        const hit = widerResults.find(r => r !== null)
+        if (hit) {
+          send('action', { text: `🎯 Encontrada en ${hit.filePath} (líneas ${hit.extracted.startLine + 1}-${hit.extracted.endLine + 1})` })
+          readFiles = [{
+            path: hit.filePath,
+            content: hit.extracted.block,
+            fullContent: hit.content,
+            startLine: hit.extracted.startLine,
+            endLine: hit.extracted.endLine,
+          }]
+        } else {
+          send('action', { text: `⚠️ ${functionName} no se encontró en ningún archivo del repo escaneado` })
+        }
+      }
 
       // ── AI analysis of read content ─────────────────────────────────────────
       if (readFiles.length > 0) {
