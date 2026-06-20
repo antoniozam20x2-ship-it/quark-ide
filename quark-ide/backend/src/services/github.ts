@@ -52,6 +52,22 @@ export async function getFileContent(path: string, repo?: string, branch?: strin
   return Buffer.from(data.content, 'base64').toString('utf-8');
 }
 
+export async function searchCodeInRepo(
+  query: string,
+  repo?: string,
+): Promise<{ path: string }[]> {
+  const r = requireRepo(repo);
+  try {
+    const { data } = await octokit.search.code({
+      q: `${query}+repo:${OWNER}/${r}`,
+    });
+    return data.items.map((item) => ({ path: item.path }));
+  } catch (err) {
+    console.warn(`[github] searchCodeInRepo failed for "${query}":`, err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
 export async function createOrUpdateFile(
   path: string,
   content: string,
