@@ -22,6 +22,9 @@ export interface DebugLoop {
   attempts: number;
   lastError?: string;
   commits?: string[];
+  message?: string;
+  linesAnalyzed?: number;
+  totalLines?: number;
 }
 
 const MAX_RETRIES = 3;
@@ -136,8 +139,6 @@ async function fetchDeploymentLogs(deploymentId: string): Promise<string> {
 async function analyzeLogsWithAI(logs: string): Promise<LogAnalysis> {
   const token = process.env.GROQ_API_KEY;
   if (!token) throw new Error('GROQ_API_KEY is not set');
-
-  console.log('[debugger] logs recibidos:', logs?.slice(0, 500));
 
   const res = await fetch(GROQ_URL, {
     method: 'POST',
@@ -293,7 +294,16 @@ export async function runDebugger(projectId: string, projectName = 'Unknown', re
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     const deploymentId = await getLatestDeploymentId(projectId);
     rawLogs = await fetchDeploymentLogs(deploymentId);
-    const analysis = await analyzeLogsWithAI(rawLogs);
+
+    // Pre-filtrado por severidad — evita saturar el contexto del modelo con líneas INFO
+    const allLines = rawLogs.split('\n');
+    const totalLines = allLines.length;
+    const errorLines = allLines.filter(line => line.includes('[ERROR]') || line.includes('[WARN]'));
+    const logsToAnalyze = errorLines.length > 0
+      ? errorLines.join('\n')
+      : allLines.slice(-100).join('\n'); // últimas 100 líneas si no hay errores/warns
+
+    const analysis = await analyzeLogsWithAI(logsToAnalyze);
 
     if (!analysis.hasError) {
       // Bug fix: logs look clean — only claim "fixed" if we actually committed something
@@ -308,6 +318,9 @@ export async function runDebugger(projectId: string, projectName = 'Unknown', re
         attempts: attempt,
         commits,
         lastError: fixed ? undefined : 'Logs sin errores detectados — no se aplicó ningún commit',
+        message: `Analizadas ${errorLines.length} líneas ERROR/WARN de ${totalLines} totales — sin errores críticos detectados`,
+        linesAnalyzed: errorLines.length,
+        totalLines,
       };
     }
 
