@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getFileTree, getFileContent } from '../services/github.js';
+import { getFileTree, getFileContent, searchCodeInRepo } from '../services/github.js';
 import { callAI } from '../lib/aiRouter.js';
 import { generateContent } from '../services/gemini.js';
 import pool from '../services/db.js';
@@ -473,72 +473,41 @@ router.post('/generate', async (req, res) => {
       // Fallback: si se buscaba una función específica y no apareció
       // en los archivos pre-seleccionados, ampliar la búsqueda a TODO el árbol
       if (functionName && !foundInPreSelected) {
-        send('action', { text: `🔬 ${functionName} no está en los archivos esperados — ampliando búsqueda al repo completo...` })
+        send('action', { text: `🔬 ${functionName} no está en los archivos esperados — buscando en GitHub directamente...` })
 
-        const allPaths = filePaths.split('\n').filter(p => p && !pathsToRead.includes(p))
+        const searchResults = await searchCodeInRepo(functionName, repo)
 
-        // Keywords de dominio fijas — vocabulario típico de trading bots
-        const DOMAIN_KEYWORDS = [
-          'engine', 'bot', 'trading', 'order', 'signal', 'screener',
-          'report', 'daily', 'autonomous', 'strategy', 'position',
-          'trailing', 'stop', 'risk', 'execution',
-        ]
+        if (searchResults.length > 0) {
+          send('action', { text: `📡 GitHub encontró ${searchResults.length} archivo(s) con "${functionName}"` })
 
-        // Keywords dinámicas — el AI analiza la pregunta específica
-        let dynamicKeywords: string[] = []
-        try {
-          const kwRaw = await generateWithFallback(
-            `Dado este nombre de función: "${functionName}" y esta pregunta: "${prompt}",
-genera 3-5 palabras clave que probablemente aparecen en el NOMBRE del archivo
-donde vive esta función (no en el contenido, en el nombre del archivo).
-Responde SOLO las palabras separadas por coma, en minúsculas, sin explicación.`,
-            'Responde SOLO palabras clave separadas por coma. Sin texto extra.'
+          const verifyResults = await Promise.all(
+            searchResults.slice(0, 5).map(async ({ path: filePath }) => {
+              try {
+                const content = await getFileContent(filePath, repo)
+                const extracted = extractFunctionBlock(content, functionName)
+                if (extracted) return { filePath, content, extracted }
+                return null
+              } catch {
+                return null
+              }
+            })
           )
-          dynamicKeywords = kwRaw.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
-          if (dynamicKeywords.length) {
-            send('action', { text: `🧠 Keywords generadas para priorizar archivos: ${dynamicKeywords.join(', ')}` })
+
+          const hit = verifyResults.find(r => r !== null)
+          if (hit) {
+            send('action', { text: `🎯 Encontrada en ${hit.filePath} (líneas ${hit.extracted.startLine + 1}-${hit.extracted.endLine + 1})` })
+            readFiles = [{
+              path: hit.filePath,
+              content: hit.extracted.block,
+              fullContent: hit.content,
+              startLine: hit.extracted.startLine,
+              endLine: hit.extracted.endLine,
+            }]
+          } else {
+            send('action', { text: `⚠️ GitHub mencionó "${functionName}" pero no se pudo extraer el bloque exacto` })
           }
-        } catch {
-          // Sin keywords dinámicas, seguimos solo con las de dominio
-        }
-
-        const allKeywords = [...dynamicKeywords, ...DOMAIN_KEYWORDS]
-
-        // Reordenar: archivos cuyo PATH contiene alguna keyword van primero
-        const prioritized = [...allPaths].sort((a, b) => {
-          const scoreOf = (p: string) => {
-            const lower = p.toLowerCase()
-            const idx = allKeywords.findIndex(kw => lower.includes(kw))
-            return idx === -1 ? allKeywords.length : idx
-          }
-          return scoreOf(a) - scoreOf(b)
-        })
-
-        const widerResults = await Promise.all(
-          prioritized.slice(0, 30).map(async (filePath) => {
-            try {
-              const content = await getFileContent(filePath, repo)
-              const extracted = extractFunctionBlock(content, functionName)
-              if (extracted) return { filePath, content, extracted }
-              return null
-            } catch {
-              return null
-            }
-          })
-        )
-
-        const hit = widerResults.find(r => r !== null)
-        if (hit) {
-          send('action', { text: `🎯 Encontrada en ${hit.filePath} (líneas ${hit.extracted.startLine + 1}-${hit.extracted.endLine + 1})` })
-          readFiles = [{
-            path: hit.filePath,
-            content: hit.extracted.block,
-            fullContent: hit.content,
-            startLine: hit.extracted.startLine,
-            endLine: hit.extracted.endLine,
-          }]
         } else {
-          send('action', { text: `⚠️ ${functionName} no se encontró en ningún archivo del repo escaneado` })
+          send('action', { text: `⚠️ ${functionName} no se encontró en GitHub Code Search` })
         }
       }
 

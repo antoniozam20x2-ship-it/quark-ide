@@ -1,0 +1,125 @@
+Modifica quark-ide/backend/src/routes/agent.ts
+
+Primero, agrega el import. Busca esta cadena exacta:
+
+"import { getFileTree, getFileContent } from '../services/github.js';"
+
+Reemplázala por:
+
+"import { getFileTree, getFileContent, searchCodeInRepo } from '../services/github.js';"
+
+─────────────────────────────────────
+
+Después, busca este bloque completo (el fallback 
+que agregamos antes, con DOMAIN_KEYWORDS y prioritized):
+
+"if (functionName && !foundInPreSelected) {
+        send('action', { text: `🔬 ${functionName} no está en los archivos esperados — ampliando búsqueda al repo completo...` })
+        const allPaths = filePaths.split('\n').filter(p => p && !pathsToRead.includes(p))
+        // Keywords de dominio fijas — vocabulario típico de trading bots
+        const DOMAIN_KEYWORDS = [
+          'engine', 'bot', 'trading', 'order', 'signal', 'screener',
+          'report', 'daily', 'autonomous', 'strategy', 'position',
+          'trailing', 'stop', 'risk', 'execution',
+        ]
+        // Keywords dinámicas — el AI analiza la pregunta específica
+        let dynamicKeywords: string[] = []
+        try {
+          const kwRaw = await generateWithFallback(
+            `Dado este nombre de función: "${functionName}" y esta pregunta: "${prompt}",
+genera 3-5 palabras clave que probablemente aparecen en el NOMBRE del archivo
+donde vive esta función (no en el contenido, en el nombre del archivo).
+Responde SOLO las palabras separadas por coma, en minúsculas, sin explicación.`,
+            'Responde SOLO palabras clave separadas por coma. Sin texto extra.'
+          )
+          dynamicKeywords = kwRaw.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
+          if (dynamicKeywords.length) {
+            send('action', { text: `🧠 Keywords generadas para priorizar archivos: ${dynamicKeywords.join(', ')}` })
+          }
+        } catch {
+          // Sin keywords dinámicas, seguimos solo con las de dominio
+        }
+        const allKeywords = [...dynamicKeywords, ...DOMAIN_KEYWORDS]
+        // Reordenar: archivos cuyo PATH contiene alguna keyword van primero
+        const prioritized = [...allPaths].sort((a, b) => {
+          const scoreOf = (p: string) => {
+            const lower = p.toLowerCase()
+            const idx = allKeywords.findIndex(kw => lower.includes(kw))
+            return idx === -1 ? allKeywords.length : idx
+          }
+          return scoreOf(a) - scoreOf(b)
+        })
+        const widerResults = await Promise.all(
+          prioritized.slice(0, 30).map(async (filePath) => {
+            try {
+              const content = await getFileContent(filePath, repo)
+              const extracted = extractFunctionBlock(content, functionName)
+              if (extracted) return { filePath, content, extracted }
+              return null
+            } catch {
+              return null
+            }
+          })
+        )
+
+        const hit = widerResults.find(r => r !== null)
+        if (hit) {
+          send('action', { text: `🎯 Encontrada en ${hit.filePath} (líneas ${hit.extracted.startLine + 1}-${hit.extracted.endLine + 1})` })
+          readFiles = [{
+            path: hit.filePath,
+            content: hit.extracted.block,
+            fullContent: hit.content,
+            startLine: hit.extracted.startLine,
+            endLine: hit.extracted.endLine,
+          }]
+        } else {
+          send('action', { text: `⚠️ ${functionName} no se encontró en ningún archivo del repo escaneado` })
+        }
+      }"
+
+Reemplázala por:
+
+"if (functionName && !foundInPreSelected) {
+        send('action', { text: `🔬 ${functionName} no está en los archivos esperados — buscando en GitHub directamente...` })
+
+        const searchResults = await searchCodeInRepo(functionName, repo)
+
+        if (searchResults.length > 0) {
+          send('action', { text: `📡 GitHub encontró ${searchResults.length} archivo(s) con "${functionName}"` })
+
+          const verifyResults = await Promise.all(
+            searchResults.slice(0, 5).map(async ({ path: filePath }) => {
+              try {
+                const content = await getFileContent(filePath, repo)
+                const extracted = extractFunctionBlock(content, functionName)
+                if (extracted) return { filePath, content, extracted }
+                return null
+              } catch {
+                return null
+              }
+            })
+          )
+
+          const hit = verifyResults.find(r => r !== null)
+          if (hit) {
+            send('action', { text: `🎯 Encontrada en ${hit.filePath} (líneas ${hit.extracted.startLine + 1}-${hit.extracted.endLine + 1})` })
+            readFiles = [{
+              path: hit.filePath,
+              content: hit.extracted.block,
+              fullContent: hit.content,
+              startLine: hit.extracted.startLine,
+              endLine: hit.extracted.endLine,
+            }]
+          } else {
+            send('action', { text: `⚠️ GitHub mencionó "${functionName}" pero no se pudo extraer el bloque exacto` })
+          }
+        } else {
+          send('action', { text: `⚠️ ${functionName} no se encontró en GitHub Code Search` })
+        }
+      }"
+
+CONDICIONES:
+1. Solo ese bloque, reemplaza el fallback anterior completo
+2. No toques nada más del archivo
+3. Muéstrame el bloque actualizado completo 
+   para verificar el diff
