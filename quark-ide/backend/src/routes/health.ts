@@ -90,7 +90,7 @@ async function pingAnthropic(): Promise<ApiKeyStatus> {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-3-haiku-20240307',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 1,
         messages: [{ role: 'user', content: 'hi' }],
       }),
@@ -174,7 +174,7 @@ async function pingGeminiKey(key: string, index: number): Promise<ApiKeyStatus> 
   const start = Date.now();
   try {
     const res = await timedFetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
