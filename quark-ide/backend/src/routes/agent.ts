@@ -1234,4 +1234,16 @@ router.post('/session', async (req, res) => {
   }
 });
 
+router.delete('/context', async (_req, res) => {
+  try {
+    await pool.query(
+      `DELETE FROM memory_entries WHERE key = $1 AND namespace = $2`,
+      ['agent-context', AGENT_SESSION_NS],
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 export default router;

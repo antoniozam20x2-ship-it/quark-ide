@@ -535,6 +535,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         {(feed.length > 0 || result || commitResult || fixResult) && !running && (
           <button
             onClick={() => {
+              fetch(`${API_BASE}/agent/context`, { method: 'DELETE' }).catch(() => {});
               setResult(null);
               setFeed([]);
               setCommitResult(null);
