@@ -1,0 +1,67 @@
+AUDIT MODE — no cambies nada en el código.
+Solo lectura y análisis completo.
+
+Necesito entender la arquitectura actual de 
+QUARK IDE para diseñar un router inteligente 
+llamado "QUARK Chat" que conecte Studio, 
+War Room y QUARK Agent.
+
+Responde a cada punto con código real 
+(no resúmenes genéricos):
+
+─────────────────────────────────────
+1. STUDIO — ¿cómo se guardan los proyectos?
+─────────────────────────────────────
+- ¿Dónde vive el estado de cada proyecto de Studio? 
+  (tabla de DB, archivo, memoria)
+- ¿Hay una función para listar proyectos existentes 
+  por nombre? (ej. buscar "sakura")
+- ¿Qué estructura de datos tiene un proyecto de Studio?
+  (nombre, archivos generados, pipeline de agentes, etc)
+- Muéstrame el código de la función que lee 
+  un proyecto específico de Studio
+
+─────────────────────────────────────
+2. WAR ROOM — ¿cómo se gestiona el estado de los bots?
+─────────────────────────────────────
+- ¿Dónde vive el estado actual de Signal OS / 
+  Sniper OS / Nexus OS?
+- ¿Hay un endpoint o función que devuelva un resumen 
+  del estado actual del bot (modo de mercado, 
+  últimas señales, configuración activa)?
+- ¿Cómo se registran las "últimas mejoras" o cambios 
+  recientes al bot? ¿hay un changelog o historial?
+- Muéstrame el código de cualquier función que 
+  devuelva un snapshot del estado del bot
+
+─────────────────────────────────────
+3. QUARK CHAT — el flujo actual
+─────────────────────────────────────
+- Encuentra el componente o página de QUARK Chat 
+  en el frontend
+- Muéstrame la función completa que envía el mensaje 
+  al backend (el fetch/axios)
+- ¿Cómo se arma el body del request? 
+  ¿incluye historial completo o solo el último mensaje?
+- Muéstrame la ruta del backend que recibe ese mensaje 
+  (probablemente chat.ts)
+- ¿El system prompt de chat.ts tiene awareness de 
+  Studio o War Room actualmente, o es un chat genérico?
+
+─────────────────────────────────────
+4. ROUTING ACTUAL entre Studio / War Room / Agent
+─────────────────────────────────────
+- ¿Cómo decide el usuario o el sistema a cuál 
+  destino mandar un prompt hoy? (botones manuales, 
+  detección automática, o no existe routing?)
+- Si hay botones, ¿qué endpoint llama cada uno?
+
+─────────────────────────────────────
+FORMATO DE RESPUESTA:
+Para cada sección, dame:
+- Ruta exacta del archivo
+- Líneas relevantes con número de línea
+- Una nota de 1 línea explicando qué hace
+
+No propongas soluciones todavía. 
+Solo necesito el mapa completo del sistema actual.
