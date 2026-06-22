@@ -761,14 +761,11 @@ REGLAS ESTRICTAS:
 
       // done with real file content — no commitMessage (read-only)
       const firstFile = readFiles[0];
-      const contentLines = firstFile?.content?.split('\n') ?? [];
       send('done', {
         files:         readFiles.map((f) => ({ path: f.path, content: f.content })),
         commitMessage: '',
         mainComponent: firstFile?.path ?? '',
-        mainContent:   contentLines.length <= 50 
-          ? (firstFile?.content ?? '')
-          : '',
+        mainContent:   '',
         repo,
         branch,
         contextSaved:  true,
