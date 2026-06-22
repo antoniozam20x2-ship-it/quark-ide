@@ -1065,7 +1065,8 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         {result && !running && isBackend && onSendToWarRoom && (
           readFilesRef.current.length > 0 || 
           (result.files?.length ?? 0) > 0 || 
-          !!result.mainContent
+          !!result.mainContent ||
+          feed.some((f) => f.event === 'action' && f.text?.startsWith('💡'))
         ) && (
           <button
             onClick={() => {
