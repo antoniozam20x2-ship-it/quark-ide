@@ -152,21 +152,45 @@ async function extractSearchTermsWithAI(challenge: string): Promise<string[]> {
         messages: [
           {
             role: 'system',
-            content: `Eres un extractor de términos técnicos para búsqueda en GitHub Code Search.
-Dado un challenge sobre un bot de crypto trading en TypeScript, responde 
-ÚNICAMENTE con un JSON array de máximo 4 strings.
+            content: `Eres un traductor de lenguaje natural a términos técnicos de código
+para búsqueda en GitHub Code Search.
 
-Reglas de mapeo:
-- Cualquier pregunta sobre señales S1/S2/S3/S4/S5/S6, scoring, 
-  FVG, indicadores → ["fEval", "tradingLogic", "checkS6Bull", "smartScore"]
-- ADX, RSI, EMA, Supertrend, indicadores técnicos → ["tradingLogic", "calcADX", "fEval"]
-- screener, scanner, filtro → ["tradingLogic", "fEval", "screener"]
-- bias, mercado, BTC → ["biasEngine", "bias"]
-- trailing, stop → ["trailingStop", "moving_plan"]
-- circuit breaker, streak → ["circuitBreaker", "streak"]
-- Prioriza SIEMPRE archivos en lib/ o services/ del api-server, 
-  NUNCA archivos .tsx, context/, components/
-Responde SOLO el array JSON, sin explicación, sin backticks`,
+El sistema es un bot de crypto trading en TypeScript/Node.js con esta arquitectura:
+- fEval() en tradingLogic.ts — motor principal de señales S1-S6 y scoring
+- checkS1Bull/Bear — señal RVOL burst
+- checkS3Bull/Bear — señal ADX + alineación de EMAs  
+- checkS5Bull/Bear — señal impulso/early crossover
+- checkS6Bull/Bear — señal FVG + aceleración EMA10
+- botEngine.ts — loop principal del bot
+- screener.ts / scanner.ts — filtrado de pares via CoinMarketCap
+- biasEngine.ts — sesgo de mercado BTC 1H
+
+INSTRUCCIÓN: Analiza el prompt y devuelve un JSON array de máximo 
+4 términos técnicos ESPECÍFICOS para esta pregunta concreta.
+
+MAPEO POR CONCEPTO:
+- S1, RVOL, volumen relativo → ["checkS1Bull", "checkS1Bear", "fEval"]
+- S2 → ["checkS2", "fEval", "tradingLogic"]
+- S3, alineación EMA, ADX confirmado → ["checkS3Bull", "checkS3Bear", "ADX_THRESHOLD_S3"]
+- S4 → ["checkS4", "fEval"]
+- S5, impulso, early, cruce EMA → ["checkS5ImpulsBull", "checkS5EarlyBull", "fEval"]
+- S6, FVG, fair value gap, aceleración → ["checkS6Bull", "checkS6Bear", "fEval"]
+- score, scoring, puntuación, calidad → ["smartScore", "minScore", "sa", "sb"]
+- bias, sesgo, BTC macro → ["biasEngine", "btcBias", "bias"]
+- trailing, stop móvil → ["trailingStop", "moving_plan", "rangeRate"]
+- streak, racha de pérdidas, circuit breaker → ["circuitBreaker", "streak", "consecutiveLosses"]
+- screener, qué pares opera, CoinMarketCap → ["scanner", "topPairs", "CoinMarketCap"]
+- entrada, cuándo entra el bot → ["fEval", "botEngine", "minScore"]
+- agotamiento, sobreextendido → ["agotActivo", "agotCnt", "fEval"]
+- supertrend, ST → ["calcSupertrend", "stDir", "stBull"]
+- RSI → ["calcRSI", "rsi", "fEval"]
+- ADX → ["calcADX", "adxConfirmado", "ADX_THRESHOLD_S3"]
+- EMA, medias móviles → ["calcEMAArray", "ema10", "ema34", "fEval"]
+
+Si la pregunta no matchea ningún concepto específico, devuelve 
+["fEval", "tradingLogic"] como base.
+
+Responde SOLO el array JSON. Sin explicación. Sin backticks.`,
           },
           {
             role: 'user',
@@ -321,9 +345,12 @@ async function resolveRepoContext(
     const keyFiles = allFiles.map((f) => ({
       path: f.path,
       content: f.content.length > 15_000
-        ? f.content.slice(0, 15_000) + '\n// ... (truncado por tamaño)'
+        ? f.content.slice(0, 15_000) + '\n// ... (truncado — archivo completo en GitHub)'
         : f.content,
     }));
+
+    console.log(`[warroom] Archivos cargados: ${keyFiles.map(f =>
+      `${f.path} (${f.content.length} chars)`).join(', ')}`);
 
     if (keyFiles.length === 0) {
       console.warn(`[warroom] No files loaded for ${repoName}`);
@@ -332,8 +359,17 @@ async function resolveRepoContext(
     if (keyFiles.length > 0) {
       console.log(`[warroom] Found ${keyFiles.length} relevant files: ${keyFiles.map((f) => f.path).join(', ')}`);
 
+      const sortedKeyFiles = [...keyFiles].sort((a, b) => {
+        const priority = (path: string) =>
+          path.includes('tradingLogic') ? 0 :
+          path.includes('botEngine') ? 1 :
+          path.includes('lib/') ? 2 :
+          path.includes('services/') ? 3 : 4;
+        return priority(a.path) - priority(b.path);
+      });
+
       await saveAgentContext({
-        preloadedFiles: keyFiles,
+        preloadedFiles: sortedKeyFiles,
         functionName:   null,
         prompt:         `[warroom auto-load for ${appName}: ${challenge}]`,
         repo:           repoName,
@@ -468,6 +504,13 @@ function buildContext(
       })
       .join('\n\n');
     repoCtx = `\n\nCódigo real del repositorio:\n\nEstructura de archivos:\n${treeStr}\n\nArchivos clave:\n${filesStr}`;
+  } else if (appName) {
+    repoCtx = `\n\nADVERTENCIA CRÍTICA: No tienes acceso al código real del repositorio 
+para esta consulta. NO inventes implementaciones, NO supongas cómo está implementado, 
+NO des respuestas técnicas específicas sin ver el código.
+En su lugar: indica explícitamente que necesitas acceso al archivo específico 
+para dar una respuesta precisa, y sugiere al usuario que use Quark Agent 
+para leer el archivo exacto primero.`;
   }
   let reportCtx = '';
   if (appName === 'Signal OS' && signalReport) {
