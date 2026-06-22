@@ -1,6 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { generateContent, GeminiAuthError } from '../services/gemini.js';
 import { saveToMemory } from '../services/rufloMemory.js';
+import { loadSharedAgentContext } from './chat.js';
+import { saveAgentContext } from './agent.js';
+import { getFileTree, getFileContent } from '../services/github.js';
 
 // ── Provider constants ────────────────────────────────────────────────────────
 
@@ -119,6 +122,82 @@ async function withFallbackChain(
     }
   }
   throw lastErr;
+}
+
+// ── appName display → GitHub repo name ───────────────────────────────────────
+
+const APP_NAME_TO_REPO: Record<string, string> = {
+  'Signal OS': 'Ahorar',
+  'Sniper OS': 'Trade-SnipeOS',
+  'Nexus OS':  'NEXUS-OS-app',
+  'Core AI':   'Code-Coretest',
+  'Quark IDE': 'quark-ide',
+};
+
+const REPO_FILE_PRIORITY = [
+  /server\.(ts|js)$/,
+  /routes\//,
+  /services\//,
+  /engine\.(ts|js)$/,
+];
+
+async function resolveRepoContext(
+  appName: string | null | undefined,
+  repoContext?: RepoContextPayload,
+): Promise<RepoContextPayload | undefined> {
+  // Step 1: frontend sent real content → use it as-is
+  if (repoContext && (repoContext.tree.length > 0 || repoContext.keyFiles.length > 0)) {
+    return repoContext;
+  }
+
+  const repoName = appName ? APP_NAME_TO_REPO[appName] : undefined;
+  if (!repoName) return undefined;
+
+  // Step 2: try the shared cache written by Agent
+  try {
+    const cached = await loadSharedAgentContext(repoName);
+    if (cached && cached.preloadedFiles.length > 0) {
+      return {
+        tree:     cached.preloadedFiles.map((f) => f.path),
+        keyFiles: cached.preloadedFiles.map((f) => ({ path: f.path, content: f.content })),
+      };
+    }
+  } catch { /* non-blocking */ }
+
+  // Step 3: nothing cached — fetch from GitHub and persist for Chat, Agent, and War Room
+  if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_OWNER) return undefined;
+  try {
+    const fullTree = await getFileTree(repoName, 'main');
+    const paths = fullTree
+      .filter((f) => f.type === 'blob')
+      .filter((f) => !f.path.includes('node_modules') && !f.path.includes('dist/') && !f.path.includes('.lock'))
+      .sort((a, b) => {
+        const score = (p: string) => REPO_FILE_PRIORITY.some((rx) => rx.test(p)) ? 0 : 1;
+        return score(a.path) - score(b.path);
+      })
+      .slice(0, 6)
+      .map((f) => f.path);
+
+    const results = await Promise.allSettled(
+      paths.map(async (p) => ({ path: p, content: await getFileContent(p, repoName, 'main') })),
+    );
+    const keyFiles = results
+      .filter((r): r is PromiseFulfilledResult<{ path: string; content: string }> => r.status === 'fulfilled')
+      .map((r) => r.value);
+
+    if (keyFiles.length > 0) {
+      await saveAgentContext({
+        preloadedFiles: keyFiles,
+        functionName:   null,
+        prompt:         `[warroom auto-load for ${appName}]`,
+        repo:           repoName,
+      }).catch(() => { /* non-blocking */ });
+
+      return { tree: keyFiles.map((f) => f.path), keyFiles };
+    }
+  } catch { /* non-blocking */ }
+
+  return undefined;
 }
 
 // ── Signal OS report fetch ────────────────────────────────────────────────────
@@ -470,7 +549,8 @@ router.post('/board', async (req: Request, res: Response) => {
   }
 
   try {
-    const response = await callBoardMember(member, challenge, appName ?? null, repoContext);
+    const resolvedCtx = await resolveRepoContext(appName, repoContext);
+    const response = await callBoardMember(member, challenge, appName ?? null, resolvedCtx);
     res.json({ role: member, response });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -493,6 +573,8 @@ router.post('/swarm', async (req: Request, res: Response) => {
   const resolvedApp = appName ?? null;
   const start = Date.now();
   try {
+    const resolvedCtx = await resolveRepoContext(appName, repoContext);
+
     let signalReport: string | null = null;
     let sniperReport: string | null = null;
     if (resolvedApp === 'Signal OS') {
@@ -503,10 +585,10 @@ router.post('/swarm', async (req: Request, res: Response) => {
     }
 
     const [ceo, cto, designer, qa] = await Promise.all([
-      callBoardMember('CEO',      challenge, resolvedApp, repoContext, signalReport, sniperReport, useClaudeThinking),
-      callBoardMember('CTO',      challenge, resolvedApp, repoContext, signalReport, sniperReport, useClaudeThinking),
-      callBoardMember('Designer', challenge, resolvedApp, repoContext, signalReport, sniperReport, useClaudeThinking),
-      callBoardMember('QA',       challenge, resolvedApp, repoContext, signalReport, sniperReport, useClaudeThinking),
+      callBoardMember('CEO',      challenge, resolvedApp, resolvedCtx, signalReport, sniperReport, useClaudeThinking),
+      callBoardMember('CTO',      challenge, resolvedApp, resolvedCtx, signalReport, sniperReport, useClaudeThinking),
+      callBoardMember('Designer', challenge, resolvedApp, resolvedCtx, signalReport, sniperReport, useClaudeThinking),
+      callBoardMember('QA',       challenge, resolvedApp, resolvedCtx, signalReport, sniperReport, useClaudeThinking),
     ]);
 
     const consensus = await generateConsensus(challenge, { CEO: ceo, CTO: cto, Designer: designer, QA: qa }, useClaudeThinking);

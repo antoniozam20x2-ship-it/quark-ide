@@ -30,7 +30,7 @@ async function saveAgentSession(content: string): Promise<void> {
   );
 }
 
-async function saveAgentContext(ctx: {
+export async function saveAgentContext(ctx: {
   preloadedFiles: { path: string; content: string; fullContent?: string; startLine?: number; endLine?: number }[]
   functionName: string | null
   prompt: string

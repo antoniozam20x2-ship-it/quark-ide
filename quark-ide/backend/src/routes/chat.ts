@@ -31,7 +31,7 @@ async function saveMessage(conversationId: number, role: string, content: string
   );
 }
 
-async function loadSharedAgentContext(repo: string): Promise<{
+export async function loadSharedAgentContext(repo: string): Promise<{
   preloadedFiles: { path: string; content: string }[]
 } | null> {
   try {
