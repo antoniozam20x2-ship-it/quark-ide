@@ -1052,16 +1052,16 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
             )}
 
             {/* Enviar a War Room */}
-            {onSendToWarRoom && (result.files?.length ?? 0) > 0 && (
+            {onSendToWarRoom && ((result.files?.length ?? 0) > 0 || !!result.mainContent) && (
               <button
                 onClick={() => {
                   onSendToWarRoom({
                     challenge: currentPromptRef.current,
                     appName: activeProject.name,
-                    repoContext: {
-                      tree: result.files!.map((f) => f.path),
-                      keyFiles: result.files!.map((f) => ({ path: f.path, content: f.content })),
-                    },
+                    repoContext: result.files?.length ? {
+                      tree: result.files.map((f) => f.path),
+                      keyFiles: result.files.map((f) => ({ path: f.path, content: f.content })),
+                    } : undefined,
                   });
                 }}
                 style={{
