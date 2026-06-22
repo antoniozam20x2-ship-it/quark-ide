@@ -152,23 +152,22 @@ async function extractSearchTermsWithAI(challenge: string): Promise<string[]> {
         messages: [
           {
             role: 'system',
-            content: `Eres un extractor de términos técnicos de código.
-Dado un challenge en lenguaje natural, responde ÚNICAMENTE con un JSON array 
-de strings con los identificadores técnicos más relevantes para buscar en un 
-repositorio TypeScript de un bot de crypto trading.
+            content: `Eres un extractor de términos técnicos de código para búsqueda en GitHub.
+Dado un challenge en lenguaje natural sobre un bot de crypto trading 
+(Node.js/TypeScript backend), responde ÚNICAMENTE con un JSON array 
+de strings con los identificadores técnicos más relevantes para buscar 
+en archivos de BACKEND (lib/, services/, routes/ del api-server).
 
 Reglas:
 - Máximo 4 términos
-- Prioriza: nombres de variables, funciones, constantes que probablemente 
-  existan en el código (camelCase, UPPER_CASE, siglas técnicas)
-- Si mencionan ADX → incluye "ADX" y "adxValue" o "adxThreshold"
-- Si mencionan score/scoring → incluye "smartScore" y "minScore"  
-- Si mencionan señales S1-S6 → incluye "S1" o el específico mencionado
-- Si mencionan filtro/filter → incluye "minScore" o "threshold"
-- Si mencionan entrada/entry → incluye "entry" y "signal"
-- Si mencionan trailing → incluye "trailingStop"
-- Si mencionan bias → incluye "biasEngine"
-- Responde SOLO el array JSON, sin explicación, sin markdown`,
+- Prioriza identificadores que existan en lógica de cálculo, NO en UI/frontend
+- Si mencionan señal S1-S6 o "sig1"-"sig6" → busca "scoreS6", "S6", "signalScore", "calculateS6"
+- Si mencionan score/scoring → busca "smartScore", "minScore", "calculateScore"
+- Si mencionan ADX → busca "adxValue", "adxThreshold", "ADX"
+- Si mencionan screener/scanner → busca "screener", "botEngine", "scoring"
+- Si mencionan argumentos/parámetros de una señal → busca el nombre técnico 
+  de esa señal (S1, S2... S6) más "score" o "calculate"
+- Responde SOLO el array JSON, sin explicación, sin markdown, sin backticks`,
           },
           {
             role: 'user',
@@ -262,7 +261,12 @@ async function resolveRepoContext(
 
     const keyFiles = results
       .filter((r): r is PromiseFulfilledResult<{ path: string; content: string }> => r.status === 'fulfilled')
-      .map((r) => r.value);
+      .map((r) => r.value)
+      .filter((f) => f.content.length <= 15_000);
+
+    if (keyFiles.length === 0) {
+      console.warn(`[warroom] All found files exceeded 15k char limit, skipping`);
+    }
 
     if (keyFiles.length > 0) {
       console.log(`[warroom] Found ${keyFiles.length} relevant files: ${keyFiles.map((f) => f.path).join(', ')}`);
@@ -396,8 +400,8 @@ function buildContext(
     const filesStr = repoContext.keyFiles
       .map((f) => {
         const lines = f.content.split('\n')
-        const truncated = lines.length > 200
-          ? lines.slice(0, 200).join('\n') + `\n// ... (${lines.length - 200} líneas más)`
+        const truncated = lines.length > 120
+          ? lines.slice(0, 120).join('\n') + `\n// ... (${lines.length - 120} líneas más)`
           : f.content
         return `--- ${f.path} ---\n${truncated}`
       })

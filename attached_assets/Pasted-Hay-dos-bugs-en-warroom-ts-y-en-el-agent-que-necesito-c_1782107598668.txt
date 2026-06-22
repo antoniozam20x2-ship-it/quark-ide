@@ -1,0 +1,69 @@
+Hay dos bugs en warroom.ts y en el agent que necesito corregir.
+
+## BUG 1 — Archivos muy grandes explotan Groq (error 413)
+
+En buildContext(), el truncado actual es 200 líneas por archivo. 
+Cambiar a 120 líneas máximo:
+
+Reemplazar:
+        const truncated = lines.length > 200
+          ? lines.slice(0, 200).join('\n') + `\n// ... (${lines.length - 200} líneas más)`
+          : f.content
+
+Con:
+        const truncated = lines.length > 120
+          ? lines.slice(0, 120).join('\n') + `\n// ... (${lines.length - 120} líneas más)`
+          : f.content
+
+Además, en resolveRepoContext(), al cargar los keyFiles, filtrar archivos 
+que pesen más de 15,000 chars ANTES de enviarlos:
+
+Reemplazar:
+    const keyFiles = results
+      .filter((r): r is PromiseFulfilledResult<{ path: string; content: string }> => r.status === 'fulfilled')
+      .map((r) => r.value);
+
+Con:
+    const keyFiles = results
+      .filter((r): r is PromiseFulfilledResult<{ path: string; content: string }> => r.status === 'fulfilled')
+      .map((r) => r.value)
+      .filter((f) => f.content.length <= 15_000);
+
+    if (keyFiles.length === 0) {
+      console.warn(`[warroom] All found files exceeded 15k char limit, skipping`);
+    }
+
+
+## BUG 2 — La búsqueda encuentra frontend en vez de backend
+
+En extractSearchTermsWithAI(), mejorar el system prompt para que 
+Groq priorice archivos de backend/lib cuando la pregunta es sobre 
+lógica de señales o scoring.
+
+Reemplazar el content del system prompt de extractSearchTermsWithAI con:
+
+`Eres un extractor de términos técnicos de código para búsqueda en GitHub.
+Dado un challenge en lenguaje natural sobre un bot de crypto trading 
+(Node.js/TypeScript backend), responde ÚNICAMENTE con un JSON array 
+de strings con los identificadores técnicos más relevantes para buscar 
+en archivos de BACKEND (lib/, services/, routes/ del api-server).
+
+Reglas:
+- Máximo 4 términos
+- Prioriza identificadores que existan en lógica de cálculo, NO en UI/frontend
+- Si mencionan señal S1-S6 o "sig1"-"sig6" → busca "scoreS6", "S6", "signalScore", "calculateS6"
+- Si mencionan score/scoring → busca "smartScore", "minScore", "calculateScore"
+- Si mencionan ADX → busca "adxValue", "adxThreshold", "ADX"
+- Si mencionan screener/scanner → busca "screener", "botEngine", "scoring"
+- Si mencionan argumentos/parámetros de una señal → busca el nombre técnico 
+  de esa señal (S1, S2... S6) más "score" o "calculate"
+- Responde SOLO el array JSON, sin explicación, sin markdown, sin backticks`
+
+
+## RESULTADO ESPERADO
+Pregunta: "¿Cuáles son los argumentos de la señal S6 en Signal OS?"
+→ Groq extrae: ["S6", "scoreS6", "calculateS6", "botEngine"]
+→ Busca "S6" en GitHub repo Ahorar → encuentra botEngine.ts o scoring.ts
+→ Carga ese archivo (si pesa menos de 15k) → War Room ve la lógica real
+
+No tocar nada más. Solo los tres cambios descritos.
