@@ -352,6 +352,12 @@ async function extractKeywordsForSearch(prompt: string): Promise<string[]> {
             content: `Eres un traductor de lenguaje natural a términos técnicos de código 
 para un bot de crypto trading en TypeScript/Node.js.
 
+IMPORTANTE: "Signal OS" es el nombre de una app de trading, 
+NO el sistema operativo Linux. Las señales S1-S6 son estrategias 
+de trading técnico, NO señales Unix (SIGKILL, SIGTERM, etc.).
+Si el prompt menciona "Signal OS" con S1-S6, siempre busca 
+en el contexto de trading crypto.
+
 ARQUITECTURA DEL SISTEMA:
 - El motor principal es la función fEval() en tradingLogic.ts
 - fEval() calcula scores (sa, sb), señales (sig1-sig6), indicadores
@@ -380,6 +386,7 @@ MAPEO DE CONCEPTOS:
 - "historial" o "trades" o "resultados" → getRealTradeHistory, tradingLogic
 - "entrada" o "cuándo entra" o "condición de entrada" → fEval, botEngine
 - "screener" o "escaneo" o "filtrado de pares" → screener, minScore
+- "argumentos" o "parámetros" o "condiciones" o "requisitos" o "cuándo se activa" o "qué necesita" → mapear según la señal mencionada en el prompt (S1→checkS1Bull, S2→checkS2, S3→checkS3Bull, S4→checkS4, S5→checkS5ImpulsBull, S6→checkS6Bull); si no hay señal específica → fEval, tradingLogic
 
 DISTINCIÓN CRÍTICA — dos sistemas de escaneo:
 - Si el usuario pregunta por señales, condiciones técnicas, cuándo entra 
@@ -435,6 +442,9 @@ async function searchAndLoadFiles(
     'signalDirection',
     'SignalContext',
     'SignalBubbles',
+    'lib/api-zod/',
+    'generated/',
+    'db.ts',
   ];
 
   const isCodeFile = (path: string): boolean =>
