@@ -72,6 +72,7 @@ export default function App() {
             }}
             initialPrompt={pipelinePrompt}
             onPromptConsumed={() => setPipelinePrompt('')}
+            onSendToWarRoom={(brief) => { setBoardBrief(brief); setPage('warroom'); }}
           />
         )}
         {page === 'editor' && (

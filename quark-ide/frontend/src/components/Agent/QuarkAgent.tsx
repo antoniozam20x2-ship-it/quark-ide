@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import type { Project } from '../../App';
+import type { Project, BoardBrief } from '../../App';
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
 
@@ -125,12 +125,13 @@ interface Props {
   onApplyToEditor: (code: string) => void;
   onShowPreview: (html: string) => void;
   initialPrompt?: string;
+  onSendToWarRoom?: (brief: BoardBrief) => void;
 }
 
 const LS_REPO_KEY      = 'quark-agent-repo';
 const LS_DEEPMODE_KEY  = 'quark-agent-deepmode';
 
-export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPreview, initialPrompt }: Props) {
+export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPreview, initialPrompt, onSendToWarRoom }: Props) {
   const [prompt, setPrompt]               = useState('');
   const [selectedRepo, setSelectedRepo]   = useState(
     () => localStorage.getItem(LS_REPO_KEY) ?? activeProject.repo ?? 'quark-ide',
@@ -150,6 +151,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   const previewTriggeredRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const agentTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const currentPromptRef = useRef('');
 
   // Keep a live ref so closures in useEffect always read the current value
   const isBackend = isBackendProject(activeProject.name);
@@ -328,6 +330,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   async function generate(promptOverride?: string) {
     const text = (promptOverride ?? prompt).trim();
     if (!text || running) return;
+    currentPromptRef.current = text;
     if (agentTextareaRef.current) agentTextareaRef.current.style.height = '44px';
     setRunning(true);
     setFeed([]);
@@ -1046,6 +1049,35 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                   ✅ Diagnóstico completado — sin archivos para commit
                 </div>
               )
+            )}
+
+            {/* Enviar a War Room */}
+            {onSendToWarRoom && (result.files?.length ?? 0) > 0 && (
+              <button
+                onClick={() => {
+                  onSendToWarRoom({
+                    challenge: currentPromptRef.current,
+                    appName: activeProject.name,
+                    repoContext: {
+                      tree: result.files!.map((f) => f.path),
+                      keyFiles: result.files!.map((f) => ({ path: f.path, content: f.content })),
+                    },
+                  });
+                }}
+                style={{
+                  width: '100%', padding: '10px 14px',
+                  background: 'rgba(0,255,136,0.07)',
+                  border: '1px solid #1e3f2a',
+                  borderRadius: 7, color: '#00ff88',
+                  fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: 700,
+                  cursor: 'pointer', letterSpacing: '0.05em', transition: 'background 0.15s',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(0,255,136,0.14)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(0,255,136,0.07)'; }}
+              >
+                🏛 Enviar a War Room
+              </button>
             )}
           </div>
         )}

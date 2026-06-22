@@ -226,7 +226,14 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
 
   function handleSendToAgent() {
     if (!onSendToAgent || !consensus || consensus === 'generating') return;
-    onSendToAgent(consensus, effectiveRepo);
+    let promptWithFiles = consensus;
+    if (repoContextRef.current?.keyFiles?.length) {
+      const filesSection = repoContextRef.current.keyFiles
+        .map((f) => `--- ${f.path} ---\n${f.content.slice(0, 3000)}`)
+        .join('\n\n');
+      promptWithFiles = `${consensus}\n\nARCHIVOS DISPONIBLES:\n${filesSection}`;
+    }
+    onSendToAgent(promptWithFiles, effectiveRepo);
   }
 
   return (

@@ -1,15 +1,16 @@
 import { useEffect } from 'react';
 import QuarkAgent from '../components/Agent/QuarkAgent';
-import { PROJECTS, type Project } from '../App';
+import { PROJECTS, type Project, type BoardBrief } from '../App';
 
 interface AgentPageProps {
   onOpenEditor: (showPreview?: boolean) => void;
   initialPrompt?: string;
   onPromptConsumed?: () => void;
   activeProject?: Project;
+  onSendToWarRoom?: (brief: BoardBrief) => void;
 }
 
-export default function AgentPage({ onOpenEditor, initialPrompt, onPromptConsumed, activeProject }: AgentPageProps) {
+export default function AgentPage({ onOpenEditor, initialPrompt, onPromptConsumed, activeProject, onSendToWarRoom }: AgentPageProps) {
   useEffect(() => {
     if (initialPrompt) onPromptConsumed?.();
   }, [initialPrompt]);
@@ -21,6 +22,7 @@ export default function AgentPage({ onOpenEditor, initialPrompt, onPromptConsume
         onApplyToEditor={() => {}}
         onShowPreview={() => onOpenEditor(true)}
         initialPrompt={initialPrompt}
+        onSendToWarRoom={onSendToWarRoom}
       />
     </div>
   );
