@@ -450,10 +450,39 @@ async function searchAndLoadFiles(
       send('action', { text: `📂 Encontrado con "${term}" — leyendo ${Math.min(codeFiles.length, 3)} archivo(s)...` });
 
       const loaded = await Promise.allSettled(
-        codeFiles.slice(0, 3).map(async (r) => ({
-          path: r.path,
-          content: await getFileContent(r.path, repo),
-        }))
+        codeFiles.slice(0, 3).map(async (r) => {
+          const fullContent = await getFileContent(r.path, repo);
+          const lines = fullContent.split('\n');
+          
+          if (lines.length <= 300) {
+            return { path: r.path, content: fullContent };
+          }
+
+          // Archivo grande — encontrar la sección relevante
+          // Buscar el término que dio hit y extraer ±150 líneas
+          const hitTerm = searchTerms.find(t => 
+            fullContent.toLowerCase().includes(t.toLowerCase())
+          ) ?? searchTerms[0];
+          
+          const hitLine = lines.findIndex(l => 
+            l.toLowerCase().includes(hitTerm.toLowerCase())
+          );
+
+          if (hitLine === -1) {
+            return { path: r.path, content: lines.slice(0, 300).join('\n') };
+          }
+
+          const start = Math.max(0, hitLine - 50);
+          const end = Math.min(lines.length, hitLine + 250);
+          const section = lines.slice(start, end).join('\n');
+          
+          console.log(`[agent] ${r.path}: extracting lines ${start}-${end} around "${hitTerm}" (hit at line ${hitLine})`);
+          
+          return { 
+            path: r.path, 
+            content: `// ... (líneas 1-${start} omitidas)\n\n${section}\n\n// ... (líneas ${end}-${lines.length} omitidas)`
+          };
+        })
       );
 
       return loaded
