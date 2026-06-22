@@ -205,13 +205,33 @@ async function searchWithAITerms(
     return searchCodeInRepo(fallbackWords.join(' '), repoName);
   }
 
+  const EXCLUDED_PATHS = [
+    'attached_assets/',
+    'replit.md',
+    '.txt',
+    'README',
+    'node_modules/',
+    '.md',
+  ];
+
+  function isCodeFile(path: string): boolean {
+    return !EXCLUDED_PATHS.some((exclude) => path.includes(exclude));
+  }
+
   for (const term of terms) {
     const results = await searchCodeInRepo(term, repoName);
-    if (results.length > 0) {
-      console.log(`[warroom] Term "${term}" → ${results.length} files: ${results.map(r => r.path).join(', ')}`);
-      return results;
+    const codeOnly = results.filter((r) => isCodeFile(r.path));
+
+    if (codeOnly.length > 0) {
+      console.log(`[warroom] Term "${term}" → ${codeOnly.length} code files: ${codeOnly.map(r => r.path).join(', ')}`);
+      return codeOnly;
     }
-    console.log(`[warroom] Term "${term}" → 0 results, trying next term...`);
+
+    if (results.length > 0) {
+      console.log(`[warroom] Term "${term}" → ${results.length} results but all non-code, trying next term...`);
+    } else {
+      console.log(`[warroom] Term "${term}" → 0 results, trying next term...`);
+    }
   }
 
   return [];
