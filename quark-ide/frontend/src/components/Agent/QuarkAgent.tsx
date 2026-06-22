@@ -1058,42 +1058,54 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               )
             )}
 
-            {/* Enviar a War Room */}
-            {onSendToWarRoom && (
-              (result.files?.length ?? 0) > 0 ||
-              !!result.mainContent ||
-              readFilesRef.current.length > 0
-            ) ? (
-              <button
-                onClick={() => {
-                  const filesToSend = result.files?.length
-                    ? result.files
-                    : readFilesRef.current;
-                  onSendToWarRoom({
-                    challenge: currentPromptRef.current,
-                    appName: activeProject.name,
-                    repoContext: filesToSend.length ? {
-                      tree: filesToSend.map((f) => f.path),
-                      keyFiles: filesToSend.map((f) => ({ path: f.path, content: f.content })),
-                    } : undefined,
-                  });
-                }}
-                style={{
-                  width: '100%', padding: '10px 14px',
-                  background: 'rgba(0,255,136,0.07)',
-                  border: '1px solid #1e3f2a',
-                  borderRadius: 7, color: '#00ff88',
-                  fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: 700,
-                  cursor: 'pointer', letterSpacing: '0.05em', transition: 'background 0.15s',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(0,255,136,0.14)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(0,255,136,0.07)'; }}
-              >
-                🏛 Enviar a War Room
-              </button>
-            ) : null}
           </div>
+        )}
+
+        {/* Enviar a War Room — siempre visible si hay resultado */}
+        {result && !running && isBackend && onSendToWarRoom && (
+          readFilesRef.current.length > 0 || 
+          (result.files?.length ?? 0) > 0 || 
+          !!result.mainContent
+        ) && (
+          <button
+            onClick={() => {
+              const filesToSend = readFilesRef.current.length > 0
+                ? readFilesRef.current
+                : (result.files ?? []);
+              onSendToWarRoom({
+                challenge: currentPromptRef.current,
+                appName: activeProject.name,
+                repoContext: filesToSend.length ? {
+                  tree: filesToSend.map((f) => f.path),
+                  keyFiles: filesToSend.map((f) => ({ 
+                    path: f.path, 
+                    content: f.content 
+                  })),
+                } : undefined,
+              });
+            }}
+            style={{
+              width: '100%', padding: '10px 14px',
+              background: 'rgba(0,255,136,0.07)',
+              border: '1px solid #1e3f2a',
+              borderRadius: 7, color: '#00ff88',
+              fontFamily: 'JetBrains Mono, monospace', 
+              fontSize: 12, fontWeight: 700,
+              cursor: 'pointer', letterSpacing: '0.05em', 
+              transition: 'background 0.15s',
+              display: 'flex', alignItems: 'center', 
+              justifyContent: 'center', gap: 8,
+              marginTop: 8,
+            }}
+            onMouseEnter={(e) => { 
+              e.currentTarget.style.background = 'rgba(0,255,136,0.14)'; 
+            }}
+            onMouseLeave={(e) => { 
+              e.currentTarget.style.background = 'rgba(0,255,136,0.07)'; 
+            }}
+          >
+            🏛 Enviar a War Room
+          </button>
         )}
 
         {/* ── UI PROJECT result panel ───────────────────────────────────────── */}

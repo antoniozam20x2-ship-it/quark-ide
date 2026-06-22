@@ -1,0 +1,79 @@
+En QuarkAgent.tsx, el botón "Enviar a War Room" no aparece 
+en modo lectura porque result.files está vacío — los archivos 
+leídos están en readFilesRef.current pero la condición no los detecta.
+
+Buscar la condición del botón "Enviar a War Room":
+
+            {onSendToWarRoom && (
+              (result.files?.length ?? 0) > 0 ||
+              !!result.mainContent ||
+              readFilesRef.current.length > 0
+            ) ? (
+
+El problema es que este botón está dentro del bloque 
+"isBackend && result && !running" pero DESPUÉS del bloque 
+de commitResult/diff/readonly. Cuando es modo lectura el 
+flujo entra en el bloque readonly y nunca llega al botón.
+
+Mover el botón "Enviar a War Room" para que aparezca 
+SIEMPRE al final del panel backend, fuera de todos los 
+bloques condicionales de commit/diff/readonly.
+
+Buscar el cierre del panel backend completo:
+        )}
+
+        {/* ── UI PROJECT result panel
+
+Y ANTES de ese comentario, agregar el botón así:
+
+        {/* Enviar a War Room — siempre visible si hay resultado */}
+        {result && !running && isBackend && onSendToWarRoom && (
+          readFilesRef.current.length > 0 || 
+          (result.files?.length ?? 0) > 0 || 
+          !!result.mainContent
+        ) && (
+          <button
+            onClick={() => {
+              const filesToSend = readFilesRef.current.length > 0
+                ? readFilesRef.current
+                : (result.files ?? []);
+              onSendToWarRoom({
+                challenge: currentPromptRef.current,
+                appName: activeProject.name,
+                repoContext: filesToSend.length ? {
+                  tree: filesToSend.map((f) => f.path),
+                  keyFiles: filesToSend.map((f) => ({ 
+                    path: f.path, 
+                    content: f.content 
+                  })),
+                } : undefined,
+              });
+            }}
+            style={{
+              width: '100%', padding: '10px 14px',
+              background: 'rgba(0,255,136,0.07)',
+              border: '1px solid #1e3f2a',
+              borderRadius: 7, color: '#00ff88',
+              fontFamily: 'JetBrains Mono, monospace', 
+              fontSize: 12, fontWeight: 700,
+              cursor: 'pointer', letterSpacing: '0.05em', 
+              transition: 'background 0.15s',
+              display: 'flex', alignItems: 'center', 
+              justifyContent: 'center', gap: 8,
+              marginTop: 8,
+            }}
+            onMouseEnter={(e) => { 
+              e.currentTarget.style.background = 'rgba(0,255,136,0.14)'; 
+            }}
+            onMouseLeave={(e) => { 
+              e.currentTarget.style.background = 'rgba(0,255,136,0.07)'; 
+            }}
+          >
+            🏛 Enviar a War Room
+          </button>
+        )}
+
+Y eliminar el botón "Enviar a War Room" anterior que 
+está dentro del bloque de backend para evitar duplicados.
+
+Solo este cambio.
