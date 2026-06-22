@@ -379,7 +379,7 @@ MAPEO DE CONCEPTOS:
 - "ADX" o "tendencia fuerte" o "dirección" → calcADX, tradingLogic, fEval
 - "RSI" o "sobrecomprado" o "sobrevendido" → calcRSI, tradingLogic
 - "Supertrend" o "ST" o "tendencia principal" → calcSupertrend, tradingLogic
-- "trailing" o "stop móvil" o "proteger ganancia" → trailingStop, moving_plan
+- "trailing" o "stop móvil" o "proteger ganancia" o "trailing stop" → ["trailingStop", "moving_plan", "rangeRate", "botEngine"]
 - "bias" o "sesgo" o "BTC" o "mercado general" → biasEngine, bias
 - "streak" o "racha" o "pérdidas consecutivas" → circuitBreaker, streak
 - "balance" o "cuenta" o "capital" → getRealBalance, tradingLogic
@@ -445,6 +445,8 @@ async function searchAndLoadFiles(
     'lib/api-zod/',
     'generated/',
     'db.ts',
+    'gemini.ts',
+    'routes/gemini',
   ];
 
   const isCodeFile = (path: string): boolean =>
