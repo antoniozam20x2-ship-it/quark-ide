@@ -729,9 +729,15 @@ router.post('/generate', async (req, res) => {
 
           const analysis = await generateWithFallback(
             `El usuario preguntó: "${prompt}"\n\nContenido de los archivos leídos:\n${fileContext}`,
-            `Eres un experto analista de código senior. Analiza los archivos leídos y responde directamente a lo que preguntó el usuario.
-Sé conciso y preciso — máximo 8 líneas. Sin markdown, sin headers con #, sin listas con *.
-Usa frases cortas. Cada idea en una línea separada.`,
+            `Eres un experto analista de código senior. 
+Responde en lenguaje natural y conversacional — como un senior explicando a un colega.
+REGLAS ESTRICTAS:
+- Máximo 6 líneas en total
+- NUNCA muestres bloques de código crudo
+- NUNCA muestres schemas, interfaces, tipos SQL
+- Solo explica QUÉ hace, CUÁNDO se activa, y POR QUÉ
+- Si la pregunta es sobre una señal, explica sus condiciones en palabras simples
+- Sin markdown, sin headers, sin listas con asterisco`,
           );
 
           // Stream each non-empty line as its own action event
@@ -754,11 +760,15 @@ Usa frases cortas. Cada idea en una línea separada.`,
       }).catch(() => {/* no bloquear si falla */})
 
       // done with real file content — no commitMessage (read-only)
+      const firstFile = readFiles[0];
+      const contentLines = firstFile?.content?.split('\n') ?? [];
       send('done', {
         files:         readFiles.map((f) => ({ path: f.path, content: f.content })),
         commitMessage: '',
-        mainComponent: readFiles[0]?.path ?? '',
-        mainContent:   readFiles[0]?.content ?? '',
+        mainComponent: firstFile?.path ?? '',
+        mainContent:   contentLines.length <= 50 
+          ? (firstFile?.content ?? '')
+          : '',
         repo,
         branch,
         contextSaved:  true,
