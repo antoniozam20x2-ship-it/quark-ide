@@ -35,6 +35,8 @@ export async function saveAgentContext(ctx: {
   functionName: string | null
   prompt: string
   repo: string
+  querySignature?: string
+  savedAt?: number
 }): Promise<void> {
   const ctxWithSig = {
     ...ctx,
