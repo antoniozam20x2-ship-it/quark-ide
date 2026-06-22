@@ -139,6 +139,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   const [running, setRunning]             = useState(false);
   const [feed, setFeed]                   = useState<FeedItem[]>([]);
   const [result, setResult]               = useState<AgentEvent | null>(null);
+  const [hasReadResult, setHasReadResult] = useState(false);
   const [committing, setCommitting]       = useState(false);
   const [commitResult, setCommitResult]   = useState<CommitResult | null>(null);
   const [isGeneratingHtml, setIsGeneratingHtml] = useState(false);
@@ -336,6 +337,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     setRunning(true);
     setFeed([]);
     setResult(null);
+    setHasReadResult(false);
     setFixResult(null);
     setCommitResult(null);
     previewTriggeredRef.current = false;
@@ -416,6 +418,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
             } else {
               setFeed((prev) => [...prev, { event: parsed.event, text: parsed.text }]);
+              if (parsed.text?.startsWith('💡')) {
+                setHasReadResult(true);
+              }
             }
 
             if (parsed.event === 'error') setRunning(false);
@@ -1063,10 +1068,10 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
         {/* Enviar a War Room — siempre visible si hay resultado */}
         {result && !running && isBackend && onSendToWarRoom && (
+          hasReadResult ||
           readFilesRef.current.length > 0 || 
           (result.files?.length ?? 0) > 0 || 
-          !!result.mainContent ||
-          feed.some((f) => f.event === 'action' && f.text?.startsWith('💡'))
+          !!result.mainContent
         ) && (
           <button
             onClick={() => {
