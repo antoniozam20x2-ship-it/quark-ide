@@ -242,11 +242,14 @@ function applyOperations(
 const READ_KEYWORDS  = /\b(lee|leer|muéstrame|muestra|busca|buscar|encuentra|ver|dime|qué tiene|qué hay|analiza|analizar|diagnóstico|diagnóstica|revisa|revisar|explica|explicar|describe|describir|inspecciona|inspeccionar|abre|abrir|lista|listar|qué hace|cómo está|cómo funciona|show me|read|find|look at)\b/i;
 const GEN_KEYWORDS   = /\b(genera|generar|crea|crear|escribe|escribir|implementa|implementar|añade|añadir|agrega|agregar|cambia|cambiar|modifica|modificar|fix|arregla|arreglar|refactoriza|refactorizar|construye|construir|desarrolla|desarrollar|actualiza|actualizar|add|create|write|implement|modify|change|build)\b/i;
 
+const ANALYSIS_KEYWORDS = /\b(qué significa|qué es|cómo funciona|explica|cuándo se activa|por qué|cuáles son|qué argumentos|qué condiciones|cómo se calcula|señal|signal|S1|S2|S3|S4|S5|S6|score|scoring|bias|screener|scanner|trailing|streak|circuit)\b/i;
+
 function detectReadIntent(prompt: string): boolean {
-  const hasRead = READ_KEYWORDS.test(prompt);
-  const hasGen  = GEN_KEYWORDS.test(prompt);
+  const hasRead     = READ_KEYWORDS.test(prompt);
+  const hasGen      = GEN_KEYWORDS.test(prompt);
+  const hasAnalysis = ANALYSIS_KEYWORDS.test(prompt);
   // Read intent only if has read keywords AND no explicit generation keywords
-  return hasRead && !hasGen;
+  return (hasRead || hasAnalysis) && !hasGen;
 }
 
 function extractFunctionBlock(
