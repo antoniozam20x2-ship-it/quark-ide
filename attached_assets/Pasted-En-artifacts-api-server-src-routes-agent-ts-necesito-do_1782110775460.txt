@@ -1,0 +1,124 @@
+En artifacts/api-server/src/routes/agent.ts necesito dos correcciones.
+
+## FIX 1 — PRIORITY_PATTERNS no incluye lib/
+
+Reemplazar:
+
+    const PRIORITY_PATTERNS = [
+      /server\.(ts|js)$/,
+      /routes\//,
+      /services\//,
+      /engine\.(ts|js)$/,
+      /detector\.(ts|js)$/,
+    ]
+
+Con:
+
+    const PRIORITY_PATTERNS = [
+      /server\.(ts|js)$/,
+      /lib\//,
+      /routes\//,
+      /services\//,
+      /engine\.(ts|js)$/,
+      /detector\.(ts|js)$/,
+      /tradingLogic/,
+      /botEngine/,
+      /scoring/,
+      /screener/,
+    ]
+
+
+## FIX 2 — Caché inteligente con validación de relevancia
+
+El sistema actual guarda el contexto después de cada búsqueda y lo 
+reutiliza sin validar si es útil para la nueva pregunta.
+
+Reemplazar la función loadAgentContext() completa con esta versión 
+que agrega un campo `querySignature` para invalidar caché cuando 
+la pregunta cambia de dominio:
+
+En saveAgentContext(), agregar querySignature al objeto guardado:
+
+Reemplazar:
+  await pool.query(
+    `INSERT INTO memory_entries (key, content, namespace)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
+    ['agent-context', JSON.stringify(ctx), AGENT_SESSION_NS],
+  );
+
+Con:
+  const ctxWithSig = {
+    ...ctx,
+    querySignature: ctx.prompt.toLowerCase().split(/\s+/).filter(w => w.length > 4).slice(0, 3).join('|'),
+    savedAt: Date.now(),
+  };
+  await pool.query(
+    `INSERT INTO memory_entries (key, content, namespace)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
+    ['agent-context', JSON.stringify(ctxWithSig), AGENT_SESSION_NS],
+  );
+
+
+## FIX 3 — Validar caché antes de reutilizarlo
+
+En el bloque donde se carga el caché guardado (buscar "Contexto reutilizado de FAST mode"):
+
+Reemplazar:
+    if (savedCtx && savedCtx.repo === repo) {
+      const BACKEND_INDICATORS = [
+        'lib/', 'services/', 'routes/api-server',
+        'botEngine', 'tradingLogic', 'scoring', 'screener',
+      ];
+      const hasBackend = savedCtx.preloadedFiles.some((f: { path: string }) =>
+        BACKEND_INDICATORS.some((indicator) => f.path.includes(indicator))
+      );
+      if (hasBackend) {
+        preloadedFiles = savedCtx.preloadedFiles
+        send('action', { text: `⚡ Contexto reutilizado de FAST mode — ${preloadedFiles.length} archivo(s) ya cargados` })
+        send('action', { text: `📋 Usando: ${preloadedFiles.map(f => f.path.split('/').pop()).join(', ')}` })
+        if (savedCtx.functionName) {
+          send('action', { text: `🎯 Función en scope: ${savedCtx.functionName}` })
+        }
+      } else {
+        console.log(`[agent] Cache only has frontend files — bypassing, running fresh search`);
+        send('action', { text: `🔎 Caché solo tiene frontend — buscando archivos de backend...` })
+      }
+    }
+
+Con:
+    if (savedCtx && savedCtx.repo === repo) {
+      const BACKEND_INDICATORS = [
+        'lib/', 'services/', 'routes/api-server',
+        'botEngine', 'tradingLogic', 'scoring', 'screener',
+      ];
+      const hasBackend = savedCtx.preloadedFiles.some((f: { path: string }) =>
+        BACKEND_INDICATORS.some((indicator) => f.path.includes(indicator))
+      );
+
+      // Validar que el caché es relevante para esta pregunta
+      const currentSig = prompt.toLowerCase().split(/\s+/).filter((w: string) => w.length > 4).slice(0, 3).join('|');
+      const cachedSig = savedCtx.querySignature ?? '';
+      const sigMatch = cachedSig && currentSig && (
+        cachedSig === currentSig ||
+        currentSig.split('|').some((w: string) => cachedSig.includes(w))
+      );
+      // Caché expira después de 5 minutos
+      const cacheAge = Date.now() - (savedCtx.savedAt ?? 0);
+      const cacheValid = cacheAge < 5 * 60 * 1000;
+
+      if (hasBackend && sigMatch && cacheValid) {
+        preloadedFiles = savedCtx.preloadedFiles;
+        send('action', { text: `⚡ Contexto reutilizado — ${preloadedFiles.length} archivo(s) ya cargados` });
+        send('action', { text: `📋 Usando: ${preloadedFiles.map((f: { path: string }) => f.path.split('/').pop()).join(', ')}` });
+      } else {
+        const reason = !hasBackend ? 'solo tiene frontend'
+          : !sigMatch ? 'pregunta cambió de tema'
+          : 'caché expirado (>5min)';
+        console.log(`[agent] Cache bypass: ${reason}`);
+        send('action', { text: `🔎 Buscando contexto fresco (${reason})...` });
+      }
+    }
+
+No tocar nada más. Solo estos tres cambios.

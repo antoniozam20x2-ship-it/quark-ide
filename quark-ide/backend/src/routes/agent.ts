@@ -36,11 +36,16 @@ export async function saveAgentContext(ctx: {
   prompt: string
   repo: string
 }): Promise<void> {
+  const ctxWithSig = {
+    ...ctx,
+    querySignature: ctx.prompt.toLowerCase().split(/\s+/).filter(w => w.length > 4).slice(0, 3).join('|'),
+    savedAt: Date.now(),
+  };
   await pool.query(
     `INSERT INTO memory_entries (key, content, namespace)
      VALUES ($1, $2, $3)
      ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
-    ['agent-context', JSON.stringify(ctx), AGENT_SESSION_NS],
+    ['agent-context', JSON.stringify(ctxWithSig), AGENT_SESSION_NS],
   );
 }
 
@@ -412,10 +417,15 @@ router.post('/generate', async (req, res) => {
     const tree = await getFileTree(repo, branch);
     const PRIORITY_PATTERNS = [
       /server\.(ts|js)$/,
+      /lib\//,
       /routes\//,
       /services\//,
       /engine\.(ts|js)$/,
       /detector\.(ts|js)$/,
+      /tradingLogic/,
+      /botEngine/,
+      /scoring/,
+      /screener/,
     ]
     const FRONTEND_PATTERNS = [
       /components\//,
@@ -640,16 +650,27 @@ Usa frases cortas. Cada idea en una línea separada.`,
       const hasBackend = savedCtx.preloadedFiles.some((f: { path: string }) =>
         BACKEND_INDICATORS.some((indicator) => f.path.includes(indicator))
       );
-      if (hasBackend) {
-        preloadedFiles = savedCtx.preloadedFiles
-        send('action', { text: `⚡ Contexto reutilizado de FAST mode — ${preloadedFiles.length} archivo(s) ya cargados` })
-        send('action', { text: `📋 Usando: ${preloadedFiles.map(f => f.path.split('/').pop()).join(', ')}` })
-        if (savedCtx.functionName) {
-          send('action', { text: `🎯 Función en scope: ${savedCtx.functionName}` })
-        }
+      // Validar que el caché es relevante para esta pregunta
+      const currentSig = prompt.toLowerCase().split(/\s+/).filter((w: string) => w.length > 4).slice(0, 3).join('|');
+      const cachedSig = savedCtx.querySignature ?? '';
+      const sigMatch = cachedSig && currentSig && (
+        cachedSig === currentSig ||
+        currentSig.split('|').some((w: string) => cachedSig.includes(w))
+      );
+      // Caché expira después de 5 minutos
+      const cacheAge = Date.now() - (savedCtx.savedAt ?? 0);
+      const cacheValid = cacheAge < 5 * 60 * 1000;
+
+      if (hasBackend && sigMatch && cacheValid) {
+        preloadedFiles = savedCtx.preloadedFiles;
+        send('action', { text: `⚡ Contexto reutilizado — ${preloadedFiles.length} archivo(s) ya cargados` });
+        send('action', { text: `📋 Usando: ${preloadedFiles.map((f: { path: string }) => f.path.split('/').pop()).join(', ')}` });
       } else {
-        console.log(`[agent] Cache only has frontend files — bypassing, running fresh search`);
-        send('action', { text: `🔎 Caché solo tiene frontend — buscando archivos de backend...` })
+        const reason = !hasBackend ? 'solo tiene frontend'
+          : !sigMatch ? 'pregunta cambió de tema'
+          : 'caché expirado (>5min)';
+        console.log(`[agent] Cache bypass: ${reason}`);
+        send('action', { text: `🔎 Buscando contexto fresco (${reason})...` });
       }
     }
 
