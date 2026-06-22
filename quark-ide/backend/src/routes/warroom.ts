@@ -365,16 +365,16 @@ function buildProviderChain(
 ): Array<{ fn: () => Promise<string>; label: string }> {
   return [
     {
-      label: 'Groq(rotated)',
+      label: 'Gemini(first)',
+      fn: () => generateContent(prompt, systemPrompt, maxTokens, geminiEndpoint),
+    },
+    {
+      label: 'Groq(fallback)',
       fn: () => callGroqRotated(prompt, systemPrompt, maxTokens),
     },
     {
-      label: 'DeepSeek',
+      label: 'DeepSeek(fallback)',
       fn: () => callDeepSeek(prompt, systemPrompt, maxTokens),
-    },
-    {
-      label: 'Gemini(last-resort)',
-      fn: () => generateContent(prompt, systemPrompt, maxTokens, geminiEndpoint),
     },
   ];
 }
