@@ -239,6 +239,28 @@ async function searchWithAITerms(
   return [];
 }
 
+async function isCacheRelevant(
+  files: { path: string; content: string }[],
+  challenge: string,
+): Promise<boolean> {
+  const terms = await extractSearchTermsWithAI(challenge);
+  if (terms.length === 0) return true;
+
+  const combined = files
+    .map((f) => f.path + ' ' + f.content)
+    .join(' ')
+    .toLowerCase();
+
+  const hasMatch = terms.some((term) => combined.toLowerCase().includes(term.toLowerCase()));
+
+  if (!hasMatch) {
+    console.log(
+      `[warroom] Caché irrelevante para challenge — términos [${terms.join(', ')}] no encontrados en archivos cacheados`,
+    );
+  }
+  return hasMatch;
+}
+
 async function resolveRepoContext(
   appName: string | null | undefined,
   challenge: string,
@@ -256,21 +278,20 @@ async function resolveRepoContext(
   try {
     const cached = await loadSharedAgentContext(repoName);
     if (cached && cached.preloadedFiles.length > 0) {
-      const BACKEND_INDICATORS = [
-        'lib/', 'services/', 'routes/',
-        'botEngine', 'tradingLogic', 'scoring', 'screener'
-      ];
-      const hasBackend = cached.preloadedFiles.some((f) =>
-        BACKEND_INDICATORS.some((indicator) => f.path.includes(indicator))
-      );
-      if (hasBackend) {
-        console.log(`[warroom] Cache hit with backend files for ${repoName}`);
+      const keyFiles = cached.preloadedFiles.map((f) => ({
+        path: f.path,
+        content: f.content,
+      }));
+
+      const relevant = await isCacheRelevant(keyFiles, challenge);
+      if (relevant) {
+        console.log(`[warroom] Caché relevante — usando ${keyFiles.length} archivo(s) cacheados`);
         return {
-          tree:     cached.preloadedFiles.map((f) => f.path),
-          keyFiles: cached.preloadedFiles.map((f) => ({ path: f.path, content: f.content })),
+          tree: keyFiles.map((f) => f.path),
+          keyFiles,
         };
       }
-      console.log(`[warroom] Cache has only frontend files for ${repoName} — bypassing cache, running fresh search`);
+      console.log(`[warroom] Caché ignorado — yendo a GitHub Search`);
     }
   } catch { /* non-blocking */ }
 

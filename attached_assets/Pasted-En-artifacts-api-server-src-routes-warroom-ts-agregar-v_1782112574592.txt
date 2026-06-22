@@ -1,0 +1,78 @@
+En artifacts/api-server/src/routes/warroom.ts, agregar validación 
+de relevancia del caché antes de usarlo. Si el caché no contiene 
+información relacionada con el challenge, ignorarlo y buscar en GitHub.
+
+## AGREGAR esta función ANTES de resolveRepoContext():
+
+async function isCacheRelevant(
+  files: { path: string; content: string }[],
+  challenge: string,
+): Promise<boolean> {
+  const terms = await extractSearchTermsWithAI(challenge);
+  if (terms.length === 0) return true;
+
+  const combined = files
+    .map((f) => f.path + ' ' + f.content)
+    .join(' ')
+    .toLowerCase();
+
+  const hasMatch = terms.some((term) => combined.toLowerCase().includes(term.toLowerCase()));
+
+  if (!hasMatch) {
+    console.log(
+      `[warroom] Caché irrelevante para challenge — términos [${terms.join(', ')}] no encontrados en archivos cacheados`,
+    );
+  }
+  return hasMatch;
+}
+
+
+## CAMBIO EN resolveRepoContext() — Step 2
+
+Reemplazar:
+
+  try {
+    const cached = await loadSharedAgentContext(repoName);
+    if (cached && cached.preloadedFiles.length > 0) {
+      return {
+        tree:     cached.preloadedFiles.map((f) => f.path),
+        keyFiles: cached.preloadedFiles.map((f) => ({ path: f.path, content: f.content })),
+      };
+    }
+  } catch { /* non-blocking */ }
+
+Con:
+
+  try {
+    const cached = await loadSharedAgentContext(repoName);
+    if (cached && cached.preloadedFiles.length > 0) {
+      const keyFiles = cached.preloadedFiles.map((f) => ({
+        path: f.path,
+        content: f.content,
+      }));
+
+      const relevant = await isCacheRelevant(keyFiles, challenge);
+      if (relevant) {
+        console.log(`[warroom] Caché relevante — usando ${keyFiles.length} archivo(s) cacheados`);
+        return {
+          tree: keyFiles.map((f) => f.path),
+          keyFiles,
+        };
+      }
+      console.log(`[warroom] Caché ignorado — yendo a GitHub Search`);
+    }
+  } catch { /* non-blocking */ }
+
+
+## RESULTADO ESPERADO
+- Challenge: "¿por qué S1 no dispara?"
+  → Caché tiene SignalContext.tsx → términos extraídos: ["checkS1Bull", "fEval"]
+  → "checkS1Bull" no aparece en SignalContext.tsx → caché irrelevante
+  → Va a GitHub Search → encuentra tradingLogic.ts ✅
+
+- Challenge: "¿cómo funciona el trailing stop?"
+  → Caché tiene tradingLogic.ts → términos: ["trailingStop"]
+  → "trailingStop" aparece en tradingLogic.ts → caché válido
+  → Usa caché directamente ✅
+
+No tocar nada más del archivo.
