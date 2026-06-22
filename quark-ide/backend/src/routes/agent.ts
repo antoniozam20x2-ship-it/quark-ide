@@ -325,6 +325,117 @@ Responde SOLO con un JSON array de strings, sin markdown ni explicaciones. Ejemp
   }
 }
 
+async function extractKeywordsForSearch(prompt: string): Promise<string[]> {
+  const keys = getGroqKeys();
+  if (keys.length === 0) return [];
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8_000);
+    const res = await fetch(GROQ_URL, {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${keys[0]}`,
+      },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        max_tokens: 60,
+        temperature: 0,
+        messages: [
+          {
+            role: 'system',
+            content: `Eres un extractor de términos técnicos para búsqueda en GitHub Code Search.
+Dado un prompt en lenguaje natural sobre un bot de crypto trading en TypeScript,
+responde ÚNICAMENTE con un JSON array de máximo 4 strings con los identificadores
+técnicos más probables en el código fuente de BACKEND (lib/, services/, routes/).
+
+Reglas:
+- Señales S1-S6 o scoring → ["fEval", "tradingLogic", "checkS6Bull", "smartScore"]
+- ADX, RSI, EMA, indicadores → ["tradingLogic", "calcADX", "fEval"]
+- screener, scanner, filtro → ["screener", "fEval", "botEngine"]
+- bias, mercado → ["biasEngine", "bias"]
+- trailing, stop → ["trailingStop", "moving_plan"]
+- streak, circuit breaker → ["circuitBreaker", "streak"]
+- Prioriza SIEMPRE lib/ y services/, NUNCA context/ ni components/
+- Responde SOLO el array JSON, sin explicación, sin backticks`,
+          },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    }).finally(() => clearTimeout(timer));
+
+    if (!res.ok) return [];
+    const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const raw = json.choices?.[0]?.message?.content ?? '[]';
+    const parsed = JSON.parse(raw.trim()) as unknown;
+    if (Array.isArray(parsed) && parsed.every((t) => typeof t === 'string')) {
+      console.log(`[agent] AI keywords: [${parsed.join(', ')}]`);
+      return parsed as string[];
+    }
+    return [];
+  } catch (err) {
+    console.warn('[agent] extractKeywordsForSearch failed:', err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
+async function searchAndLoadFiles(
+  prompt: string,
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+): Promise<{ path: string; content: string; fullContent?: string }[]> {
+  const EXCLUDED_PATHS = [
+    'attached_assets/',
+    'replit.md',
+    '.txt',
+    'README',
+    'node_modules/',
+    '.md',
+    'context/',
+    'components/',
+    'mobile/',
+  ];
+
+  const isCodeFile = (path: string): boolean =>
+    !EXCLUDED_PATHS.some((ex) => path.includes(ex));
+
+  const keywords = await extractKeywordsForSearch(prompt);
+
+  const searchTerms = keywords.length > 0
+    ? keywords
+    : prompt.split(/\s+/).filter((w) => w.length > 5).slice(0, 3);
+
+  send('action', { text: `🔎 Buscando: [${searchTerms.join(', ')}]` });
+
+  for (const term of searchTerms) {
+    const results = await searchCodeInRepo(term, repo);
+    const codeFiles = results.filter((r) => isCodeFile(r.path));
+
+    if (codeFiles.length > 0) {
+      console.log(`[agent] Term "${term}" → ${codeFiles.length} files: ${codeFiles.map(r => r.path).join(', ')}`);
+      send('action', { text: `📂 Encontrado con "${term}" — leyendo ${Math.min(codeFiles.length, 3)} archivo(s)...` });
+
+      const loaded = await Promise.allSettled(
+        codeFiles.slice(0, 3).map(async (r) => ({
+          path: r.path,
+          content: await getFileContent(r.path, repo),
+        }))
+      );
+
+      return loaded
+        .filter((r): r is PromiseFulfilledResult<{ path: string; content: string }> => r.status === 'fulfilled')
+        .map((r) => ({ ...r.value, fullContent: r.value.content }));
+    }
+
+    console.log(`[agent] Term "${term}" → 0 code files, trying next...`);
+  }
+
+  send('action', { text: '⚠️ GitHub Code Search sin resultados — usando árbol como fallback' });
+  return [];
+}
+
 router.post('/generate', async (req, res) => {
   const { prompt, repo: bodyRepo, branch = 'main', projectName, deepMode } = req.body as {
     prompt?: string;
@@ -457,100 +568,51 @@ router.post('/generate', async (req, res) => {
 
     // ── READ PATH — no Gemini generation, just fetch real file content ────────
     if (detectReadIntent(prompt)) {
-      send('action', { text: '📖 Modo lectura — identificando archivos relevantes...' });
+      send('action', { text: '📖 Modo lectura — buscando en GitHub...' });
 
-      const pathsToRead = await identifyFilesToRead(prompt, filePaths);
+      let readFiles: { path: string; content: string; fullContent?: string; startLine?: number; endLine?: number }[] = [];
 
-      if (!pathsToRead.length) {
-        send('action', { text: '⚠️ No se encontraron archivos relevantes para ese prompt.' });
-        send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
-        await new Promise((r) => setTimeout(r, 100));
-        res.end();
-        return;
+      // Buscar con GitHub Code Search primero
+      const searchedFiles = await searchAndLoadFiles(prompt, repo, send);
+
+      if (searchedFiles.length > 0) {
+        readFiles = searchedFiles;
+      } else {
+        // Fallback: identifyFilesToRead con el árbol
+        send('action', { text: '🔄 Fallback — seleccionando del árbol...' });
+        const pathsToRead = await identifyFilesToRead(prompt, filePaths);
+        if (!pathsToRead.length) {
+          send('action', { text: '⚠️ No se encontraron archivos relevantes.' });
+          send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+          await new Promise((r) => setTimeout(r, 100));
+          res.end();
+          return;
+        }
+        const results = await Promise.allSettled(
+          pathsToRead.map(async (filePath) => {
+            send('file', { path: filePath });
+            const content = await getFileContent(filePath, repo);
+            return { path: filePath, content, fullContent: content };
+          })
+        );
+        readFiles = results
+          .filter((r): r is PromiseFulfilledResult<{ path: string; content: string; fullContent: string }> => r.status === 'fulfilled')
+          .map((r) => r.value);
       }
 
-      send('action', { text: `📂 Leyendo ${pathsToRead.length} archivo(s) de GitHub...` });
-
-      const functionName = extractFunctionNameFromPrompt(prompt)
+      // Extracción quirúrgica de función si aplica
+      const functionName = extractFunctionNameFromPrompt(prompt);
       if (functionName) {
-        send('action', { text: `🎯 Función detectada: ${functionName} — búsqueda quirúrgica` })
-      }
-
-      let foundInPreSelected = false
-
-      const readResults = await Promise.all(
-        pathsToRead.map(async (filePath) => {
-          try {
-            send('file', { path: filePath })
-            const content = await getFileContent(filePath, repo)
-            console.log(`[Agent/Read] ✅ ${filePath} (${content.length} chars)`)
-
-            // Si hay función detectada, extraer solo ese bloque
-            if (functionName) {
-              const extracted = extractFunctionBlock(content, functionName)
-              if (extracted) {
-                foundInPreSelected = true
-                send('action', { text: `✂️ Extrayendo ${functionName} (líneas ${extracted.startLine + 1}-${extracted.endLine + 1})` })
-                return {
-                  path: filePath,
-                  content: extracted.block,
-                  fullContent: content,
-                  startLine: extracted.startLine,
-                  endLine: extracted.endLine,
-                }
-              }
-            }
-            return { path: filePath, content, fullContent: content }
-          } catch (e: any) {
-            console.warn(`[Agent/Read] ⚠️ Could not read ${filePath}:`, e.message)
-            send('action', { text: `⚠️ No se pudo leer: ${filePath}` })
-            return null
+        send('action', { text: `🎯 Función detectada: ${functionName} — búsqueda quirúrgica` });
+        for (const f of readFiles) {
+          const extracted = extractFunctionBlock(f.content, functionName);
+          if (extracted) {
+            send('action', { text: `✂️ Extrayendo ${functionName} (líneas ${extracted.startLine + 1}-${extracted.endLine + 1})` });
+            f.content = extracted.block;
+            f.startLine = extracted.startLine;
+            f.endLine = extracted.endLine;
+            break;
           }
-        })
-      )
-
-      let readFiles = readResults.filter((r): r is NonNullable<typeof r> => r !== null)
-
-      // Fallback: si se buscaba una función específica y no apareció
-      // en los archivos pre-seleccionados, ampliar la búsqueda a TODO el árbol
-      if (functionName && !foundInPreSelected) {
-        send('action', { text: `🔬 ${functionName} no está en los archivos esperados — buscando en GitHub directamente...` })
-
-        const keywords = extractSearchKeywords(prompt);
-        const enrichedQuery = [functionName, ...keywords].filter(Boolean).slice(0, 5).join(' ');
-        const searchResults = await searchCodeInRepo(enrichedQuery, repo)
-
-        if (searchResults.length > 0) {
-          send('action', { text: `📡 GitHub encontró ${searchResults.length} archivo(s) con "${functionName}"` })
-
-          const verifyResults = await Promise.all(
-            searchResults.slice(0, 5).map(async ({ path: filePath }) => {
-              try {
-                const content = await getFileContent(filePath, repo)
-                const extracted = extractFunctionBlock(content, functionName)
-                if (extracted) return { filePath, content, extracted }
-                return null
-              } catch {
-                return null
-              }
-            })
-          )
-
-          const hit = verifyResults.find(r => r !== null)
-          if (hit) {
-            send('action', { text: `🎯 Encontrada en ${hit.filePath} (líneas ${hit.extracted.startLine + 1}-${hit.extracted.endLine + 1})` })
-            readFiles = [{
-              path: hit.filePath,
-              content: hit.extracted.block,
-              fullContent: hit.content,
-              startLine: hit.extracted.startLine,
-              endLine: hit.extracted.endLine,
-            }]
-          } else {
-            send('action', { text: `⚠️ GitHub mencionó "${functionName}" pero no se pudo extraer el bloque exacto` })
-          }
-        } else {
-          send('action', { text: `⚠️ ${functionName} no se encontró en GitHub Code Search` })
         }
       }
 

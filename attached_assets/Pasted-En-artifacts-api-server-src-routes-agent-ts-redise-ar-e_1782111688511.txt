@@ -1,0 +1,200 @@
+En artifacts/api-server/src/routes/agent.ts, rediseñar el READ PATH 
+completo para que use GitHub Code Search como entrada principal en vez 
+del árbol del repo.
+
+## CONTEXTO
+El flujo actual descarga todo el árbol del repo, la IA elige archivos 
+de esa lista, y luego los lee. Problema: tradingLogic.ts queda fuera 
+del slice(80) o con baja prioridad.
+
+El nuevo flujo: la IA extrae keywords del prompt → GitHub las busca → 
+se leen los archivos encontrados. Sin árbol, sin PRIORITY_PATTERNS, 
+sin slice(80).
+
+## AGREGAR esta función ANTES del router.post('/generate'):
+
+async function extractKeywordsForSearch(prompt: string): Promise<string[]> {
+  const keys = getGroqKeys();
+  if (keys.length === 0) return [];
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8_000);
+    const res = await fetch(GROQ_URL, {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${keys[0]}`,
+      },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        max_tokens: 60,
+        temperature: 0,
+        messages: [
+          {
+            role: 'system',
+            content: `Eres un extractor de términos técnicos para búsqueda en GitHub Code Search.
+Dado un prompt en lenguaje natural sobre un bot de crypto trading en TypeScript,
+responde ÚNICAMENTE con un JSON array de máximo 4 strings con los identificadores
+técnicos más probables en el código fuente de BACKEND (lib/, services/, routes/).
+
+Reglas:
+- Señales S1-S6 o scoring → ["fEval", "tradingLogic", "checkS6Bull", "smartScore"]
+- ADX, RSI, EMA, indicadores → ["tradingLogic", "calcADX", "fEval"]
+- screener, scanner, filtro → ["screener", "fEval", "botEngine"]
+- bias, mercado → ["biasEngine", "bias"]
+- trailing, stop → ["trailingStop", "moving_plan"]
+- streak, circuit breaker → ["circuitBreaker", "streak"]
+- Prioriza SIEMPRE lib/ y services/, NUNCA context/ ni components/
+- Responde SOLO el array JSON, sin explicación, sin backticks`,
+          },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    }).finally(() => clearTimeout(timer));
+
+    if (!res.ok) return [];
+    const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const raw = json.choices?.[0]?.message?.content ?? '[]';
+    const parsed = JSON.parse(raw.trim()) as unknown;
+    if (Array.isArray(parsed) && parsed.every((t) => typeof t === 'string')) {
+      console.log(`[agent] AI keywords: [${parsed.join(', ')}]`);
+      return parsed as string[];
+    }
+    return [];
+  } catch (err) {
+    console.warn('[agent] extractKeywordsForSearch failed:', err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
+async function searchAndLoadFiles(
+  prompt: string,
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+): Promise<{ path: string; content: string; fullContent?: string }[]> {
+  const EXCLUDED_PATHS = [
+    'attached_assets/',
+    'replit.md',
+    '.txt',
+    'README',
+    'node_modules/',
+    '.md',
+    'context/',
+    'components/',
+    'mobile/',
+  ];
+
+  const isCodeFile = (path: string): boolean =>
+    !EXCLUDED_PATHS.some((ex) => path.includes(ex));
+
+  const keywords = await extractKeywordsForSearch(prompt);
+
+  // Fallback: palabras largas del prompt si Groq falla
+  const searchTerms = keywords.length > 0
+    ? keywords
+    : prompt.split(/\s+/).filter((w) => w.length > 5).slice(0, 3);
+
+  send('action', { text: `🔎 Buscando: [${searchTerms.join(', ')}]` });
+
+  for (const term of searchTerms) {
+    const results = await searchCodeInRepo(term, repo);
+    const codeFiles = results.filter((r) => isCodeFile(r.path));
+
+    if (codeFiles.length > 0) {
+      console.log(`[agent] Term "${term}" → ${codeFiles.length} files: ${codeFiles.map(r => r.path).join(', ')}`);
+      send('action', { text: `📂 Encontrado con "${term}" — leyendo ${Math.min(codeFiles.length, 3)} archivo(s)...` });
+
+      const loaded = await Promise.allSettled(
+        codeFiles.slice(0, 3).map(async (r) => ({
+          path: r.path,
+          content: await getFileContent(r.path, repo),
+        }))
+      );
+
+      return loaded
+        .filter((r): r is PromiseFulfilledResult<{ path: string; content: string }> => r.status === 'fulfilled')
+        .map((r) => ({ ...r.value, fullContent: r.value.content }));
+    }
+
+    console.log(`[agent] Term "${term}" → 0 code files, trying next...`);
+  }
+
+  send('action', { text: '⚠️ GitHub Code Search sin resultados — usando árbol como fallback' });
+  return [];
+}
+
+
+## CAMBIO EN el READ PATH
+
+Dentro de router.post('/generate'), en el bloque READ PATH
+(después de "if (detectReadIntent(prompt))"), 
+
+Reemplazar todo el bloque que hace:
+1. send('action', { text: '📖 Modo lectura — identificando archivos relevantes...' })
+2. const pathsToRead = await identifyFilesToRead(prompt, filePaths)
+3. if (!pathsToRead.length) { ... }
+4. send('action', { text: `📂 Leyendo ${pathsToRead.length} archivo(s) de GitHub...` })
+... y el Promise.all que lee los archivos ...
+
+Con:
+
+      send('action', { text: '📖 Modo lectura — buscando en GitHub...' });
+
+      let readFiles: { path: string; content: string; fullContent?: string; startLine?: number; endLine?: number }[] = [];
+
+      // Buscar con GitHub Code Search primero
+      const searchedFiles = await searchAndLoadFiles(prompt, repo, send);
+
+      if (searchedFiles.length > 0) {
+        readFiles = searchedFiles;
+      } else {
+        // Fallback: identifyFilesToRead con el árbol
+        send('action', { text: '🔄 Fallback — seleccionando del árbol...' });
+        const pathsToRead = await identifyFilesToRead(prompt, filePaths);
+        if (!pathsToRead.length) {
+          send('action', { text: '⚠️ No se encontraron archivos relevantes.' });
+          send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+          await new Promise((r) => setTimeout(r, 100));
+          res.end();
+          return;
+        }
+        const results = await Promise.allSettled(
+          pathsToRead.map(async (filePath) => {
+            send('file', { path: filePath });
+            const content = await getFileContent(filePath, repo);
+            return { path: filePath, content, fullContent: content };
+          })
+        );
+        readFiles = results
+          .filter((r): r is PromiseFulfilledResult<{ path: string; content: string; fullContent: string }> => r.status === 'fulfilled')
+          .map((r) => r.value);
+      }
+
+      // Extracción quirúrgica de función si aplica
+      const functionName = extractFunctionNameFromPrompt(prompt);
+      if (functionName) {
+        send('action', { text: `🎯 Función detectada: ${functionName} — búsqueda quirúrgica` });
+        for (const f of readFiles) {
+          const extracted = extractFunctionBlock(f.content, functionName);
+          if (extracted) {
+            send('action', { text: `✂️ Extrayendo ${functionName} (líneas ${extracted.startLine + 1}-${extracted.endLine + 1})` });
+            f.content = extracted.block;
+            f.startLine = extracted.startLine;
+            f.endLine = extracted.endLine;
+            break;
+          }
+        }
+      }
+
+
+## IMPORTANTE
+- Mantener el fallback al árbol si GitHub Search no encuentra nada
+- Mantener toda la lógica de análisis AI que viene después (fileContext, generateWithFallback, etc.)
+- Mantener el FAST READ PATH (el que detecta filename directo en el prompt) — ese no cambia
+- Eliminar PRIORITY_PATTERNS y FRONTEND_PATTERNS ya que el árbol 
+  ahora solo se usa como fallback
+- No tocar nada del GENERATION PATH ni del DEEP MODE
+
+Solo estos cambios.
