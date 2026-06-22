@@ -748,7 +748,7 @@ Usa frases cortas. Cada idea en una línea separada.`,
 
       // done with real file content — no commitMessage (read-only)
       send('done', {
-        files:         [],
+        files:         readFiles.map((f) => ({ path: f.path, content: f.content })),
         commitMessage: '',
         mainComponent: readFiles[0]?.path ?? '',
         mainContent:   readFiles[0]?.content ?? '',

@@ -1,0 +1,74 @@
+Dos fixes en QuarkAgent.tsx y agentRouter.ts:
+
+## FIX 1 — QuarkAgent.tsx (botón War Room)
+
+Agregar ref para capturar archivos leídos:
+  const readFilesRef = useRef<{path: string, content: string}[]>([]);
+
+Al inicio de generate(), limpiar:
+  readFilesRef.current = [];
+
+En el bloque donde se procesa parsed.event === 'done' 
+dentro de isBackendRef.current && parsed.files?.length:
+  // Agregar esta línea ANTES del setFeed:
+  readFilesRef.current = parsed.files!.map(f => ({ path: f.path, content: f.content }));
+
+Cambiar la condición del botón "Enviar a War Room" de:
+  {onSendToWarRoom && ((result.files?.length ?? 0) > 0 || !!result.mainContent) && (
+
+A:
+  {onSendToWarRoom && (
+    (result.files?.length ?? 0) > 0 ||
+    !!result.mainContent ||
+    readFilesRef.current.length > 0
+  ) && (
+
+En el onClick del botón, cambiar el payload a:
+  const filesToSend = result.files?.length
+    ? result.files
+    : readFilesRef.current;
+
+  onSendToWarRoom({
+    challenge: currentPromptRef.current,
+    appName: activeProject.name,
+    repoContext: filesToSend.length ? {
+      tree: filesToSend.map(f => f.path),
+      keyFiles: filesToSend.map(f => ({ path: f.path, content: f.content })),
+    } : undefined,
+  });
+
+## FIX 2 — agentRouter.ts (análisis degradado en FAST MODE)
+
+El problema: cuando el usuario hace preguntas de comprensión 
+("qué significa S6"), el sistema cae en FAST MODE sin haber 
+cargado archivos reales, entonces el LLM adivina sin contexto.
+
+En el READ PATH (detectReadIntent === true), el backend manda
+done con files: [] aunque sí leyó archivos en readFiles.
+
+Cambiar la línea del send('done') al final del READ PATH de:
+  send('done', {
+    files: [],
+    commitMessage: '',
+    mainComponent: readFiles[0]?.path ?? '',
+    mainContent: readFiles[0]?.content ?? '',
+    repo,
+    branch,
+    contextSaved: true,
+  });
+
+A:
+  send('done', {
+    files: readFiles.map(f => ({ path: f.path, content: f.content })),
+    commitMessage: '',
+    mainComponent: readFiles[0]?.path ?? '',
+    mainContent: readFiles[0]?.content ?? '',
+    repo,
+    branch,
+    contextSaved: true,
+  });
+
+Esto hace que el frontend reciba los archivos reales en result.files,
+lo que activa el readFilesRef y muestra el botón War Room.
+
+Solo tocar estos dos archivos. No tocar lógica de War Room ni backend de swarm.
