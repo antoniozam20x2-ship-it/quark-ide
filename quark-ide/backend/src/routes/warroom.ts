@@ -254,10 +254,21 @@ async function resolveRepoContext(
   try {
     const cached = await loadSharedAgentContext(repoName);
     if (cached && cached.preloadedFiles.length > 0) {
-      return {
-        tree:     cached.preloadedFiles.map((f) => f.path),
-        keyFiles: cached.preloadedFiles.map((f) => ({ path: f.path, content: f.content })),
-      };
+      const BACKEND_INDICATORS = [
+        'lib/', 'services/', 'routes/',
+        'botEngine', 'tradingLogic', 'scoring', 'screener'
+      ];
+      const hasBackend = cached.preloadedFiles.some((f) =>
+        BACKEND_INDICATORS.some((indicator) => f.path.includes(indicator))
+      );
+      if (hasBackend) {
+        console.log(`[warroom] Cache hit with backend files for ${repoName}`);
+        return {
+          tree:     cached.preloadedFiles.map((f) => f.path),
+          keyFiles: cached.preloadedFiles.map((f) => ({ path: f.path, content: f.content })),
+        };
+      }
+      console.log(`[warroom] Cache has only frontend files for ${repoName} — bypassing cache, running fresh search`);
     }
   } catch { /* non-blocking */ }
 
