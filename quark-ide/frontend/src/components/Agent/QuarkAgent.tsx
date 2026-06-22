@@ -157,6 +157,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   const isBackend = isBackendProject(activeProject.name);
   const isBackendRef = useRef(isBackend);
   isBackendRef.current = isBackend;
+  const readFilesRef = useRef<{ path: string; content: string }[]>([]);
 
   // ── Session persistence ────────────────────────────────────────────────────
 
@@ -338,6 +339,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     setFixResult(null);
     setCommitResult(null);
     previewTriggeredRef.current = false;
+    readFilesRef.current = [];
 
     // ── FIX PATH — route to callFix when fix keyword + filename detected ──────
     const fileInPrompt = text.match(/[\w/\-\.]+\.(ts|tsx|js|jsx|json|py|md|yml|yaml)/);
@@ -376,6 +378,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
               // For backend projects: inject code blocks into the feed from done.files
               if (isBackendRef.current && parsed.files?.length) {
+                readFilesRef.current = parsed.files!.map((f) => ({ path: f.path, content: f.content }));
                 setFeed((prev) => {
                   const next = [
                     ...prev,
@@ -390,6 +393,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                   return next;
                 });
               } else {
+                if (parsed.files?.length) {
+                  readFilesRef.current = parsed.files.map((f) => ({ path: f.path, content: f.content }));
+                }
                 setFeed((prev) => {
                   const next = [...prev, { event: parsed.event as FeedItem['event'] }];
                   saveSession(next, parsed, null, null);
@@ -1052,15 +1058,22 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
             )}
 
             {/* Enviar a War Room */}
-            {onSendToWarRoom && ((result.files?.length ?? 0) > 0 || !!result.mainContent) && (
+            {onSendToWarRoom && (
+              (result.files?.length ?? 0) > 0 ||
+              !!result.mainContent ||
+              readFilesRef.current.length > 0
+            ) && (
               <button
                 onClick={() => {
+                  const filesToSend = result.files?.length
+                    ? result.files
+                    : readFilesRef.current;
                   onSendToWarRoom({
                     challenge: currentPromptRef.current,
                     appName: activeProject.name,
-                    repoContext: result.files?.length ? {
-                      tree: result.files.map((f) => f.path),
-                      keyFiles: result.files.map((f) => ({ path: f.path, content: f.content })),
+                    repoContext: filesToSend.length ? {
+                      tree: filesToSend.map((f) => f.path),
+                      keyFiles: filesToSend.map((f) => ({ path: f.path, content: f.content })),
                     } : undefined,
                   });
                 }}
