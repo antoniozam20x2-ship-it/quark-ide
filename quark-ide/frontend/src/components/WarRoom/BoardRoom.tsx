@@ -69,12 +69,15 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
 
   const repoContextRef = useRef<BoardBrief['repoContext'] | null>(null);
   const appNameRef = useRef<string | null>(null);
+  const [preloadedFiles, setPreloadedFiles] = useState<string[]>([]);
 
   useEffect(() => {
     if (!initialBrief) return;
     const challengeText = initialBrief.challenge;
     repoContextRef.current = initialBrief.repoContext ?? null;
     appNameRef.current = initialBrief.appName ?? null;
+    const files = initialBrief.repoContext?.keyFiles?.map((f) => f.path.split('/').pop() ?? f.path) ?? [];
+    setPreloadedFiles(files);
     setChallenge(challengeText);
     onBriefConsumed?.();
     conveneSwarm(challengeText);
@@ -280,6 +283,22 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
             >
               Restaurar sesión
             </button>
+          </div>
+        )}
+
+        {/* Preloaded files indicator */}
+        {preloadedFiles.length > 0 && (
+          <div style={{
+            background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.25)',
+            borderRadius: 8, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 8,
+            flexWrap: 'wrap',
+          }}>
+            <span style={{ color: '#00ff88', fontSize: 11, fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, whiteSpace: 'nowrap' }}>
+              📂 {preloadedFiles.length} {preloadedFiles.length === 1 ? 'archivo precargado' : 'archivos precargados'}:
+            </span>
+            <span style={{ color: '#a0f0c8', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
+              {preloadedFiles.join(', ')}
+            </span>
           </div>
         )}
 
