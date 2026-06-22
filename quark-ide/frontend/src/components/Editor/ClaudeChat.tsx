@@ -310,7 +310,7 @@ export default function ClaudeChat({
     setMessages([...newMessages, assistantMsg]);
 
     // Últimos 5 exchanges (10 mensajes) como contexto
-    const historyToSend = newMessages.slice(-10).map((m) => ({ role: m.role, content: m.content }));
+    const historyToSend = newMessages.slice(-3).map((m) => ({ role: m.role, content: m.content }));
 
     try {
       const res = await fetch(`${API_BASE}/api/chat`, {
