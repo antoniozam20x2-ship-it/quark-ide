@@ -365,7 +365,7 @@ MAPEO DE CONCEPTOS:
 - "señal S3" o "alineación" o "tendencia" o "EMA" → checkS3Bull, fEval, tradingLogic
 - "señal S4" → checkS4, fEval, tradingLogic
 - "señal S5" o "impulso" o "early" o "cruce" → checkS5ImpulsBull, fEval, tradingLogic
-- "señal S6" o "FVG" o "gap" o "aceleración" → checkS6Bull, fEval, tradingLogic
+- "señal S6" o "FVG" o "fair value gap" o "gap alcista" o "aceleración" o "momentum" → ["checkS6Bull", "checkS6Bear", "fEval", "tradingLogic"]
 - "score" o "puntuación" o "filtro" o "calidad" → smartScore, minScore, screener
 - "ADX" o "tendencia fuerte" o "dirección" → calcADX, tradingLogic, fEval
 - "RSI" o "sobrecomprado" o "sobrevendido" → calcRSI, tradingLogic
@@ -428,6 +428,10 @@ async function searchAndLoadFiles(
     'context/',
     'components/',
     'mobile/',
+    'signalHistory',
+    'signalDirection',
+    'SignalContext',
+    'SignalBubbles',
   ];
 
   const isCodeFile = (path: string): boolean =>
