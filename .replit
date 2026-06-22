@@ -27,7 +27,7 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd quark-ide && npm run dev"
+args = "bash start.sh"
 waitForPort = 5000
 
 [[ports]]
@@ -37,14 +37,6 @@ externalPort = 3001
 [[ports]]
 localPort = 5000
 externalPort = 80
-
-[[ports]]
-localPort = 5001
-externalPort = 3000
-
-[[ports]]
-localPort = 5002
-externalPort = 3003
 
 [[ports]]
 localPort = 5003
