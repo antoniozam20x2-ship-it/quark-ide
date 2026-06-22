@@ -1,4 +1,4 @@
-modules = ["nodejs-20", "bash", "rust-stable", "python-3.11", "postgresql-16"]
+modules = ["nodejs-20", "bash", "rust-stable"]
 [agent]
 expertMode = true
 stack = "BEST_EFFORT_FALLBACK"
