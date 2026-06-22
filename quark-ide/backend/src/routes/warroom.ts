@@ -152,22 +152,21 @@ async function extractSearchTermsWithAI(challenge: string): Promise<string[]> {
         messages: [
           {
             role: 'system',
-            content: `Eres un extractor de términos técnicos de código para búsqueda en GitHub.
-Dado un challenge en lenguaje natural sobre un bot de crypto trading 
-(Node.js/TypeScript backend), responde ÚNICAMENTE con un JSON array 
-de strings con los identificadores técnicos más relevantes para buscar 
-en archivos de BACKEND (lib/, services/, routes/ del api-server).
+            content: `Eres un extractor de términos técnicos para búsqueda en GitHub Code Search.
+Dado un challenge sobre un bot de crypto trading en TypeScript, responde 
+ÚNICAMENTE con un JSON array de máximo 4 strings.
 
-Reglas:
-- Máximo 4 términos
-- Prioriza identificadores que existan en lógica de cálculo, NO en UI/frontend
-- Si mencionan señal S1-S6 o "sig1"-"sig6" → busca "scoreS6", "S6", "signalScore", "calculateS6"
-- Si mencionan score/scoring → busca "smartScore", "minScore", "calculateScore"
-- Si mencionan ADX → busca "adxValue", "adxThreshold", "ADX"
-- Si mencionan screener/scanner → busca "screener", "botEngine", "scoring"
-- Si mencionan argumentos/parámetros de una señal → busca el nombre técnico 
-  de esa señal (S1, S2... S6) más "score" o "calculate"
-- Responde SOLO el array JSON, sin explicación, sin markdown, sin backticks`,
+Reglas de mapeo:
+- Cualquier pregunta sobre señales S1/S2/S3/S4/S5/S6, scoring, 
+  FVG, indicadores → ["fEval", "tradingLogic", "checkS6Bull", "smartScore"]
+- ADX, RSI, EMA, Supertrend, indicadores técnicos → ["tradingLogic", "calcADX", "fEval"]
+- screener, scanner, filtro → ["tradingLogic", "fEval", "screener"]
+- bias, mercado, BTC → ["biasEngine", "bias"]
+- trailing, stop → ["trailingStop", "moving_plan"]
+- circuit breaker, streak → ["circuitBreaker", "streak"]
+- Prioriza SIEMPRE archivos en lib/ o services/ del api-server, 
+  NUNCA archivos .tsx, context/, components/
+Responde SOLO el array JSON, sin explicación, sin backticks`,
           },
           {
             role: 'user',
@@ -212,6 +211,9 @@ async function searchWithAITerms(
     'README',
     'node_modules/',
     '.md',
+    'context/',
+    'components/',
+    'mobile/',
   ];
 
   function isCodeFile(path: string): boolean {

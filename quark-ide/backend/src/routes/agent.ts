@@ -633,13 +633,27 @@ Usa frases cortas. Cada idea en una línea separada.`,
     const savedCtx = await loadAgentContext().catch(() => null)
 
     if (savedCtx && savedCtx.repo === repo) {
-      preloadedFiles = savedCtx.preloadedFiles
-      send('action', { text: `⚡ Contexto reutilizado de FAST mode — ${preloadedFiles.length} archivo(s) ya cargados` })
-      send('action', { text: `📋 Usando: ${preloadedFiles.map(f => f.path.split('/').pop()).join(', ')}` })
-      if (savedCtx.functionName) {
-        send('action', { text: `🎯 Función en scope: ${savedCtx.functionName}` })
+      const BACKEND_INDICATORS = [
+        'lib/', 'services/', 'routes/api-server',
+        'botEngine', 'tradingLogic', 'scoring', 'screener',
+      ];
+      const hasBackend = savedCtx.preloadedFiles.some((f: { path: string }) =>
+        BACKEND_INDICATORS.some((indicator) => f.path.includes(indicator))
+      );
+      if (hasBackend) {
+        preloadedFiles = savedCtx.preloadedFiles
+        send('action', { text: `⚡ Contexto reutilizado de FAST mode — ${preloadedFiles.length} archivo(s) ya cargados` })
+        send('action', { text: `📋 Usando: ${preloadedFiles.map(f => f.path.split('/').pop()).join(', ')}` })
+        if (savedCtx.functionName) {
+          send('action', { text: `🎯 Función en scope: ${savedCtx.functionName}` })
+        }
+      } else {
+        console.log(`[agent] Cache only has frontend files — bypassing, running fresh search`);
+        send('action', { text: `🔎 Caché solo tiene frontend — buscando archivos de backend...` })
       }
-    } else {
+    }
+
+    if (preloadedFiles.length === 0) {
       send('action', { text: `🔎 Buscando archivos relacionados con: "${prompt.slice(0, 50)}${prompt.length > 50 ? '...' : ''}"` })
 
     const relevantPathsRaw = await generateWithFallback(
@@ -678,7 +692,7 @@ Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
     } catch {
       // Si falla la pre-lectura, continúa sin contexto adicional
     }
-      } // cierre del else — fin del bloque de carga desde GitHub
+    } // cierre del if preloadedFiles.length === 0
 
     const fileContextStr = preloadedFiles.length > 0
       ? '\n\nCONTENIDO REAL DE ARCHIVOS RELEVANTES:\n' +

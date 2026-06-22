@@ -1,0 +1,77 @@
+Hay un problema en War Room y Quark Agent — ambos cargan archivos 
+de frontend desde caché en vez de buscar el archivo correcto de backend.
+
+El archivo real del scoring engine de Signal OS es:
+artifacts/api-server/src/lib/tradingLogic.ts
+
+## FIX 1 — War Room (warroom.ts)
+
+En extractSearchTermsWithAI(), reemplazar el content del system prompt con:
+
+`Eres un extractor de términos técnicos para búsqueda en GitHub Code Search.
+Dado un challenge sobre un bot de crypto trading en TypeScript, responde 
+ÚNICAMENTE con un JSON array de máximo 4 strings.
+
+Reglas de mapeo:
+- Cualquier pregunta sobre señales S1/S2/S3/S4/S5/S6, scoring, 
+  FVG, indicadores → ["fEval", "tradingLogic", "checkS6Bull", "smartScore"]
+- ADX, RSI, EMA, Supertrend, indicadores técnicos → ["tradingLogic", "calcADX", "fEval"]
+- screener, scanner, filtro → ["tradingLogic", "fEval", "screener"]
+- bias, mercado, BTC → ["biasEngine", "bias"]
+- trailing, stop → ["trailingStop", "moving_plan"]
+- circuit breaker, streak → ["circuitBreaker", "streak"]
+- Prioriza SIEMPRE archivos en lib/ o services/ del api-server, 
+  NUNCA archivos .tsx, context/, components/
+Responde SOLO el array JSON, sin explicación, sin backticks`
+
+En searchWithAITerms(), en el filtro isCodeFile(), agregar también 
+exclusión de archivos context/ y components/:
+
+const EXCLUDED_PATHS = [
+  'attached_assets/',
+  'replit.md',
+  '.txt',
+  'README',
+  'node_modules/',
+  '.md',
+  'context/',
+  'components/',
+  'mobile/',
+];
+
+
+## FIX 2 — Quark Agent (agent.ts o donde esté resolveRepoContext del agent)
+
+En la función que carga el contexto del repo para el Agent, agregar 
+la misma validación de caché que ya tiene War Room:
+
+Buscar donde Agent hace loadSharedAgentContext() o carga archivos 
+en caché y agregar este filtro ANTES de usar el caché:
+
+const BACKEND_INDICATORS = [
+  'lib/', 'services/', 'routes/api-server',
+  'botEngine', 'tradingLogic', 'scoring', 'screener'
+];
+
+const hasBackend = cachedFiles.some((f: { path: string }) =>
+  BACKEND_INDICATORS.some((indicator) => f.path.includes(indicator))
+);
+
+if (!hasBackend) {
+  console.log(`[agent] Cache only has frontend files — bypassing, running fresh search`);
+  // continuar con búsqueda fresca en vez de usar el caché
+}
+
+
+## FIX 3 — Limpiar caché actual de PostgreSQL
+
+Ejecutar esta query en la base de datos para limpiar el caché 
+contaminado de Signal OS (Ahorar):
+
+Buscar en el código la función saveAgentContext() y ver qué tabla 
+usa. Luego ejecutar:
+DELETE FROM agent_context WHERE repo = 'Ahorar';
+
+O el equivalente según el nombre real de la tabla.
+
+No tocar nada más. Solo estos tres cambios.
