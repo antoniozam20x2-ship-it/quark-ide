@@ -1,0 +1,60 @@
+En QuarkAgent.tsx, dos fixes en el panel de backend 
+(sección "BACKEND PROJECT result panel"):
+
+## FIX 1 — Botón "Enviar a War Room" con condición correcta
+
+Buscar:
+            {/* Enviar a War Room */}
+            {onSendToWarRoom && (
+              (result.files?.length ?? 0) > 0 ||
+              !!result.mainContent ||
+              readFilesRef.current.length > 0
+            ) && (
+
+Reemplazar con:
+            {/* Enviar a War Room */}
+            {onSendToWarRoom && (
+              (result.files?.length ?? 0) > 0 ||
+              !!result.mainContent ||
+              readFilesRef.current.length > 0
+            ) ? (
+
+
+Y buscar el cierre del botón "Enviar a War Room":
+            )}
+
+Reemplazar con:
+            ) : null}
+
+
+## FIX 2 — En modo lectura (FAST) no mostrar botón de commit
+
+El panel de backend muestra el diff + botón commit cuando 
+result.commitMessage existe. En modo lectura no hay commitMessage.
+
+Buscar el bloque que dice:
+              ) : (
+                /* Read-only / diagnostic result — no files to commit */
+                <div style={{
+                  background: 'rgba(0,255,136,0.04)', border: '1px solid #1e3f2a',
+                  borderRadius: 6, padding: '8px 12px',
+                  color: '#4b6b58', fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
+                }}>
+                  ✅ Diagnóstico completado — sin archivos para commit
+                </div>
+              )
+
+Reemplazar con:
+              ) : (
+                /* Read-only / diagnostic result — no files to commit */
+                <div style={{
+                  background: 'rgba(0,255,136,0.04)', border: '1px solid #1e3f2a',
+                  borderRadius: 6, padding: '8px 12px',
+                  color: '#4b6b58', fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
+                  display: 'flex', alignItems: 'center', gap: 6,
+                }}>
+                  ✅ Análisis completado
+                </div>
+              )
+
+Solo estos dos cambios. No tocar nada más.

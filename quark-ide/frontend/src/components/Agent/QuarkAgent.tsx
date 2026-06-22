@@ -1051,8 +1051,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                   background: 'rgba(0,255,136,0.04)', border: '1px solid #1e3f2a',
                   borderRadius: 6, padding: '8px 12px',
                   color: '#4b6b58', fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
+                  display: 'flex', alignItems: 'center', gap: 6,
                 }}>
-                  ✅ Diagnóstico completado — sin archivos para commit
+                  ✅ Análisis completado
                 </div>
               )
             )}
@@ -1062,7 +1063,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               (result.files?.length ?? 0) > 0 ||
               !!result.mainContent ||
               readFilesRef.current.length > 0
-            ) && (
+            ) ? (
               <button
                 onClick={() => {
                   const filesToSend = result.files?.length
@@ -1091,7 +1092,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               >
                 🏛 Enviar a War Room
               </button>
-            )}
+            ) : null}
           </div>
         )}
 
