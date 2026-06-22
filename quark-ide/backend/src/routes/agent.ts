@@ -152,6 +152,18 @@ async function generateWithFallback(prompt: string, system: string): Promise<str
   throw lastErr
 }
 
+// ── Search keyword extractor ──────────────────────────────────────────────────
+
+function extractSearchKeywords(prompt: string): string[] {
+  const stopWords = new Set(['el', 'la', 'de', 'en', 'es', 'un', 'una', 'the', 'is', 'a', 'an', 'of', 'in', 'for', 'with', 'how', 'what', 'where', 'why', 'when', 'which', 'que', 'como', 'cual', 'donde', 'por', 'para', 'con', 'sin', 'los', 'las', 'del']);
+  return prompt
+    .toLowerCase()
+    .replace(/[^a-záéíóúñA-ZÁÉÍÓÚÑ0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 3 && !stopWords.has(w))
+    .slice(0, 4);
+}
+
 const router = Router();
 
 const REPAIR_SYSTEM = `Eres un agente de reparación de JSON.
@@ -490,7 +502,9 @@ router.post('/generate', async (req, res) => {
       if (functionName && !foundInPreSelected) {
         send('action', { text: `🔬 ${functionName} no está en los archivos esperados — buscando en GitHub directamente...` })
 
-        const searchResults = await searchCodeInRepo(functionName, repo)
+        const keywords = extractSearchKeywords(prompt);
+        const enrichedQuery = [functionName, ...keywords].filter(Boolean).slice(0, 5).join(' ');
+        const searchResults = await searchCodeInRepo(enrichedQuery, repo)
 
         if (searchResults.length > 0) {
           send('action', { text: `📡 GitHub encontró ${searchResults.length} archivo(s) con "${functionName}"` })

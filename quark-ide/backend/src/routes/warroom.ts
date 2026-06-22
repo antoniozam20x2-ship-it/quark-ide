@@ -3,7 +3,7 @@ import { generateContent, GeminiAuthError } from '../services/gemini.js';
 import { saveToMemory } from '../services/rufloMemory.js';
 import { loadSharedAgentContext } from './chat.js';
 import { saveAgentContext } from './agent.js';
-import { getFileTree, getFileContent } from '../services/github.js';
+import { getFileTree, getFileContent, searchCodeInRepo } from '../services/github.js';
 
 // ── Provider constants ────────────────────────────────────────────────────────
 
@@ -134,15 +134,9 @@ const APP_NAME_TO_REPO: Record<string, string> = {
   'Quark IDE': 'quark-ide',
 };
 
-const REPO_FILE_PRIORITY = [
-  /server\.(ts|js)$/,
-  /routes\//,
-  /services\//,
-  /engine\.(ts|js)$/,
-];
-
 async function resolveRepoContext(
   appName: string | null | undefined,
+  challenge: string,
   repoContext?: RepoContextPayload,
 ): Promise<RepoContextPayload | undefined> {
   // Step 1: frontend sent real content → use it as-is
@@ -164,38 +158,44 @@ async function resolveRepoContext(
     }
   } catch { /* non-blocking */ }
 
-  // Step 3: nothing cached — fetch from GitHub and persist for Chat, Agent, and War Room
+  // Step 3: nothing cached — smart GitHub search based on the challenge
   if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_OWNER) return undefined;
   try {
-    const fullTree = await getFileTree(repoName, 'main');
-    const paths = fullTree
-      .filter((f) => f.type === 'blob')
-      .filter((f) => !f.path.includes('node_modules') && !f.path.includes('dist/') && !f.path.includes('.lock'))
-      .sort((a, b) => {
-        const score = (p: string) => REPO_FILE_PRIORITY.some((rx) => rx.test(p)) ? 0 : 1;
-        return score(a.path) - score(b.path);
-      })
-      .slice(0, 6)
-      .map((f) => f.path);
+    console.log(`[warroom] Fetching fresh GitHub context for ${repoName} with query: "${challenge}"`);
+
+    const searchResults = await searchCodeInRepo(challenge, repoName);
+
+    if (searchResults.length === 0) {
+      console.warn(`[warroom] No search results for "${challenge}" in ${repoName}`);
+      return undefined;
+    }
+
+    const topPaths = searchResults.slice(0, 5).map((r) => r.path);
 
     const results = await Promise.allSettled(
-      paths.map(async (p) => ({ path: p, content: await getFileContent(p, repoName, 'main') })),
+      topPaths.map(async (p) => ({ path: p, content: await getFileContent(p, repoName, 'main') })),
     );
+
     const keyFiles = results
       .filter((r): r is PromiseFulfilledResult<{ path: string; content: string }> => r.status === 'fulfilled')
       .map((r) => r.value);
 
     if (keyFiles.length > 0) {
+      console.log(`[warroom] Found ${keyFiles.length} relevant files: ${keyFiles.map((f) => f.path).join(', ')}`);
+
       await saveAgentContext({
         preloadedFiles: keyFiles,
         functionName:   null,
-        prompt:         `[warroom auto-load for ${appName}]`,
+        prompt:         `[warroom auto-load for ${appName}: ${challenge}]`,
         repo:           repoName,
       }).catch(() => { /* non-blocking */ });
 
+      console.log(`[warroom] Cached ${keyFiles.length} files for ${repoName}`);
       return { tree: keyFiles.map((f) => f.path), keyFiles };
     }
-  } catch { /* non-blocking */ }
+  } catch (err) {
+    console.warn(`[warroom] GitHub search failed for ${repoName}:`, err instanceof Error ? err.message : err);
+  }
 
   return undefined;
 }
@@ -549,7 +549,7 @@ router.post('/board', async (req: Request, res: Response) => {
   }
 
   try {
-    const resolvedCtx = await resolveRepoContext(appName, repoContext);
+    const resolvedCtx = await resolveRepoContext(appName, challenge, repoContext);
     const response = await callBoardMember(member, challenge, appName ?? null, resolvedCtx);
     res.json({ role: member, response });
   } catch (err) {
@@ -573,7 +573,7 @@ router.post('/swarm', async (req: Request, res: Response) => {
   const resolvedApp = appName ?? null;
   const start = Date.now();
   try {
-    const resolvedCtx = await resolveRepoContext(appName, repoContext);
+    const resolvedCtx = await resolveRepoContext(appName, challenge, repoContext);
 
     let signalReport: string | null = null;
     let sniperReport: string | null = null;
@@ -591,7 +591,69 @@ router.post('/swarm', async (req: Request, res: Response) => {
       callBoardMember('QA',       challenge, resolvedApp, resolvedCtx, signalReport, sniperReport, useClaudeThinking),
     ]);
 
-    const consensus = await generateConsensus(challenge, { CEO: ceo, CTO: cto, Designer: designer, QA: qa }, useClaudeThinking);
+    // ── Cambio 3: retry si CTO o QA dieron respuesta pobre ───────────────────
+
+    const POOR_RESPONSE_SIGNALS = [
+      'no tengo acceso', 'no puedo ver', 'necesitaría acceso', 'documentación técnica',
+      'consultar con el equipo', 'no está disponible', 'no encuentro',
+      'i don\'t have access', 'would need access',
+    ];
+
+    function isPoorResponse(response: string): boolean {
+      const lower = response.toLowerCase();
+      return POOR_RESPONSE_SIGNALS.some((signal) => lower.includes(signal));
+    }
+
+    const poorResponders = [
+      { key: 'CTO' as const, response: cto },
+      { key: 'QA'  as const, response: qa  },
+    ].filter((r) => isPoorResponse(r.response));
+
+    let finalCto = cto;
+    let finalQa  = qa;
+
+    if (poorResponders.length > 0 && resolvedApp) {
+      console.log(`[warroom] Poor responses from: ${poorResponders.map((r) => r.key).join(', ')} — retrying with deeper search`);
+      try {
+        const repoName = APP_NAME_TO_REPO[resolvedApp];
+        if (repoName) {
+          const deepResults = await searchCodeInRepo(`${challenge} config threshold`, repoName);
+          if (deepResults.length > 0) {
+            const deepFiles = await Promise.allSettled(
+              deepResults.slice(0, 3).map(async (r) => ({
+                path: r.path,
+                content: await getFileContent(r.path, repoName, 'main'),
+              })),
+            );
+            const validDeepFiles = deepFiles
+              .filter((r): r is PromiseFulfilledResult<{ path: string; content: string }> => r.status === 'fulfilled')
+              .map((r) => r.value);
+
+            if (validDeepFiles.length > 0) {
+              const deepCtx: RepoContextPayload = {
+                tree: validDeepFiles.map((f) => f.path),
+                keyFiles: validDeepFiles,
+              };
+              console.log(`[warroom] Retry with ${validDeepFiles.length} deeper files: ${validDeepFiles.map((f) => f.path).join(', ')}`);
+
+              const retryResults = await Promise.all(
+                poorResponders.map((r) =>
+                  callBoardMember(r.key, challenge, resolvedApp, deepCtx, signalReport, sniperReport, useClaudeThinking),
+                ),
+              );
+              poorResponders.forEach((r, i) => {
+                if (r.key === 'CTO') finalCto = retryResults[i];
+                if (r.key === 'QA')  finalQa  = retryResults[i];
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[warroom] Retry search failed:', err instanceof Error ? err.message : err);
+      }
+    }
+
+    const consensus = await generateConsensus(challenge, { CEO: ceo, CTO: finalCto, Designer: designer, QA: finalQa }, useClaudeThinking);
 
     // Guardar consensus en memoria persistente
     try {

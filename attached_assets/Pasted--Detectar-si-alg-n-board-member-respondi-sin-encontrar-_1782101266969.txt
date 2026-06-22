@@ -1,0 +1,93 @@
+// Detectar si algún board member respondió sin encontrar el contexto
+const POOR_RESPONSE_SIGNALS = [
+  'no tengo acceso',
+  'no puedo ver',
+  'necesitaría acceso',
+  'documentación técnica',
+  'consultar con el equipo',
+  'no está disponible',
+  'no encuentro',
+  'i don\'t have access',
+  'would need access',
+];
+
+function isPoorResponse(response: string): boolean {
+  const lower = response.toLowerCase();
+  return POOR_RESPONSE_SIGNALS.some(signal => lower.includes(signal));
+}
+
+// Si CTO o QA (los únicos que usan código) dieron respuesta pobre,
+// intenta una búsqueda más específica y re-pregunta
+const poorResponders = [
+  { key: 'CTO', response: cto },
+  { key: 'QA', response: qa },
+].filter(r => isPoorResponse(r.response));
+
+let finalCto = cto;
+let finalQa = qa;
+
+if (poorResponders.length > 0 && resolvedApp) {
+  console.log(`[warroom] Poor responses detected from: ${poorResponders.map(r => r.key).join(', ')} — retrying with deeper search`);
+  
+  try {
+    const repoName = APP_NAME_TO_REPO[resolvedApp];
+    if (repoName) {
+      // Búsqueda más agresiva: keywords específicas del challenge
+      const deepResults = await searchCodeInRepo(challenge + ' config threshold', repoName);
+      
+      if (deepResults.length > 0) {
+        const deepFiles = await Promise.allSettled(
+          deepResults.slice(0, 3).map(async r => ({
+            path: r.path,
+            content: await getFileContent(r.path, repoName, 'main'),
+          }))
+        );
+        
+        const validDeepFiles = deepFiles
+          .filter((r): r is PromiseFulfilledResult<{ path: string; content: string }> => 
+            r.status === 'fulfilled'
+          )
+          .map(r => r.value);
+        
+        if (validDeepFiles.length > 0) {
+          const deepCtx: RepoContextPayload = {
+            tree: validDeepFiles.map(f => f.path),
+            keyFiles: validDeepFiles,
+          };
+          
+          console.log(`[warroom] Retry with ${validDeepFiles.length} deeper files: ${validDeepFiles.map(f => f.path).join(', ')}`);
+          
+          // Re-preguntar solo a los que dieron respuesta pobre
+          const retryPromises = poorResponders.map(r => 
+            callBoardMember(
+              r.key as 'CTO' | 'QA',
+              challenge,
+              resolvedApp,
+              deepCtx,
+              signalReport,
+              sniperReport,
+              useClaudeThinking,
+            )
+          );
+          
+          const retryResults = await Promise.all(retryPromises);
+          
+          poorResponders.forEach((r, i) => {
+            if (r.key === 'CTO') finalCto = retryResults[i];
+            if (r.key === 'QA') finalQa = retryResults[i];
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[warroom] Retry search failed:', err instanceof Error ? err.message : err);
+    // no bloquear — usar respuestas originales
+  }
+}
+
+// Reemplazar cto y qa por finalCto y finalQa en el generateConsensus:
+const consensus = await generateConsensus(
+  challenge,
+  { CEO: ceo, CTO: finalCto, Designer: designer, QA: finalQa },
+  useClaudeThinking,
+);
