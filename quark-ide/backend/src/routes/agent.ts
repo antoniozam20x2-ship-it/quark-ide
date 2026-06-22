@@ -56,6 +56,8 @@ async function loadAgentContext(): Promise<{
   functionName: string | null
   prompt: string
   repo: string
+  querySignature?: string
+  savedAt?: number
 } | null> {
   try {
     const r = await pool.query<{ content: string }>(
