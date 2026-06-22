@@ -313,13 +313,20 @@ async function resolveRepoContext(
       topPaths.map(async (p) => ({ path: p, content: await getFileContent(p, repoName, 'main') })),
     );
 
-    const keyFiles = results
+    const allFiles = results
       .filter((r): r is PromiseFulfilledResult<{ path: string; content: string }> => r.status === 'fulfilled')
-      .map((r) => r.value)
-      .filter((f) => f.content.length <= 15_000);
+      .map((r) => r.value);
+
+    // Truncar archivos grandes en vez de descartarlos
+    const keyFiles = allFiles.map((f) => ({
+      path: f.path,
+      content: f.content.length > 15_000
+        ? f.content.slice(0, 15_000) + '\n// ... (truncado por tamaño)'
+        : f.content,
+    }));
 
     if (keyFiles.length === 0) {
-      console.warn(`[warroom] All found files exceeded 15k char limit, skipping`);
+      console.warn(`[warroom] No files loaded for ${repoName}`);
     }
 
     if (keyFiles.length > 0) {
