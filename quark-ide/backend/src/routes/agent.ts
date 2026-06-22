@@ -479,8 +479,8 @@ async function searchAndLoadFiles(
             return { path: r.path, content: lines.slice(0, 300).join('\n') };
           }
 
-          const start = Math.max(0, hitLine - 50);
-          const end = Math.min(lines.length, hitLine + 250);
+          const start = Math.max(0, hitLine - 3);
+          const end = Math.min(lines.length, hitLine + 25);
           const section = lines.slice(start, end).join('\n');
           
           console.log(`[agent] ${r.path}: extracting lines ${start}-${end} around "${hitTerm}" (hit at line ${hitLine})`);
