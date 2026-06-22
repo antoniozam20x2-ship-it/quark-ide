@@ -134,6 +134,90 @@ const APP_NAME_TO_REPO: Record<string, string> = {
   'Quark IDE': 'quark-ide',
 };
 
+async function extractSearchTermsWithAI(challenge: string): Promise<string[]> {
+  const keys = getGroqKeys();
+  if (keys.length === 0) return [];
+
+  try {
+    const res = await fetchWithTimeout(GROQ_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${keys[0]}`,
+      },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        max_tokens: 60,
+        temperature: 0,
+        messages: [
+          {
+            role: 'system',
+            content: `Eres un extractor de términos técnicos de código.
+Dado un challenge en lenguaje natural, responde ÚNICAMENTE con un JSON array 
+de strings con los identificadores técnicos más relevantes para buscar en un 
+repositorio TypeScript de un bot de crypto trading.
+
+Reglas:
+- Máximo 4 términos
+- Prioriza: nombres de variables, funciones, constantes que probablemente 
+  existan en el código (camelCase, UPPER_CASE, siglas técnicas)
+- Si mencionan ADX → incluye "ADX" y "adxValue" o "adxThreshold"
+- Si mencionan score/scoring → incluye "smartScore" y "minScore"  
+- Si mencionan señales S1-S6 → incluye "S1" o el específico mencionado
+- Si mencionan filtro/filter → incluye "minScore" o "threshold"
+- Si mencionan entrada/entry → incluye "entry" y "signal"
+- Si mencionan trailing → incluye "trailingStop"
+- Si mencionan bias → incluye "biasEngine"
+- Responde SOLO el array JSON, sin explicación, sin markdown`,
+          },
+          {
+            role: 'user',
+            content: challenge,
+          },
+        ],
+      }),
+    }, 8_000);
+
+    if (!res.ok) return [];
+    const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const raw = json.choices?.[0]?.message?.content ?? '[]';
+    const parsed = JSON.parse(raw.trim()) as unknown;
+    if (Array.isArray(parsed) && parsed.every((t) => typeof t === 'string')) {
+      console.log(`[warroom] AI extracted search terms: [${parsed.join(', ')}]`);
+      return parsed as string[];
+    }
+    return [];
+  } catch (err) {
+    console.warn('[warroom] extractSearchTermsWithAI failed:', err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
+async function searchWithAITerms(
+  challenge: string,
+  repoName: string,
+): Promise<{ path: string }[]> {
+  const terms = await extractSearchTermsWithAI(challenge);
+
+  if (terms.length === 0) {
+    const fallbackWords = challenge.split(/\s+/).filter(w => w.length > 4).slice(0, 2);
+    console.log(`[warroom] No AI terms, fallback words: [${fallbackWords.join(', ')}]`);
+    if (fallbackWords.length === 0) return [];
+    return searchCodeInRepo(fallbackWords.join(' '), repoName);
+  }
+
+  for (const term of terms) {
+    const results = await searchCodeInRepo(term, repoName);
+    if (results.length > 0) {
+      console.log(`[warroom] Term "${term}" → ${results.length} files: ${results.map(r => r.path).join(', ')}`);
+      return results;
+    }
+    console.log(`[warroom] Term "${term}" → 0 results, trying next term...`);
+  }
+
+  return [];
+}
+
 async function resolveRepoContext(
   appName: string | null | undefined,
   challenge: string,
@@ -163,10 +247,10 @@ async function resolveRepoContext(
   try {
     console.log(`[warroom] Fetching fresh GitHub context for ${repoName} with query: "${challenge}"`);
 
-    const searchResults = await searchCodeInRepo(challenge, repoName);
+    const searchResults = await searchWithAITerms(challenge, repoName);
 
     if (searchResults.length === 0) {
-      console.warn(`[warroom] No search results for "${challenge}" in ${repoName}`);
+      console.warn(`[warroom] No search results for any AI-extracted term from "${challenge}" in ${repoName}`);
       return undefined;
     }
 
@@ -617,7 +701,10 @@ router.post('/swarm', async (req: Request, res: Response) => {
       try {
         const repoName = APP_NAME_TO_REPO[resolvedApp];
         if (repoName) {
-          const deepResults = await searchCodeInRepo(`${challenge} config threshold`, repoName);
+          const deepResults = await searchWithAITerms(
+            challenge + ' threshold score config',
+            repoName,
+          );
           if (deepResults.length > 0) {
             const deepFiles = await Promise.allSettled(
               deepResults.slice(0, 3).map(async (r) => ({
