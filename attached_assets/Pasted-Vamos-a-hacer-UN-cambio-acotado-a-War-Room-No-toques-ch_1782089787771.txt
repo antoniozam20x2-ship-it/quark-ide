@@ -1,0 +1,16 @@
+Vamos a hacer UN cambio, acotado a War Room. No toques chat.ts ni agent.ts salvo para importar funciones existentes — no las reescribas ni las dupliques.
+Objetivo: que warroom.ts deje de depender 100% de que el frontend le mande repoContext. Debe resolver el contexto del repo en este orden:
+1. Si repoContext llega en el body con contenido real (tree.length > 0 o keyFiles.length > 0), úsalo tal cual (comportamiento actual, no lo rompas).
+2. Si no llega o viene vacío, intenta leer el contexto ya cacheado en PostgreSQL bajo el namespace quark-agent para ese repo — usa la misma función loadSharedAgentContext que ya existe en chat.ts (impórtala, no la copies).
+3. Si tampoco hay nada cacheado, dispara el mismo mecanismo de búsqueda que ya usa Quark Agent (GitHub Code Search API vía octokit.search.code) para traer archivos reales del repo, y guarda el resultado en PostgreSQL con el mismo patrón que usa Agent — así queda cacheado para que Chat, Agent y War Room lo compartan desde ahí en adelante.
+
+Antes de tocar código, investiga y repórtame:
+• La firma exacta de loadSharedAgentContext en chat.ts: qué parámetro usa para identificar el repo (¿appName tipo “Signal OS” o el nombre real del repo tipo “Ahorar”?), y qué devuelve.
+• Dónde vive la función que hace el Code Search real en Agent (probablemente en agent.ts o un archivo de servicio aparte), su firma, y cómo guarda el resultado en PostgreSQL después de buscar.
+• Si existe ya en el backend un mapeo appName → nombre real del repo en GitHub (en el frontend existe APP_MAP con esto, pero warroom.ts solo tiene los nombres de repo en comentarios dentro de APP_CONTEXTS, no como dato usable).
+Luego implementa:
+• Una función nueva en warroom.ts, ej. resolveRepoContext(appName, repoContext), que aplique la lógica de los 3 pasos de arriba.
+• Reemplaza el uso directo de repoContext en /board y /swarm por el resultado de resolveRepoContext(...).
+• No cambies /think ni /search — no usan repoContext de la misma forma.
+
+No hagas commit ni push todavía. Muéstrame el diff completo para que lo revise antes de aplicarlo
