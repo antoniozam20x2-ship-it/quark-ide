@@ -1067,7 +1067,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         )}
 
         {/* Enviar a War Room */}
-        {onSendToWarRoom && (
+        {result && onSendToWarRoom && (
           <button
             onClick={() => {
               const filesToSend = readFilesRef.current.length > 0
