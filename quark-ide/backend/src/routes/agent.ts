@@ -218,8 +218,8 @@ function applyOperations(
   sendFn: (event: string, data: Record<string, unknown>) => void,
 ): string {
   let content = originalContent;
+  const MAX_FAILURES = 1;
   let failureCount = 0;
-  const MAX_FAILURES = 2;
 
   for (const op of operations) {
     if (op.type !== 'str_replace') {
@@ -227,68 +227,26 @@ function applyOperations(
       continue;
     }
 
-    if (failureCount >= MAX_FAILURES) {
-      sendFn('action', { text: `❌ Demasiados fallos de str_replace — abortando patch` });
-      return originalContent;
-    }
-
-    // Try 1: Exact match
+    // Try 1: Exact match (most reliable)
     let idx = content.indexOf(op.old_str);
 
     if (idx !== -1) {
       content = content.slice(0, idx) + op.new_str + content.slice(idx + op.old_str.length);
-      sendFn('action', { text: `✅ Patch aplicado en ${filePath}` });
+      sendFn('action', { text: `✅ Exact match aplicado en ${filePath}` });
       continue;
     }
 
-    // Try 2: Fuzzy line-based match (normaliza espacios, busca bloques consecutivos)
-    const oldLines = op.old_str
-      .split('\n')
-      .map(l => l.trim())
-      .filter(l => l.length > 0);
+    // Try 2: Si falla exact match, NO intentar fuzzy — abortar y retornar original
+    sendFn('action', {
+      text: `❌ str_replace sin match exacto en ${filePath}`
+    });
+    sendFn('action', {
+      text: `⚠️ Buscaba: "${op.old_str.slice(0, 80).replace(/\n/g, '↵')}..."`
+    });
+    sendFn('action', {
+      text: `❌ Abortando patch — retornando archivo original sin modificaciones`
+    });
 
-    if (oldLines.length === 0) {
-      sendFn('action', { text: `⚠️ old_str vacío o solo whitespace — omitido` });
-      failureCount++;
-      continue;
-    }
-
-    const contentLines = content.split('\n');
-    let foundAt = -1;
-
-    for (let i = 0; i <= contentLines.length - oldLines.length; i++) {
-      const candidateBlock = contentLines
-        .slice(i, i + oldLines.length)
-        .map(l => l.trim())
-        .filter(l => l.length > 0);
-
-      if (candidateBlock.length === oldLines.length &&
-          candidateBlock.every((line, idx) => line === oldLines[idx])) {
-        foundAt = i;
-        break;
-      }
-    }
-
-    if (foundAt === -1) {
-      sendFn('action', {
-        text: `⚠️ Fuzzy match falló en ${filePath} — searched for: "${op.old_str.slice(0, 60).replace(/\n/g, '↵')}..."`
-      });
-      failureCount++;
-      continue;
-    }
-
-    const newLines = op.new_str.split('\n');
-    const patchedLines = [
-      ...contentLines.slice(0, foundAt),
-      ...newLines,
-      ...contentLines.slice(foundAt + oldLines.length)
-    ];
-    content = patchedLines.join('\n');
-    sendFn('action', { text: `✅ Patch fuzzy aplicado en ${filePath} (líneas ${foundAt}-${foundAt + oldLines.length - 1})` });
-  }
-
-  if (failureCount > 0) {
-    sendFn('action', { text: `⚠️ ${failureCount} operación(es) fallaron — usando original` });
     return originalContent;
   }
 
@@ -1190,13 +1148,22 @@ REGLAS:
       return;
     }
 
-    send('action', { text: '🔬 Modo cirugía — preparando patch...' });
-
     // Variables para el contexto quirúrgico
     const mainPreloaded = preloadedFiles[0];
     const blockStartLine = mainPreloaded?.startLine ?? 1;
     const blockEndLine = mainPreloaded?.endLine ?? 0;
     const mainFilePath = mainPreloaded?.path ?? '';
+
+    // Verificar que el archivo fue cargado correctamente para str_replace
+    if (!mainPreloaded?.content || mainPreloaded.content.length < 100) {
+      send('action', { text: `❌ Contexto insuficiente para patch — el archivo no fue cargado completo` });
+      send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+      res.end();
+      return;
+    }
+    send('action', { text: `📏 Contexto cargado — ${mainPreloaded.content.split('\n').length} líneas disponibles para patch` });
+
+    send('action', { text: '🔬 Modo cirugía — preparando patch...' });
 
     const systemPrompt = `Eres QUARK Agent en modo CIRUGÍA QUIRÚRGICA.
 Tu trabajo es generar las operaciones mínimas para corregir un problema específico.
@@ -1222,13 +1189,17 @@ RESPONDE ÚNICAMENTE CON ESTE JSON (sin markdown, sin backticks, sin texto extra
   "commitMessage": "fix: descripción del cambio"
 }
 
-REGLAS CRÍTICAS:
-- old_str debe ser texto que existe LITERALMENTE en el bloque de arriba
-- Incluye suficiente contexto en old_str para que sea único (mínimo 1 línea completa)
-- Máximo 3 operaciones por respuesta
-- Si el fix requiere más de 3 operaciones, agrúpalas en menos str_replace con más contexto
-- NUNCA inventes old_str — cópialo exactamente del bloque
-- El JSON debe usar SOLO comillas dobles`;
+REGLAS CRÍTICAS PARA old_str:
+- old_str debe ser texto copiado LITERALMENTE del bloque de arriba — sin cambiar ni un carácter
+- old_str debe incluir MÍNIMO 3 líneas completas de contexto (antes y después del cambio)
+- old_str debe ser ÚNICO en el archivo — si la línea se repite, incluye más contexto hasta que sea única
+- old_str NUNCA puede terminar en mitad de una línea — siempre líneas completas
+- NUNCA uses old_str de una sola línea — mínimo 3 líneas
+- Si el cambio requiere agregar código nuevo, usa old_str con las 2 líneas ANTES del punto de inserción y new_str con esas mismas 2 líneas + el código nuevo
+- NUNCA inventes old_str — cópialo byte a byte del bloque
+- Máximo 2 operaciones por respuesta
+- El JSON debe usar SOLO comillas dobles
+- Si no puedes identificar un old_str único de mínimo 3 líneas, responde con operations: [] y explica por qué`;
 
     const raw = (await generateWithFallback(systemPrompt + '\n\nTAREA: ' + prompt, systemPrompt)).trim();
 
