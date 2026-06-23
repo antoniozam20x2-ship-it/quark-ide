@@ -1296,6 +1296,15 @@ Responde con el mismo JSON de siempre:
           send('action', { text: '✅ Errores corregidos automáticamente' })
         } catch {
           send('action', { text: `⚠️ No se pudo auto-corregir — errores pendientes: ${validation.errors.join(' | ')}` })
+          send('action', { text: `⚠️ Revisión manual requerida — el diff está disponible para inspección` })
+          if (isNewFile) {
+            send('action', { text: `📋 Archivo nuevo — commit disponible a pesar de advertencias` })
+            // No bloquear — continúa al send('done')
+          } else {
+            send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch })
+            res.end()
+            return
+          }
         }
       } else {
         send('action', { text: '✅ Código validado — sin errores críticos' })
