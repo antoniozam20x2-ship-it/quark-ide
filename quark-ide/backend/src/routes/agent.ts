@@ -225,9 +225,36 @@ function applyOperations(
       continue;
     }
 
-    const idx = content.indexOf(op.old_str);
+    // Try exact match first
+    let idx = content.indexOf(op.old_str);
+
     if (idx === -1) {
-      sendFn('action', { text: `⚠️ str_replace sin match en ${filePath} — operación omitida` });
+      // Fuzzy match: normalizar espacios y saltos de línea
+      const normalizedOld = op.old_str
+        .split('\n')
+        .map(l => l.trim())
+        .filter(l => l.length > 0)
+        .join('\n');
+
+      const contentLines = content.split('\n');
+      const oldLines = normalizedOld.split('\n');
+
+      // Buscar bloque de líneas consecutivas que matcheen
+      for (let i = 0; i <= contentLines.length - oldLines.length; i++) {
+        const candidate = contentLines.slice(i, i + oldLines.length)
+          .map(l => l.trim())
+          .filter(l => l.length > 0)
+          .join('\n');
+        if (candidate === normalizedOld) {
+          // Encontró match fuzzy — reconstruir el índice exacto
+          idx = contentLines.slice(0, i).join('\n').length + (i > 0 ? 1 : 0);
+          break;
+        }
+      }
+    }
+
+    if (idx === -1) {
+      sendFn('action', { text: `⚠️ str_replace sin match en ${filePath} — operación omitida (searched for: ${op.old_str.slice(0, 80)})` });
       continue;
     }
 
