@@ -1295,13 +1295,13 @@ Responde con el mismo JSON de siempre:
           }
           send('action', { text: '✅ Errores corregidos automáticamente' })
         } catch {
-          send('action', { text: '⚠️ No se pudo auto-corregir — revisa el diff con cuidado' })
+          send('action', { text: `⚠️ No se pudo auto-corregir — errores pendientes: ${validation.errors.join(' | ')}` })
         }
       } else {
         send('action', { text: '✅ Código validado — sin errores críticos' })
       }
-    } catch {
-      send('action', { text: '⚡ Validación omitida — continúa con revisión manual' })
+    } catch (validationErr) {
+      send('action', { text: `⚡ Validación omitida: ${validationErr instanceof Error ? validationErr.message : String(validationErr)}` })
     }
     // ─────────────────────────────────────────────────────────────────────────
 
