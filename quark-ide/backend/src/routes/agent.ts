@@ -247,6 +247,39 @@ function applyOperations(
       text: `❌ Abortando patch — retornando archivo original sin modificaciones`
     });
 
+    // Generar prompt para Replit
+    const replicPrompt = `
+🔧 PROMPT PARA REPLIT:
+
+Abre el archivo: ${filePath}
+
+Busca esta línea exacta en el archivo:
+\`\`\`
+${op.old_str.split('\n')[0]?.slice(0, 100)}
+\`\`\`
+
+Copia el bloque EXACTO (mínimo 3 líneas) que contiene esa línea y envía:
+
+[Pega el bloque aquí]
+
+Luego en Quark Agent con modo DEEP:
+\`\`\`
+[DEEP][MODIFICAR] En ${filePath}, reemplaza:
+
+\`\`\`old
+[PEGA EL BLOQUE QUE COPIASTE]
+\`\`\`
+
+Por:
+
+\`\`\`new
+[EL BLOQUE + TUS CAMBIOS]
+\`\`\`
+\`\`\`
+    `.trim();
+
+    sendFn('action', { text: `📋 ${replicPrompt}` });
+
     return originalContent;
   }
 
