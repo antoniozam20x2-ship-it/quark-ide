@@ -1034,6 +1034,94 @@ REGLAS:
     }
     // ─────────────────────────────────────────────────────────────────────────
 
+    // ── DETECCIÓN: ¿crear archivo nuevo o modificar existente? ──────────────
+    const CREATE_KEYWORDS = /\b(crea|crear|crea el archivo|nuevo archivo|create|new file|añade el archivo|agrega el archivo)\b/i;
+    const isNewFile = CREATE_KEYWORDS.test(prompt);
+    const newFilePath = prompt.match(/[\w/\-\.]+\.(ts|tsx|js|jsx|json|py|md|yml|yaml)/)?.[0] ?? null;
+    const fileExistsInPreloaded = newFilePath
+      ? preloadedFiles.some(f => f.path.includes(newFilePath.split('/').pop() ?? ''))
+      : false;
+
+    if (isNewFile && newFilePath && !fileExistsInPreloaded) {
+      send('action', { text: `🆕 Modo creación — generando ${newFilePath}...` });
+
+      const createSystemPrompt = `Eres QUARK Agent en modo CREACIÓN DE ARCHIVO NUEVO.
+Genera el contenido completo del archivo solicitado.
+
+CONTEXTO DEL REPO:
+${fileContextStr || filePaths}
+
+RAZONAMIENTO PREVIO:
+${reasoningContext}
+
+RESPONDE ÚNICAMENTE CON ESTE JSON (sin markdown, sin backticks, sin texto extra):
+{
+  "files": [
+    {
+      "path": "${newFilePath}",
+      "content": "contenido completo del archivo"
+    }
+  ],
+  "commitMessage": "feat: descripción del archivo creado"
+}
+
+REGLAS:
+- El contenido debe ser TypeScript/JavaScript válido y production-ready
+- Usa los imports correctos basándote en el contexto del repo
+- El archivo debe integrarse con el stack existente (Node.js/Express/TypeScript)
+- NO incluyas explicaciones, SOLO el JSON`;
+
+      const raw = (await generateWithFallback(
+        createSystemPrompt + '\n\nTAREA: ' + prompt,
+        createSystemPrompt,
+      )).trim();
+
+      let newFiles: { path: string; content: string }[] = [];
+      let commitMessage = `feat: crear ${newFilePath}`;
+
+      try {
+        const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
+        const parsed = JSON.parse(cleaned) as { files: { path: string; content: string }[]; commitMessage: string };
+        newFiles = parsed.files ?? [];
+        commitMessage = parsed.commitMessage ?? commitMessage;
+      } catch {
+        send('action', { text: '⚠️ JSON malformado — intentando reparar...' });
+        try {
+          const repaired = await repairJSON(raw, prompt);
+          newFiles = repaired.files ?? [];
+          commitMessage = repaired.commitMessage ?? commitMessage;
+        } catch {
+          send('action', { text: '❌ No se pudo parsear el archivo generado' });
+          send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+          res.end();
+          return;
+        }
+      }
+
+      if (newFiles.length === 0) {
+        send('action', { text: '❌ El AI no generó contenido para el archivo' });
+        send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+        res.end();
+        return;
+      }
+
+      send('action', { text: `✅ ${newFilePath} generado — ${newFiles[0].content.split('\n').length} líneas` });
+      send('file', { path: newFilePath });
+
+      send('done', {
+        files: newFiles,
+        commitMessage,
+        mainComponent: newFilePath,
+        mainContent: newFiles[0].content,
+        repo,
+        branch,
+      });
+
+      await new Promise((r) => setTimeout(r, 100));
+      res.end();
+      return;
+    }
+
     send('action', { text: '🔬 Modo cirugía — preparando patch...' });
 
     // Variables para el contexto quirúrgico
