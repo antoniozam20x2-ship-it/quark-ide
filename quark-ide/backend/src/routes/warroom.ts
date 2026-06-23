@@ -700,6 +700,8 @@ REGLAS:
 - Si el cambio implica crear un archivo que no existe, el prompt_agent DEBE comenzar exactamente con: "[DEEP][CREAR] Crea el archivo <ruta completa>..."
 - Si el cambio implica modificar un archivo existente, el prompt_agent DEBE comenzar exactamente con: "[DEEP][MODIFICAR] Modifica la función <nombre> en <archivo>..."
 - NUNCA uses rutas de archivos que no existan en el código analizado. Si no puedes confirmar que el archivo existe, usa [CREAR].
+- En prompt_agent, usa SOLO rutas de archivos que hayas visto en el código analizado. Nunca inventes rutas como src/lib/ o src/middleware/ si no aparecen en los archivos del contexto.
+- Si no puedes confirmar la ruta exacta de un import, usa rutas relativas genéricas como './db.js' en lugar de '../lib/db.js'
 - El veredicto es PAUSAR solo si hay un fallo crítico sin mitigación posible. En todos los demás casos: MEJORAR`;
 
   const systemPrompt = `Eres el árbitro técnico del War Room de Jefferson. Produces veredictos de auditoría en formato JSON estructurado. Cada cambio que recomiendas debe ser implementable por un agente de código autónomo (Quark Agent) que leerá el repo en GitHub y hará el commit. Sé quirúrgico y específico.\n\n${BASE_CONTEXT}`;
