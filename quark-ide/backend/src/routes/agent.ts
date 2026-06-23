@@ -218,6 +218,8 @@ function applyOperations(
   sendFn: (event: string, data: Record<string, unknown>) => void,
 ): string {
   let content = originalContent;
+  let failureCount = 0;
+  const MAX_FAILURES = 2;
 
   for (const op of operations) {
     if (op.type !== 'str_replace') {
@@ -225,41 +227,69 @@ function applyOperations(
       continue;
     }
 
-    // Try exact match first
-    let idx = content.indexOf(op.old_str);
-
-    if (idx === -1) {
-      // Fuzzy match: normalizar espacios y saltos de línea
-      const normalizedOld = op.old_str
-        .split('\n')
-        .map(l => l.trim())
-        .filter(l => l.length > 0)
-        .join('\n');
-
-      const contentLines = content.split('\n');
-      const oldLines = normalizedOld.split('\n');
-
-      // Buscar bloque de líneas consecutivas que matcheen
-      for (let i = 0; i <= contentLines.length - oldLines.length; i++) {
-        const candidate = contentLines.slice(i, i + oldLines.length)
-          .map(l => l.trim())
-          .filter(l => l.length > 0)
-          .join('\n');
-        if (candidate === normalizedOld) {
-          // Encontró match fuzzy — reconstruir el índice exacto
-          idx = contentLines.slice(0, i).join('\n').length + (i > 0 ? 1 : 0);
-          break;
-        }
-      }
+    if (failureCount >= MAX_FAILURES) {
+      sendFn('action', { text: `❌ Demasiados fallos de str_replace — abortando patch` });
+      return originalContent;
     }
 
-    if (idx === -1) {
-      sendFn('action', { text: `⚠️ str_replace sin match en ${filePath} — operación omitida (searched for: ${op.old_str.slice(0, 80)})` });
+    // Try 1: Exact match
+    let idx = content.indexOf(op.old_str);
+
+    if (idx !== -1) {
+      content = content.slice(0, idx) + op.new_str + content.slice(idx + op.old_str.length);
+      sendFn('action', { text: `✅ Patch aplicado en ${filePath}` });
       continue;
     }
 
-    content = content.slice(0, idx) + op.new_str + content.slice(idx + op.old_str.length);
-    sendFn('action', { text: `✅ Patch aplicado en ${filePath}` });
+    // Try 2: Fuzzy line-based match (normaliza espacios, busca bloques consecutivos)
+    const oldLines = op.old_str
+      .split('\n')
+      .map(l => l.trim())
+      .filter(l => l.length > 0);
+
+    if (oldLines.length === 0) {
+      sendFn('action', { text: `⚠️ old_str vacío o solo whitespace — omitido` });
+      failureCount++;
+      continue;
+    }
+
+    const contentLines = content.split('\n');
+    let foundAt = -1;
+
+    for (let i = 0; i <= contentLines.length - oldLines.length; i++) {
+      const candidateBlock = contentLines
+        .slice(i, i + oldLines.length)
+        .map(l => l.trim())
+        .filter(l => l.length > 0);
+
+      if (candidateBlock.length === oldLines.length &&
+          candidateBlock.every((line, idx) => line === oldLines[idx])) {
+        foundAt = i;
+        break;
+      }
+    }
+
+    if (foundAt === -1) {
+      sendFn('action', {
+        text: `⚠️ Fuzzy match falló en ${filePath} — searched for: "${op.old_str.slice(0, 60).replace(/\n/g, '↵')}..."`
+      });
+      failureCount++;
+      continue;
+    }
+
+    const newLines = op.new_str.split('\n');
+    const patchedLines = [
+      ...contentLines.slice(0, foundAt),
+      ...newLines,
+      ...contentLines.slice(foundAt + oldLines.length)
+    ];
+    content = patchedLines.join('\n');
+    sendFn('action', { text: `✅ Patch fuzzy aplicado en ${filePath} (líneas ${foundAt}-${foundAt + oldLines.length - 1})` });
+  }
+
+  if (failureCount > 0) {
+    sendFn('action', { text: `⚠️ ${failureCount} operación(es) fallaron — usando original` });
+    return originalContent;
   }
 
   return content;
@@ -545,11 +575,22 @@ async function searchAndLoadFiles(
 
 router.post('/generate', async (req, res) => {
   // Auto-detectar deepMode desde prefijos del prompt
-  let { prompt, repo: bodyRepo, branch = 'main', projectName, deepMode } = req.body as {
+  let { prompt: rawPrompt, repo: bodyRepo, branch = 'main', projectName, deepMode } = req.body as {
     prompt?: string; repo?: string; branch?: string; projectName?: string; deepMode?: boolean;
   };
-  if (prompt?.includes('[DEEP]')) deepMode = true;
-  if (prompt?.includes('[FAST]')) deepMode = false;
+
+  // Auto-detect mode from prefixes — takes priority over toggle
+  if (rawPrompt?.includes('[DEEP]')) deepMode = true;
+  if (rawPrompt?.includes('[FAST]')) deepMode = false;
+
+  // Strip prefixes from prompt
+  const prompt = rawPrompt
+    ?.replace(/\[DEEP\]\[CREAR\]/gi, '')
+    ?.replace(/\[DEEP\]\[MODIFICAR\]/gi, '')
+    ?.replace(/\[DEEP\]\[AUDITAR\]/gi, '')
+    ?.replace(/\[DEEP\]/gi, '')
+    ?.replace(/\[FAST\]/gi, '')
+    ?.trim();
 
   const repo = bodyRepo ?? process.env.GITHUB_REPO;
   console.log(`[Agent/generate] repo recibido dinámicamente: ${repo}`);
@@ -1280,9 +1321,10 @@ NO reportes advertencias de estilo ni errores menores.`,
       ) as { valid: boolean; errors: string[]; affectedFiles: string[] }
 
       if (!validation.valid && validation.errors.length > 0) {
-        send('action', { text: `⚠️ ${validation.errors.length} error(es) detectado(s) — corrigiendo...` })
+        send('action', { text: `⚠️ ${validation.errors.length} error(es) detectado(s) — detalles:` })
         for (const err of validation.errors) {
-          send('action', { text: `🔴 ${err}` });
+          const errMsg = err.length > 150 ? err.slice(0, 150) + '...' : err;
+          send('action', { text: `🔴 ${errMsg}` });
         }
 
         const filesToValidateStr = finalFiles

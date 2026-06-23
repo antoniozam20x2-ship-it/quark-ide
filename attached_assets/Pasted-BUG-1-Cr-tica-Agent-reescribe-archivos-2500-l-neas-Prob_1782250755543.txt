@@ -1,0 +1,58 @@
+BUG 1 (Crítica): Agent reescribe archivos >2500 líneas
+
+Problema: El applyOperations fuzzy no matchea en archivos grandes.
+
+Solución: Reescribir con algoritmo de diff lineal + fallback seguro.
+
+En agent.ts (Replit), busca la función applyOperations (línea ~350) y reemplázala por:
+
+Cambios clave:
+
+•	Contador failureCount que aborta si 2 str_replace fallan
+•	Si alguno falla, retorna el contenido original sin modificaciones (no truncado)
+•	Fuzzy match busca bloques de líneas normalizadas (sin espacios)
+•	Logs detallados de qué está buscando
+BUG 2 (Media): TypeScript validation no muestra errores
+
+En agent.ts, busca el bloque de validación (línea ~1200 aprox):
+
+if (!validation.valid && validation.errors.length > 0) {
+send('action', { text: ⚠️ ${validation.errors.length} error(es) detectado(s) — corrigiendo... })
+for (const err of validation.errors) {
+send('action', { text: 🔴 ${err} });
+}
+
+Reemplázalo por
+
+if (!validation.valid && validation.errors.length > 0) {
+send('action', { text: ⚠️ ${validation.errors.length} error(es) detectado(s) — detalles: })
+for (const err of validation.errors) {
+// Limitar longitud del error para que sea legible
+const errMsg = err.length > 150 ? err.slice(0, 150) + '...' : err;
+send('action', { text: 🔴 ${errMsg} });
+}
+
+BUG 3 (Media): [DEEP] no activa automáticamente
+
+En agent.ts, busca esta sección (línea ~370):
+
+let { prompt, repo: bodyRepo, branch = 'main', projectName, deepMode } = req.body as {
+
+Asegúrate de que esté remplazado por
+
+let { prompt: rawPrompt, repo: bodyRepo, branch = 'main', projectName, deepMode } = req.body as {
+prompt?: string; repo?: string; branch?: string; projectName?: string; deepMode?: boolean;
+};
+
+// Auto-detectar modo desde prefijos — tiene prioridad sobre toggle
+if (rawPrompt?.includes('[DEEP]')) deepMode = true;
+if (rawPrompt?.includes('[FAST]')) deepMode = false;
+
+// Limpiar prefijos del prompt
+const prompt = rawPrompt
+?.replace(/[DEEP][CREAR]/gi, '')
+?.replace(/[DEEP][MODIFICAR]/gi, '')
+?.replace(/[DEEP][AUDITAR]/gi, '')
+?.replace(/[DEEP]/gi, '')
+?.replace(/[FAST]/gi, '')
+?.trim();

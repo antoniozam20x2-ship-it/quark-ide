@@ -1,0 +1,86 @@
+function applyOperations(
+  originalContent: string,
+  operations: Array<{ type: string; old_str: string; new_str: string }>,
+  filePath: string,
+  sendFn: (event: string, data: Record<string, unknown>) => void,
+): string {
+  let content = originalContent;
+  const originalLines = originalContent.split('\n');
+  let failureCount = 0;
+  const MAX_FAILURES = 2;
+
+  for (const op of operations) {
+    if (op.type !== 'str_replace') {
+      sendFn('action', { text: `⚠️ Operación desconocida '${op.type}' — omitida` });
+      continue;
+    }
+
+    if (failureCount >= MAX_FAILURES) {
+      sendFn('action', { text: `❌ Demasiados fallos de str_replace — abortando patch` });
+      return originalContent; // Retornar original sin modificaciones
+    }
+
+    // Try 1: Exact match
+    let idx = content.indexOf(op.old_str);
+    
+    if (idx !== -1) {
+      content = content.slice(0, idx) + op.new_str + content.slice(idx + op.old_str.length);
+      sendFn('action', { text: `✅ Patch aplicado en ${filePath}` });
+      continue;
+    }
+
+    // Try 2: Fuzzy line-based match (normaliza espacios, busca bloques consecutivos)
+    const oldLines = op.old_str
+      .split('\n')
+      .map(l => l.trim())
+      .filter(l => l.length > 0);
+
+    if (oldLines.length === 0) {
+      sendFn('action', { text: `⚠️ old_str vacío o solo whitespace — omitido` });
+      failureCount++;
+      continue;
+    }
+
+    const contentLines = content.split('\n');
+    let foundAt = -1;
+
+    // Buscar bloque de líneas que matchee
+    for (let i = 0; i <= contentLines.length - oldLines.length; i++) {
+      const candidateBlock = contentLines
+        .slice(i, i + oldLines.length)
+        .map(l => l.trim())
+        .filter(l => l.length > 0);
+
+      if (candidateBlock.length === oldLines.length && 
+          candidateBlock.every((line, idx) => line === oldLines[idx])) {
+        foundAt = i;
+        break;
+      }
+    }
+
+    if (foundAt === -1) {
+      sendFn('action', { 
+        text: `⚠️ Fuzzy match falló en ${filePath} — searched for: "${op.old_str.slice(0, 60).replace(/\n/g, '↵')}..."` 
+      });
+      failureCount++;
+      continue;
+    }
+
+    // Reconstruct content with new_str replacing the matched block
+    const newLines = op.new_str.split('\n');
+    const patchedLines = [
+      ...contentLines.slice(0, foundAt),
+      ...newLines,
+      ...contentLines.slice(foundAt + oldLines.length)
+    ];
+    content = patchedLines.join('\n');
+    sendFn('action', { text: `✅ Patch fuzzy aplicado en ${filePath} (líneas ${foundAt}-${foundAt + oldLines.length - 1})` });
+  }
+
+  if (failureCount > 0) {
+    sendFn('action', { text: `⚠️ ${failureCount} operación(es) fallaron — usando original` });
+    return originalContent;
+  }
+
+  return content;
+}
