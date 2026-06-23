@@ -75,7 +75,12 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
   const [swarmMode, setSwarmMode] = useState(true);
   const [useClaudeThinking, setUseClaudeThinking] = useState(false);
   const [processingTime, setProcessingTime] = useState<number | null>(null);
-  const [auditVerdict, setAuditVerdict] = useState<AuditVerdict | null>(null);
+  const [auditVerdict, setAuditVerdict] = useState<AuditVerdict | null>(() => {
+    try {
+      const raw = localStorage.getItem('warroom_last_verdict');
+      return raw ? (JSON.parse(raw) as AuditVerdict) : null;
+    } catch { return null; }
+  });
   const [targetRepo, setTargetRepo] = useState('');
   const [showRepoSelector, setShowRepoSelector] = useState(false);
   const [savedSession, setSavedSession] = useState<SavedSession | null>(() => {
@@ -106,6 +111,17 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
     const session: SavedSession = { challenge: ch, responses: res, consensus: con, timestamp: Date.now() };
     localStorage.setItem('warroom_last_session', JSON.stringify(session));
     setSavedSession(session);
+    // Persistir auditVerdict por separado
+    try {
+      const cleaned = con.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
+      const jsonStart = cleaned.indexOf('{');
+      const jsonEnd = cleaned.lastIndexOf('}');
+      const jsonStr = jsonStart !== -1 && jsonEnd !== -1 ? cleaned.slice(jsonStart, jsonEnd + 1) : cleaned;
+      const parsed = JSON.parse(jsonStr) as AuditVerdict;
+      if (parsed.cambios && Array.isArray(parsed.cambios)) {
+        localStorage.setItem('warroom_last_verdict', JSON.stringify(parsed));
+      }
+    } catch { /* no bloquear */ }
   }
 
   function restoreSession() {
@@ -134,6 +150,7 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
     setResponses([]);
     setConsensus('');
     setAuditVerdict(null);
+    localStorage.removeItem('warroom_last_verdict');
     setProcessingTime(null);
     setTargetRepo('');
     setShowRepoSelector(false);
@@ -169,8 +186,20 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
       persistSession(text, collected, con);
       // Parse audit verdict JSON if present
       try {
-        const cleaned = con.replace(/```json|```/g, '').trim();
-        const parsed = JSON.parse(cleaned) as AuditVerdict;
+        const cleaned = con
+          .replace(/```json\s*/gi, '')
+          .replace(/```\s*/gi, '')
+          .replace(/[\u0000-\u001F\u007F]/g, (c) => {
+            if (c === '\n' || c === '\r' || c === '\t') return c;
+            return '';
+          })
+          .trim();
+        const jsonStart = cleaned.indexOf('{');
+        const jsonEnd = cleaned.lastIndexOf('}');
+        const jsonStr = jsonStart !== -1 && jsonEnd !== -1
+          ? cleaned.slice(jsonStart, jsonEnd + 1)
+          : cleaned;
+        const parsed = JSON.parse(jsonStr) as AuditVerdict;
         if (parsed.cambios && Array.isArray(parsed.cambios)) {
           setAuditVerdict(parsed);
         } else {
@@ -194,6 +223,7 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
     setResponses([]);
     setConsensus('');
     setAuditVerdict(null);
+    localStorage.removeItem('warroom_last_verdict');
     setProcessingTime(null);
     setTargetRepo('');
     setShowRepoSelector(false);
@@ -244,8 +274,20 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
       persistSession(text, collected, con);
       // Parse audit verdict JSON if present
       try {
-        const cleaned = con.replace(/```json|```/g, '').trim();
-        const parsed = JSON.parse(cleaned) as AuditVerdict;
+        const cleaned = con
+          .replace(/```json\s*/gi, '')
+          .replace(/```\s*/gi, '')
+          .replace(/[\u0000-\u001F\u007F]/g, (c) => {
+            if (c === '\n' || c === '\r' || c === '\t') return c;
+            return '';
+          })
+          .trim();
+        const jsonStart = cleaned.indexOf('{');
+        const jsonEnd = cleaned.lastIndexOf('}');
+        const jsonStr = jsonStart !== -1 && jsonEnd !== -1
+          ? cleaned.slice(jsonStart, jsonEnd + 1)
+          : cleaned;
+        const parsed = JSON.parse(jsonStr) as AuditVerdict;
         if (parsed.cambios && Array.isArray(parsed.cambios)) {
           setAuditVerdict(parsed);
         } else {
