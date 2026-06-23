@@ -1066,14 +1066,8 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           </div>
         )}
 
-        {/* Enviar a War Room — siempre visible si hay resultado */}
-        {(() => { console.log('[WarRoom btn]', { hasReadResult, readFiles: readFilesRef.current.length, resultFiles: result?.files?.length, mainContent: !!result?.mainContent, isBackend, hasOnSend: !!onSendToWarRoom }); return null; })()}
-        {result && !running && isBackend && onSendToWarRoom && (
-          hasReadResult ||
-          readFilesRef.current.length > 0 || 
-          (result.files?.length ?? 0) > 0 || 
-          !!result.mainContent
-        ) && (
+        {/* Enviar a War Room */}
+        {onSendToWarRoom && (
           <button
             onClick={() => {
               const filesToSend = readFilesRef.current.length > 0
