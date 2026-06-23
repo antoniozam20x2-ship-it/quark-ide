@@ -189,7 +189,7 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
         const cleaned = con
           .replace(/```json\s*/gi, '')
           .replace(/```\s*/gi, '')
-          .replace(/[\u0000-\u001F\u007F]/g, (c) => {
+          .replace(/[\u0000-\u001F\u007F]/g, (c: string) => {
             if (c === '\n' || c === '\r' || c === '\t') return c;
             return '';
           })
@@ -277,7 +277,7 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
         const cleaned = con
           .replace(/```json\s*/gi, '')
           .replace(/```\s*/gi, '')
-          .replace(/[\u0000-\u001F\u007F]/g, (c) => {
+          .replace(/[\u0000-\u001F\u007F]/g, (c: string) => {
             if (c === '\n' || c === '\r' || c === '\t') return c;
             return '';
           })
