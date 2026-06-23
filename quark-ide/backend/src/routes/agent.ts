@@ -1101,6 +1101,57 @@ REGLAS:
       ? preloadedFiles.some(f => f.path.includes(newFilePath.split('/').pop() ?? ''))
       : false;
 
+    // ─── COMPLEJIDAD: Si NO es crear archivo nuevo, evaluar complejidad ─────
+    if (!isNewFile || (isNewFile && fileExistsInPreloaded)) {
+      send('action', { text: `🔎 Evaluando complejidad del cambio solicitado...` });
+
+      const mainFileLineCount = mainPreloaded?.content?.split('\n').length ?? 0;
+      const isLargeFile = mainFileLineCount > 500;
+      const mentionsMultipleFunctions = (prompt.match(/función|function/gi) ?? []).length > 2;
+      const architecturalChange = /\b(refactor|arquitectur|diseño|estructura|patrón|pattern)\b/i.test(prompt);
+
+      const isComplexChange = isLargeFile || mentionsMultipleFunctions || architecturalChange;
+
+      if (isComplexChange) {
+        send('action', { text: `⚠️ CAMBIO COMPLEJO DETECTADO` });
+        if (isLargeFile) send('action', { text: `   📏 Archivo grande: ${mainFileLineCount} líneas` });
+        if (mentionsMultipleFunctions) send('action', { text: `   🔄 Múltiples funciones afectadas` });
+        if (architecturalChange) send('action', { text: `   🏗️ Cambio arquitectural detectado` });
+
+        send('action', { text: `\n💡 RECOMENDACIÓN: Cambio manual en Replit` });
+        send('action', { text: `\n🔧 FLUJO SUGERIDO:\n` });
+        send('action', { text: `1️⃣ Abre Replit en el repo ${repo}` });
+        send('action', { text: `2️⃣ Navega a: ${mainPreloaded?.path || 'tu archivo'}` });
+        send('action', { text: `3️⃣ Localiza el bloque que necesitas cambiar` });
+        send('action', { text: `4️⃣ Copia EXACTAMENTE 3+ líneas de contexto antes y después` });
+        send('action', { text: `5️⃣ Vuelve aquí y manda este prompt:\n` });
+
+        const replicPrompt = `
+[DEEP][MODIFICAR] En ${mainPreloaded?.path || 'archivo'}, reemplaza:
+
+\`\`\`old
+[PEGA AQUÍ EL BLOQUE EXACTO DE 3+ LÍNEAS QUE COPIASTE DE REPLIT]
+\`\`\`
+
+Por:
+
+\`\`\`new
+[PEGA EL MISMO BLOQUE + TUS CAMBIOS]
+\`\`\`
+
+RAZÓN: ${prompt}
+        `.trim();
+
+        send('action', { text: replicPrompt });
+        send('action', { text: `\n✅ El Agent generará el str_replace exacto con ese contexto` });
+
+        send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+        res.end();
+        return;
+      }
+    }
+
+    // ── CREAR ARCHIVO NUEVO ──────────────────────────────────────────────────
     if (isNewFile && newFilePath && !fileExistsInPreloaded) {
       send('action', { text: `🆕 Modo creación — generando ${newFilePath}...` });
 
