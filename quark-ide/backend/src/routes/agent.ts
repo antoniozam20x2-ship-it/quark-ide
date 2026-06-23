@@ -1093,6 +1093,12 @@ REGLAS:
     }
     // ─────────────────────────────────────────────────────────────────────────
 
+    // Variables para el contexto quirúrgico (declaradas aquí para uso en toda la sección DEEP)
+    const mainPreloaded = preloadedFiles[0];
+    const blockStartLine = mainPreloaded?.startLine ?? 1;
+    const blockEndLine = mainPreloaded?.endLine ?? 0;
+    const mainFilePath = mainPreloaded?.path ?? '';
+
     // ── DETECCIÓN: ¿crear archivo nuevo o modificar existente? ──────────────
     const CREATE_KEYWORDS = /\[DEEP\]\[CREAR\]|\b(crea|crear|crea el archivo|nuevo archivo|create|new file|añade el archivo|agrega el archivo)\b/i;
     const isNewFile = CREATE_KEYWORDS.test(prompt);
@@ -1231,12 +1237,6 @@ REGLAS:
       res.end();
       return;
     }
-
-    // Variables para el contexto quirúrgico
-    const mainPreloaded = preloadedFiles[0];
-    const blockStartLine = mainPreloaded?.startLine ?? 1;
-    const blockEndLine = mainPreloaded?.endLine ?? 0;
-    const mainFilePath = mainPreloaded?.path ?? '';
 
     // Verificar que el archivo fue cargado correctamente para str_replace
     if (!mainPreloaded?.content || mainPreloaded.content.length < 100) {
