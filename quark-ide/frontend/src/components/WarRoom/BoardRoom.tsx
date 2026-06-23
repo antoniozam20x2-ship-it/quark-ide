@@ -28,6 +28,23 @@ interface SavedSession {
   timestamp: number;
 }
 
+interface AuditChange {
+  id: number;
+  prioridad: 'CRÍTICO' | 'IMPORTANTE' | 'MEJORA';
+  titulo: string;
+  archivo: string;
+  que_cambiar: string;
+  por_que: string;
+  prompt_agent: string;
+}
+
+interface AuditVerdict {
+  veredicto: 'MEJORAR' | 'PAUSAR';
+  razon_principal: string;
+  cambios: AuditChange[];
+  riesgo_no_resuelto: string | null;
+}
+
 interface Props {
   initialBrief?: BoardBrief | null;
   onBriefConsumed?: () => void;
@@ -58,6 +75,7 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
   const [swarmMode, setSwarmMode] = useState(true);
   const [useClaudeThinking, setUseClaudeThinking] = useState(false);
   const [processingTime, setProcessingTime] = useState<number | null>(null);
+  const [auditVerdict, setAuditVerdict] = useState<AuditVerdict | null>(null);
   const [targetRepo, setTargetRepo] = useState('');
   const [showRepoSelector, setShowRepoSelector] = useState(false);
   const [savedSession, setSavedSession] = useState<SavedSession | null>(() => {
@@ -115,6 +133,7 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
     setRunning(true);
     setResponses([]);
     setConsensus('');
+    setAuditVerdict(null);
     setProcessingTime(null);
     setTargetRepo('');
     setShowRepoSelector(false);
@@ -148,6 +167,18 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
       setConsensus(con);
       setProcessingTime(data.processingTime ?? null);
       persistSession(text, collected, con);
+      // Parse audit verdict JSON if present
+      try {
+        const cleaned = con.replace(/```json|```/g, '').trim();
+        const parsed = JSON.parse(cleaned) as AuditVerdict;
+        if (parsed.cambios && Array.isArray(parsed.cambios)) {
+          setAuditVerdict(parsed);
+        } else {
+          setAuditVerdict(null);
+        }
+      } catch {
+        setAuditVerdict(null);
+      }
     } catch {
       setStatuses({ CEO: 'error', CTO: 'error', Designer: 'error', QA: 'error' });
       setConsensus('⚠ Swarm encountered an error. Try sequential mode.');
@@ -162,6 +193,7 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
     setRunning(true);
     setResponses([]);
     setConsensus('');
+    setAuditVerdict(null);
     setProcessingTime(null);
     setTargetRepo('');
     setShowRepoSelector(false);
@@ -210,6 +242,18 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
       const con = d.response ?? '';
       setConsensus(con);
       persistSession(text, collected, con);
+      // Parse audit verdict JSON if present
+      try {
+        const cleaned = con.replace(/```json|```/g, '').trim();
+        const parsed = JSON.parse(cleaned) as AuditVerdict;
+        if (parsed.cambios && Array.isArray(parsed.cambios)) {
+          setAuditVerdict(parsed);
+        } else {
+          setAuditVerdict(null);
+        }
+      } catch {
+        setAuditVerdict(null);
+      }
     } catch {
       setConsensus('⚠ Could not generate consensus.');
     }
@@ -512,102 +556,290 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
 
             {consensus && consensus !== 'generating' && (
               <>
-                {/* Consensus block */}
-                <div style={{
-                  background: '#0a1a0f', border: '1px solid #1e3f2a', borderLeft: '4px solid #00ff88',
-                  borderRadius: 6, overflow: 'hidden', boxShadow: '0 0 20px rgba(0,255,136,0.08)',
-                }}>
-                  <div style={{
-                    padding: '10px 16px', background: 'rgba(0,255,136,0.06)',
-                    borderBottom: '1px solid #1e3f2a', display: 'flex', alignItems: 'center', gap: 10,
-                  }}>
-                    <span style={{ color: '#00ff88', fontSize: 16 }}>⚛</span>
-                    <span style={{ color: '#00ff88', fontSize: 13, fontWeight: 700, letterSpacing: '0.08em' }}>CONSENSUS</span>
-                    <span style={{ color: '#6b7280', fontSize: 11 }}>— synthesized from all perspectives</span>
-                    {swarmMode && processingTime !== null && (
-                      <span style={{
-                        marginLeft: 'auto', background: 'rgba(0,255,136,0.1)', border: '1px solid #1e3f2a',
-                        borderRadius: 3, padding: '1px 6px', color: '#00ff88', fontSize: 10, fontWeight: 700,
-                        fontFamily: 'JetBrains Mono, monospace',
-                      }}>
-                        ⚡ {(processingTime / 1000).toFixed(1)}s parallel
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ padding: 16, whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
-                    <QuarkMarkdown>{consensus}</QuarkMarkdown>
-                  </div>
-                </div>
+                {auditVerdict ? (
+                  /* ── AUDIT VERDICT — tarjetas estructuradas ── */
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
-                {/* Repo selector + Send button */}
-                {onSendToAgent && (
-                  <div style={{
-                    marginTop: 12, background: '#0d0d1a', border: '1px solid #1e1e3f',
-                    borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10,
-                  }}>
-                    {/* Repo row */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#6b7280' }}>
-                        // target repo
+                    {/* Veredicto header */}
+                    <div style={{
+                      background: auditVerdict.veredicto === 'PAUSAR'
+                        ? 'rgba(239,68,68,0.08)' : 'rgba(0,255,136,0.06)',
+                      border: `1px solid ${auditVerdict.veredicto === 'PAUSAR' ? '#7f1d1d' : '#1e3f2a'}`,
+                      borderLeft: `4px solid ${auditVerdict.veredicto === 'PAUSAR' ? '#ef4444' : '#00ff88'}`,
+                      borderRadius: 8, padding: '12px 16px',
+                      display: 'flex', alignItems: 'flex-start', gap: 12,
+                    }}>
+                      <span style={{ fontSize: 22, flexShrink: 0 }}>
+                        {auditVerdict.veredicto === 'PAUSAR' ? '🛑' : '⚡'}
                       </span>
-                      {!showRepoSelector && detectedRepo && !targetRepo ? (
-                        <>
-                          <span style={{ fontSize: 10, color: '#00ff88', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700 }}>
-                            🎯 {detectedRepo}
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                          <span style={{
+                            fontFamily: 'JetBrains Mono, monospace', fontSize: 13, fontWeight: 700,
+                            color: auditVerdict.veredicto === 'PAUSAR' ? '#ef4444' : '#00ff88',
+                            letterSpacing: '0.08em',
+                          }}>
+                            ⚛ VEREDICTO: {auditVerdict.veredicto}
                           </span>
-                          <button
-                            onClick={() => setShowRepoSelector(true)}
-                            style={{
-                              background: 'transparent', border: '1px solid #1e1e3f', borderRadius: 4,
-                              color: '#6b7280', fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-                              padding: '2px 8px', cursor: 'pointer',
-                            }}
-                          >
-                            Cambiar
-                          </button>
-                        </>
-                      ) : (
-                        <select
-                          value={targetRepo || detectedRepo || PROJECT_NAMES[0]}
-                          onChange={(e) => { setTargetRepo(e.target.value); setShowRepoSelector(false); }}
-                          style={{
-                            background: '#12121A', border: '1px solid #1e1e3f', borderRadius: 4,
-                            color: '#e2e8f0', fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
-                            padding: '4px 8px', cursor: 'pointer', outline: 'none',
-                          }}
-                        >
-                          {PROJECT_NAMES.map((name) => (
-                            <option key={name} value={name}>{name}</option>
-                          ))}
-                        </select>
-                      )}
-                      {targetRepo && (
-                        <button
-                          onClick={() => { setTargetRepo(''); setShowRepoSelector(false); }}
-                          style={{
-                            background: 'transparent', border: 'none', color: '#6b7280',
-                            fontSize: 10, cursor: 'pointer', fontFamily: 'JetBrains Mono, monospace',
-                          }}
-                        >
-                          ✕ auto
-                        </button>
-                      )}
+                          {swarmMode && processingTime !== null && (
+                            <span style={{
+                              background: 'rgba(0,255,136,0.1)', border: '1px solid #1e3f2a',
+                              borderRadius: 3, padding: '1px 6px', color: '#00ff88',
+                              fontSize: 10, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace',
+                            }}>
+                              ⚡ {(processingTime / 1000).toFixed(1)}s parallel
+                            </span>
+                          )}
+                        </div>
+                        <p style={{
+                          color: '#a0a0c0', fontSize: 12, margin: 0,
+                          fontFamily: 'JetBrains Mono, monospace', lineHeight: 1.5,
+                        }}>
+                          {auditVerdict.razon_principal}
+                        </p>
+                      </div>
                     </div>
 
-                    {/* Send button */}
-                    <button
-                      onClick={handleSendToAgent}
-                      style={{
-                        width: '100%', padding: '12px 16px',
-                        background: 'linear-gradient(135deg, #7C3AED, #6D28D9)',
-                        border: 'none', borderRadius: 8, color: '#fff',
-                        fontFamily: 'JetBrains Mono, monospace', fontSize: 13, fontWeight: 700,
-                        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                      }}
-                    >
-                      ⚡ Enviar al Agent → {effectiveRepo}
-                    </button>
+                    {/* Tarjetas de cambios */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <span style={{
+                        color: '#3a3a5c', fontSize: 10, fontFamily: 'JetBrains Mono, monospace',
+                        letterSpacing: '0.08em', paddingLeft: 2,
+                      }}>
+                        CAMBIOS RECOMENDADOS — {auditVerdict.cambios.length} acción(es)
+                      </span>
+
+                      {auditVerdict.cambios.map((cambio) => {
+                        const prioColor =
+                          cambio.prioridad === 'CRÍTICO'   ? '#ef4444' :
+                          cambio.prioridad === 'IMPORTANTE' ? '#f59e0b' : '#00ff88';
+                        const prioBg =
+                          cambio.prioridad === 'CRÍTICO'   ? 'rgba(239,68,68,0.08)' :
+                          cambio.prioridad === 'IMPORTANTE' ? 'rgba(245,158,11,0.08)' : 'rgba(0,255,136,0.06)';
+                        const prioBorder =
+                          cambio.prioridad === 'CRÍTICO'   ? '#7f1d1d' :
+                          cambio.prioridad === 'IMPORTANTE' ? '#78350f' : '#1e3f2a';
+
+                        return (
+                          <div key={cambio.id} style={{
+                            background: '#0d0d1a',
+                            border: '1px solid #1e1e3f',
+                            borderLeft: `3px solid ${prioColor}`,
+                            borderRadius: 8, overflow: 'hidden',
+                          }}>
+                            {/* Card header */}
+                            <div style={{
+                              padding: '10px 14px', background: '#111127',
+                              borderBottom: '1px solid #1e1e3f',
+                              display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+                            }}>
+                              <span style={{
+                                background: prioBg, border: `1px solid ${prioBorder}`,
+                                borderRadius: 4, padding: '2px 8px',
+                                color: prioColor, fontSize: 9, fontWeight: 700,
+                                fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.06em',
+                              }}>
+                                {cambio.prioridad}
+                              </span>
+                              <span style={{
+                                color: '#e2e8f0', fontSize: 12, fontWeight: 700,
+                                fontFamily: 'JetBrains Mono, monospace', flex: 1,
+                              }}>
+                                {cambio.titulo}
+                              </span>
+                              <span style={{
+                                color: '#6b7280', fontSize: 10,
+                                fontFamily: 'JetBrains Mono, monospace',
+                                background: 'rgba(255,255,255,0.04)',
+                                border: '1px solid #1e1e3f', borderRadius: 4,
+                                padding: '2px 8px', whiteSpace: 'nowrap',
+                              }}>
+                                📄 {cambio.archivo}
+                              </span>
+                            </div>
+
+                            {/* Card body */}
+                            <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                              <div>
+                                <span style={{
+                                  color: '#3a3a5c', fontSize: 9, fontFamily: 'JetBrains Mono, monospace',
+                                  letterSpacing: '0.06em', display: 'block', marginBottom: 3,
+                                }}>QUÉ CAMBIAR</span>
+                                <p style={{
+                                  color: '#a0a0c0', fontSize: 12, margin: 0,
+                                  fontFamily: 'JetBrains Mono, monospace', lineHeight: 1.6,
+                                }}>
+                                  {cambio.que_cambiar}
+                                </p>
+                              </div>
+                              <div>
+                                <span style={{
+                                  color: '#3a3a5c', fontSize: 9, fontFamily: 'JetBrains Mono, monospace',
+                                  letterSpacing: '0.06em', display: 'block', marginBottom: 3,
+                                }}>POR QUÉ</span>
+                                <p style={{
+                                  color: '#6b7280', fontSize: 11, margin: 0,
+                                  fontFamily: 'JetBrains Mono, monospace', lineHeight: 1.6,
+                                }}>
+                                  {cambio.por_que}
+                                </p>
+                              </div>
+
+                              {/* Prompt preview */}
+                              <div style={{
+                                background: '#080810', border: '1px solid #1e1e3f',
+                                borderRadius: 6, padding: '8px 10px',
+                              }}>
+                                <span style={{
+                                  color: '#3a3a5c', fontSize: 9, fontFamily: 'JetBrains Mono, monospace',
+                                  letterSpacing: '0.06em', display: 'block', marginBottom: 4,
+                                }}>PROMPT PARA QUARK AGENT</span>
+                                <p style={{
+                                  color: '#7c3aed', fontSize: 11, margin: 0,
+                                  fontFamily: 'JetBrains Mono, monospace', lineHeight: 1.6,
+                                  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                                }}>
+                                  {cambio.prompt_agent}
+                                </p>
+                              </div>
+
+                              {/* Send button */}
+                              {onSendToAgent && (
+                                <button
+                                  onClick={() => {
+                                    const repo = targetRepo || detectedRepo || effectiveRepo;
+                                    onSendToAgent(cambio.prompt_agent, repo);
+                                  }}
+                                  style={{
+                                    width: '100%', padding: '9px 14px',
+                                    background: 'rgba(124,58,237,0.12)',
+                                    border: '1px solid #4c1d95',
+                                    borderRadius: 6, color: '#a78bfa',
+                                    fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700,
+                                    cursor: 'pointer', letterSpacing: '0.04em',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                                    transition: 'background 0.15s',
+                                  }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(124,58,237,0.22)'; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(124,58,237,0.12)'; }}
+                                >
+                                  ⚡ Enviar al Agent → {cambio.archivo}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Riesgo no resuelto */}
+                    {auditVerdict.riesgo_no_resuelto && (
+                      <div style={{
+                        background: 'rgba(245,158,11,0.06)', border: '1px solid #78350f',
+                        borderRadius: 6, padding: '10px 14px',
+                        display: 'flex', alignItems: 'flex-start', gap: 8,
+                      }}>
+                        <span style={{ fontSize: 14, flexShrink: 0 }}>⚠️</span>
+                        <div>
+                          <span style={{
+                            color: '#f59e0b', fontSize: 9, fontFamily: 'JetBrains Mono, monospace',
+                            letterSpacing: '0.06em', display: 'block', marginBottom: 3,
+                          }}>RIESGO NO RESUELTO</span>
+                          <p style={{
+                            color: '#a0a0c0', fontSize: 11, margin: 0,
+                            fontFamily: 'JetBrains Mono, monospace', lineHeight: 1.5,
+                          }}>
+                            {auditVerdict.riesgo_no_resuelto}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Repo selector */}
+                    {onSendToAgent && (
+                      <div style={{
+                        background: '#0d0d1a', border: '1px solid #1e1e3f',
+                        borderRadius: 6, padding: '8px 12px',
+                        display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                      }}>
+                        <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#3a3a5c' }}>
+                          // repo objetivo
+                        </span>
+                        {!showRepoSelector && detectedRepo && !targetRepo ? (
+                          <>
+                            <span style={{ fontSize: 10, color: '#00ff88', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700 }}>
+                              🎯 {detectedRepo}
+                            </span>
+                            <button
+                              onClick={() => setShowRepoSelector(true)}
+                              style={{
+                                background: 'transparent', border: '1px solid #1e1e3f', borderRadius: 4,
+                                color: '#6b7280', fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                                padding: '2px 8px', cursor: 'pointer',
+                              }}
+                            >
+                              Cambiar
+                            </button>
+                          </>
+                        ) : (
+                          <select
+                            value={targetRepo || detectedRepo || PROJECT_NAMES[0]}
+                            onChange={(e) => { setTargetRepo(e.target.value); setShowRepoSelector(false); }}
+                            style={{
+                              background: '#12121A', border: '1px solid #1e1e3f', borderRadius: 4,
+                              color: '#e2e8f0', fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
+                              padding: '4px 8px', cursor: 'pointer', outline: 'none',
+                            }}
+                          >
+                            {PROJECT_NAMES.map((name) => (
+                              <option key={name} value={name}>{name}</option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+                    )}
                   </div>
+
+                ) : (
+
+                  /* ── FALLBACK — consensus como texto si no parsea JSON ── */
+                  <>
+                    <div style={{
+                      background: '#0a1a0f', border: '1px solid #1e3f2a', borderLeft: '4px solid #00ff88',
+                      borderRadius: 6, overflow: 'hidden', boxShadow: '0 0 20px rgba(0,255,136,0.08)',
+                    }}>
+                      <div style={{
+                        padding: '10px 16px', background: 'rgba(0,255,136,0.06)',
+                        borderBottom: '1px solid #1e3f2a', display: 'flex', alignItems: 'center', gap: 10,
+                      }}>
+                        <span style={{ color: '#00ff88', fontSize: 16 }}>⚛</span>
+                        <span style={{ color: '#00ff88', fontSize: 13, fontWeight: 700, letterSpacing: '0.08em' }}>CONSENSUS</span>
+                        <span style={{ color: '#6b7280', fontSize: 11 }}>— synthesized from all perspectives</span>
+                      </div>
+                      <div style={{ padding: 16, whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
+                        <QuarkMarkdown>{consensus}</QuarkMarkdown>
+                      </div>
+                    </div>
+                    {onSendToAgent && (
+                      <div style={{
+                        marginTop: 12, background: '#0d0d1a', border: '1px solid #1e1e3f',
+                        borderRadius: 8, padding: '12px 14px',
+                      }}>
+                        <button
+                          onClick={handleSendToAgent}
+                          style={{
+                            width: '100%', padding: '12px 16px',
+                            background: 'linear-gradient(135deg, #7C3AED, #6D28D9)',
+                            border: 'none', borderRadius: 8, color: '#fff',
+                            fontFamily: 'JetBrains Mono, monospace', fontSize: 13, fontWeight: 700,
+                            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                          }}
+                        >
+                          ⚡ Enviar al Agent → {effectiveRepo}
+                        </button>
+                      </div>
+                    )}
+                  </>
                 )}
               </>
             )}
