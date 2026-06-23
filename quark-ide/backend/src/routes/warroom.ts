@@ -664,31 +664,53 @@ async function generateConsensus(
   responses: Record<string, string>,
   useClaudeThinking?: boolean,
 ): Promise<string> {
-  const synthesis = `Original challenge: ${challenge}
+  const synthesis = `Reto auditado: ${challenge}
 
-Board responses:
-CEO: ${responses.CEO}
+Análisis del board:
+CTO (lógica de señales): ${responses.CTO}
+QA (resiliencia 24/7): ${responses.QA}
+CEO (riesgo financiero): ${responses.CEO}
+Designer (observabilidad): ${responses.Designer}
 
-CTO: ${responses.CTO}
+Genera un veredicto de auditoría estructurado como un objeto JSON con esta forma exacta:
 
-Designer: ${responses.Designer}
+{
+  "veredicto": "MEJORAR" | "PAUSAR",
+  "razon_principal": "una sola oración específica al sistema",
+  "cambios": [
+    {
+      "id": 1,
+      "prioridad": "CRÍTICO" | "IMPORTANTE" | "MEJORA",
+      "titulo": "nombre corto del cambio (max 6 palabras)",
+      "archivo": "nombre del archivo exacto ej: tradingLogic.ts",
+      "que_cambiar": "descripción técnica precisa de qué modificar, con función o variable específica si aplica",
+      "por_que": "impacto concreto en rendimiento o resiliencia del bot",
+      "prompt_agent": "prompt listo para Quark Agent, comenzando con el verbo de acción (Modifica / Agrega / Refactoriza), mencionando archivo y función exactos, describiendo el cambio con suficiente detalle para que el Agent lo implemente sin ambigüedad"
+    }
+  ],
+  "riesgo_no_resuelto": "algo que el board no pudo evaluar por falta de contexto, o null si todo está cubierto"
+}
 
-QA: ${responses.QA}
+REGLAS:
+- Responde ÚNICAMENTE con el JSON. Sin explicación, sin backticks, sin texto fuera del JSON
+- Entre 2 y 5 cambios, ordenados de mayor a menor prioridad
+- El campo prompt_agent debe ser autosuficiente: el Agent solo verá ese prompt, sin contexto adicional
+- Cada cambio debe ser implementable de forma independiente
+- Usa nombres reales de archivos y funciones del código analizado cuando los tengas
+- El veredicto es PAUSAR solo si hay un fallo crítico sin mitigación posible. En todos los demás casos: MEJORAR`;
 
-Synthesize all four perspectives into 3-5 clear, actionable consensus items. Be decisive and specific. Reference the actual content from each board member's input. Jefferson needs a clear action plan.`;
-
-  const systemPrompt = `${BOARD_ROLES.CEO}\n\n${BASE_CONTEXT}`;
+  const systemPrompt = `Eres el árbitro técnico del War Room de Jefferson. Produces veredictos de auditoría en formato JSON estructurado. Cada cambio que recomiendas debe ser implementable por un agente de código autónomo (Quark Agent) que leerá el repo en GitHub y hará el commit. Sé quirúrgico y específico.\n\n${BASE_CONTEXT}`;
 
   if (useClaudeThinking && process.env.ANTHROPIC_API_KEY) {
     try {
-      return await callClaudeWithThinking(synthesis, systemPrompt, 3000);
+      return await callClaudeWithThinking(synthesis, systemPrompt, 4000);
     } catch (err) {
       console.warn(`[warroom] Claude thinking failed for consensus: ${(err as Error).message} — falling back`);
     }
   }
 
   return withFallbackChain(
-    buildProviderChain(synthesis, systemPrompt, 1024, '/api/warroom/consensus')
+    buildProviderChain(synthesis, systemPrompt, 2048, '/api/warroom/consensus')
   );
 }
 
