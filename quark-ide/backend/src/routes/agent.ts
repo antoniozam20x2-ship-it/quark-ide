@@ -517,13 +517,13 @@ async function searchAndLoadFiles(
 }
 
 router.post('/generate', async (req, res) => {
-  const { prompt, repo: bodyRepo, branch = 'main', projectName, deepMode } = req.body as {
-    prompt?: string;
-    repo?: string;
-    branch?: string;
-    projectName?: string;
-    deepMode?: boolean;
+  // Auto-detectar deepMode desde prefijos del prompt
+  let { prompt, repo: bodyRepo, branch = 'main', projectName, deepMode } = req.body as {
+    prompt?: string; repo?: string; branch?: string; projectName?: string; deepMode?: boolean;
   };
+  if (prompt?.includes('[DEEP]')) deepMode = true;
+  if (prompt?.includes('[FAST]')) deepMode = false;
+
   const repo = bodyRepo ?? process.env.GITHUB_REPO;
   console.log(`[Agent/generate] repo recibido dinámicamente: ${repo}`);
 
@@ -1035,7 +1035,7 @@ REGLAS:
     // ─────────────────────────────────────────────────────────────────────────
 
     // ── DETECCIÓN: ¿crear archivo nuevo o modificar existente? ──────────────
-    const CREATE_KEYWORDS = /\b(crea|crear|crea el archivo|nuevo archivo|create|new file|añade el archivo|agrega el archivo)\b/i;
+    const CREATE_KEYWORDS = /\[DEEP\]\[CREAR\]|\b(crea|crear|crea el archivo|nuevo archivo|create|new file|añade el archivo|agrega el archivo)\b/i;
     const isNewFile = CREATE_KEYWORDS.test(prompt);
     const newFilePath = prompt.match(/[\w/\-\.]+\.(ts|tsx|js|jsx|json|py|md|yml|yaml)/)?.[0] ?? null;
     const fileExistsInPreloaded = newFilePath

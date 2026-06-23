@@ -685,7 +685,7 @@ Genera un veredicto de auditoría estructurado como un objeto JSON con esta form
       "archivo": "nombre del archivo exacto ej: tradingLogic.ts",
       "que_cambiar": "descripción técnica precisa de qué modificar, con función o variable específica si aplica",
       "por_que": "impacto concreto en rendimiento o resiliencia del bot",
-      "prompt_agent": "prompt listo para Quark Agent, comenzando con el verbo de acción (Modifica / Agrega / Refactoriza), mencionando archivo y función exactos, describiendo el cambio con suficiente detalle para que el Agent lo implemente sin ambigüedad"
+      "prompt_agent": "prompt listo para Quark Agent — OBLIGATORIO seguir el formato de prefijo exacto según el tipo de cambio"
     }
   ],
   "riesgo_no_resuelto": "algo que el board no pudo evaluar por falta de contexto, o null si todo está cubierto"
@@ -697,6 +697,9 @@ REGLAS:
 - El campo prompt_agent debe ser autosuficiente: el Agent solo verá ese prompt, sin contexto adicional
 - Cada cambio debe ser implementable de forma independiente
 - Usa nombres reales de archivos y funciones del código analizado cuando los tengas
+- Si el cambio implica crear un archivo que no existe, el prompt_agent DEBE comenzar exactamente con: "[DEEP][CREAR] Crea el archivo <ruta completa>..."
+- Si el cambio implica modificar un archivo existente, el prompt_agent DEBE comenzar exactamente con: "[DEEP][MODIFICAR] Modifica la función <nombre> en <archivo>..."
+- NUNCA uses rutas de archivos que no existan en el código analizado. Si no puedes confirmar que el archivo existe, usa [CREAR].
 - El veredicto es PAUSAR solo si hay un fallo crítico sin mitigación posible. En todos los demás casos: MEJORAR`;
 
   const systemPrompt = `Eres el árbitro técnico del War Room de Jefferson. Produces veredictos de auditoría en formato JSON estructurado. Cada cambio que recomiendas debe ser implementable por un agente de código autónomo (Quark Agent) que leerá el repo en GitHub y hará el commit. Sé quirúrgico y específico.\n\n${BASE_CONTEXT}`;
