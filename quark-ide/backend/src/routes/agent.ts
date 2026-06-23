@@ -1254,6 +1254,9 @@ NO reportes advertencias de estilo ni errores menores.`,
 
       if (!validation.valid && validation.errors.length > 0) {
         send('action', { text: `⚠️ ${validation.errors.length} error(es) detectado(s) — corrigiendo...` })
+        for (const err of validation.errors) {
+          send('action', { text: `🔴 ${err}` });
+        }
 
         const filesToValidateStr = finalFiles
           .map((f: { path: string; content: string }) => `--- ${f.path} ---\n${f.content.split('\n').slice(0, 100).join('\n')}`)
