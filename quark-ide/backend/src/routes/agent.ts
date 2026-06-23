@@ -1163,6 +1163,26 @@ REGLAS:
     }
     send('action', { text: `📏 Contexto cargado — ${mainPreloaded.content.split('\n').length} líneas disponibles para patch` });
 
+    // ─── ARCHIVO GRANDE DETECTION ───────────────────────────────────────────
+    const mainFileLineCount = mainPreloaded?.content?.split('\n').length ?? 0;
+    const isLargeFile = mainFileLineCount > 500;
+
+    if (isLargeFile && !deepMode) {
+      send('action', { text: `⚠️ ARCHIVO GRANDE DETECTADO (${mainFileLineCount} líneas)` });
+      send('action', { text: `📋 Modo FAST recomendado para archivos >500 líneas` });
+      send('action', { text: `💡 Alternativas: 1) Divide el cambio en archivos pequeños, 2) Usa FAST mode primero, 3) Manual en Replit si es crítico` });
+      send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+      res.end();
+      return;
+    }
+
+    if (isLargeFile && deepMode) {
+      send('action', { text: `⚠️ ADVERTENCIA: Archivo grande (${mainFileLineCount} líneas) + DEEP mode` });
+      send('action', { text: `🔴 Exact match tiene BAJA probabilidad en archivos grandes` });
+      send('action', { text: `💡 Recomendación: Prueba en Replit primero, trae el old_str exacto al Agent después` });
+      send('action', { text: `✂️ Continuando... si falla, abortará sin corromper` });
+    }
+
     send('action', { text: '🔬 Modo cirugía — preparando patch...' });
 
     const systemPrompt = `Eres QUARK Agent en modo CIRUGÍA QUIRÚRGICA.
