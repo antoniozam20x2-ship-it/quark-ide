@@ -134,6 +134,32 @@ const APP_NAME_TO_REPO: Record<string, string> = {
   'Quark IDE': 'quark-ide',
 };
 
+const REPO_KEYWORDS: Record<string, string[]> = {
+  'Ahorar': [
+    'botEngine', 'tradingLogic', 'biasEngine', 'screener',
+    'checkS1Bull', 'autonomousAgent', 'learningEngine',
+    'circuitBreaker', 'scanner', 'signalHistory',
+  ],
+  'Trade-SnipeOS': [
+    'BaseRadarEngine', 'snipeRadar', 'screener', 'chartEngine',
+    'oraculo', 'gemini', 'trailingStop', 'tpslOrder',
+    'regimeBadge', 'heatmap',
+  ],
+  'NEXUS-OS-app': [
+    'nexusChat', 'serviceWorker', 'gemini', 'nexusChatInput',
+    'integrations', 'messages', 'schema',
+  ],
+  'Code-Coretest': [
+    'HERALD', 'ATLAS', 'QUANT', 'CIPHER', 'SIGMA',
+    'boardroom', 'consensus', 'agent', 'cyberpunk',
+    'multiAgent', 'decision',
+  ],
+  'quark-ide': [
+    'warroom', 'generateConsensus', 'quarkAgent', 'boardRoom',
+    'studioAgent', 'Monaco', 'preview', 'generatePrompt',
+  ],
+};
+
 async function extractSearchTermsWithAI(challenge: string): Promise<string[]> {
   const keys = getGroqKeys();
   if (keys.length === 0) return [];
@@ -222,10 +248,13 @@ async function searchWithAITerms(
   const terms = await extractSearchTermsWithAI(challenge);
 
   if (terms.length === 0) {
-    const fallbackWords = challenge.split(/\s+/).filter(w => w.length > 4).slice(0, 2);
-    console.log(`[warroom] No AI terms, fallback words: [${fallbackWords.join(', ')}]`);
-    if (fallbackWords.length === 0) return [];
-    return searchCodeInRepo(fallbackWords.join(' '), repoName);
+    const keywords = REPO_KEYWORDS[repoName] ?? ['index', 'main', 'app', 'server', 'config'];
+    console.log(`[warroom] No AI terms — using repo keywords for ${repoName}: [${keywords.slice(0, 4).join(', ')}...]`);
+    for (const kw of keywords) {
+      const results = await searchCodeInRepo(kw, repoName);
+      if (results.length > 0) return results;
+    }
+    return [];
   }
 
   const EXCLUDED_PATHS = [
@@ -359,12 +388,15 @@ async function resolveRepoContext(
     if (keyFiles.length > 0) {
       console.log(`[warroom] Found ${keyFiles.length} relevant files: ${keyFiles.map((f) => f.path).join(', ')}`);
 
+      const repoTopKeywords = REPO_KEYWORDS[repoName] ?? [];
       const sortedKeyFiles = [...keyFiles].sort((a, b) => {
-        const priority = (path: string) =>
-          path.includes('tradingLogic') ? 0 :
-          path.includes('botEngine') ? 1 :
-          path.includes('lib/') ? 2 :
-          path.includes('services/') ? 3 : 4;
+        const priority = (path: string) => {
+          const idx = repoTopKeywords.findIndex(kw => path.toLowerCase().includes(kw.toLowerCase()));
+          if (idx !== -1) return idx;
+          if (path.includes('lib/')) return repoTopKeywords.length + 1;
+          if (path.includes('services/')) return repoTopKeywords.length + 2;
+          return repoTopKeywords.length + 3;
+        };
         return priority(a.path) - priority(b.path);
       });
 
