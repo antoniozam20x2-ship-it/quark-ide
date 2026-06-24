@@ -45,6 +45,21 @@ interface AuditVerdict {
   riesgo_no_resuelto: string | null;
 }
 
+interface CacheEntry {
+  repo: string;
+  fileCount: number;
+  ageSeconds: number;
+  expired: boolean;
+  source: 'github' | 'agent' | 'chat';
+}
+
+interface CacheStatus {
+  cacheSize: number;
+  entries: CacheEntry[];
+  ttlSeconds: number;
+  nextCleanup: string;
+}
+
 interface Props {
   initialBrief?: BoardBrief | null;
   onBriefConsumed?: () => void;
@@ -93,6 +108,20 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
   const repoContextRef = useRef<BoardBrief['repoContext'] | null>(null);
   const appNameRef = useRef<string | null>(null);
   const [preloadedFiles, setPreloadedFiles] = useState<string[]>([]);
+  const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const fetchCache = () => {
+      fetch(`${API_BASE}/api/warroom/cache/status`)
+        .then((r) => r.ok ? r.json() : null)
+        .then((data) => { if (active && data) setCacheStatus(data as CacheStatus); })
+        .catch(() => {});
+    };
+    fetchCache();
+    const interval = setInterval(fetchCache, 5000);
+    return () => { active = false; clearInterval(interval); };
+  }, []);
 
   useEffect(() => {
     if (!initialBrief) return;
@@ -385,6 +414,56 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
             <span style={{ color: '#a0f0c8', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
               {preloadedFiles.join(', ')}
             </span>
+          </div>
+        )}
+
+        {/* Cache Status Panel */}
+        {cacheStatus && cacheStatus.cacheSize > 0 && (
+          <div style={{
+            background: 'rgba(15,15,30,0.7)', border: '1px solid #1e1e3f',
+            borderRadius: 8, padding: '10px 14px', fontFamily: 'JetBrains Mono, monospace',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <span style={{ color: '#6b7280', fontSize: 10, fontWeight: 700, letterSpacing: '0.08em' }}>
+                ─ CACHE STATUS ─
+              </span>
+              <span style={{ color: '#4b5563', fontSize: 10 }}>
+                {cacheStatus.cacheSize} repo{cacheStatus.cacheSize !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+              {cacheStatus.entries.map((entry) => {
+                const ageMin = Math.floor(entry.ageSeconds / 60);
+                const valid = !entry.expired;
+                return (
+                  <div key={entry.repo} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ color: valid ? '#38bdf8' : '#f43f5e', fontSize: 11, width: 10, flexShrink: 0 }}>
+                      {valid ? '✓' : '✗'}
+                    </span>
+                    <span style={{ color: valid ? '#e2e8f0' : '#6b7280', fontSize: 11, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {entry.repo}
+                    </span>
+                    <span style={{ color: '#4b5563', fontSize: 10, flexShrink: 0 }}>
+                      {valid ? `[${entry.fileCount} files]` : '[EXPIRED]'}
+                    </span>
+                    <span style={{ color: valid ? '#38bdf8' : '#f43f5e', fontSize: 10, flexShrink: 0, minWidth: 28, textAlign: 'right' }}>
+                      {ageMin}m
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ borderTop: '1px solid #1e1e3f', paddingTop: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ color: '#4b5563', fontSize: 10 }}>
+                TTL: {Math.floor(cacheStatus.ttlSeconds / 60)} min
+              </span>
+              <span style={{ color: '#4b5563', fontSize: 10 }}>
+                Next cleanup: {(() => {
+                  const diff = Math.max(0, new Date(cacheStatus.nextCleanup).getTime() - Date.now());
+                  return `${Math.ceil(diff / 60000)}m`;
+                })()}
+              </span>
+            </div>
           </div>
         )}
 
