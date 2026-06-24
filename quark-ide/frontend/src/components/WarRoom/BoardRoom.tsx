@@ -741,7 +741,10 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
                                   fontFamily: 'JetBrains Mono, monospace', lineHeight: 1.6,
                                   whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                                 }}>
-                                  {cambio.prompt_agent}
+                                  {cambio.prompt_agent && cambio.prompt_agent.trim() !== ''
+                                    ? cambio.prompt_agent
+                                    : <span style={{ color: '#f59e0b' }}>⚠️ Prompt no generado — reenvía la auditoría para regenerar</span>
+                                  }
                                 </p>
                               </div>
 
