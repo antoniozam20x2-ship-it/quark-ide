@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { searchMemory } from '../services/rufloMemory.js';
 import { getFileTree, getFileContent } from '../services/github.js';
 import pool from '../services/db.js';
+import { cacheNotifications } from '../lib/cacheNotifications.js';
 
 // ── Chat history helpers ───────────────────────────────────────────────────────
 
@@ -365,7 +366,9 @@ ${filesStr}
         JSON.stringify({ preloadedFiles: [{ path: 'README.md', content: readmeContent }], repo: repoName, savedAt: Date.now(), querySignature: '' }),
         'quark-agent',
       ],
-    ).catch(() => { /* non-blocking */ });
+    ).then(() => {
+      cacheNotifications.emit('cache-update', { type: 'cache-update', repo: repoName, source: 'chat', timestamp: new Date().toISOString() });
+    }).catch(() => { /* non-blocking */ });
   }
 
   return `

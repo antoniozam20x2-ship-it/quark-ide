@@ -4,6 +4,7 @@ import { saveToMemory } from '../services/rufloMemory.js';
 import { loadSharedAgentContext } from './chat.js';
 import { saveAgentContext } from './agent.js';
 import { getFileTree, getFileContent, searchCodeInRepo } from '../services/github.js';
+import { cacheNotifications, type CacheUpdateEvent } from '../lib/cacheNotifications.js';
 
 // ── Provider constants ────────────────────────────────────────────────────────
 
@@ -164,6 +165,14 @@ const REPO_KEYWORDS: Record<string, string[]> = {
 const REPO_CACHE_TTL_MS = 30 * 60 * 1000;
 // ── In-memory repo context cache (per repo, 30-minute TTL) ───────────────────
 const repoContextCache = new Map<string, { tree: string[]; keyFiles: { path: string; content: string }[]; savedAt: number; source: 'github' | 'agent' | 'chat' }>();
+
+// Invalidate in-memory cache when another module writes a fresher context to DB
+cacheNotifications.on('cache-update', (event: CacheUpdateEvent) => {
+  if (event.source !== 'warroom' && repoContextCache.has(event.repo)) {
+    repoContextCache.delete(event.repo);
+    console.log(`[warroom] Cache invalidated for ${event.repo} (written by: ${event.source})`);
+  }
+});
 
 async function extractSearchTermsWithAI(challenge: string): Promise<string[]> {
   const keys = getGroqKeys();
@@ -428,6 +437,7 @@ async function resolveRepoContext(
         prompt:         `[warroom auto-load for ${appName}: ${challenge}]`,
         repo:           repoName,
       }).catch(() => { /* non-blocking */ });
+      cacheNotifications.emit('cache-update', { type: 'cache-update', repo: repoName, source: 'warroom', timestamp: new Date().toISOString() });
 
       console.log(`[warroom] Cached ${keyFiles.length} files for ${repoName}`);
       const freshCtx = { tree: sortedKeyFiles.map((f) => f.path), keyFiles: sortedKeyFiles, savedAt: Date.now(), source: 'github' as const };

@@ -3,6 +3,7 @@ import { getFileTree, getFileContent, searchCodeInRepo } from '../services/githu
 import { callAI } from '../lib/aiRouter.js';
 import { generateContent } from '../services/gemini.js';
 import pool from '../services/db.js';
+import { cacheNotifications } from '../lib/cacheNotifications.js';
 
 // ── Agent session persistence (reuses memory_entries table) ───────────────────
 
@@ -831,6 +832,7 @@ REGLAS GENERALES:
         prompt,
         repo,
       }).catch(() => {/* no bloquear si falla */})
+      cacheNotifications.emit('cache-update', { type: 'cache-update', repo, source: 'agent', timestamp: new Date().toISOString() });
 
       // done with real file content — no commitMessage (read-only)
       const firstFile = readFiles[0];
