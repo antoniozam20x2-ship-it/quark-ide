@@ -702,7 +702,15 @@ REGLAS:
 - NUNCA uses rutas de archivos que no existan en el código analizado. Si no puedes confirmar que el archivo existe, usa [CREAR].
 - En prompt_agent, usa SOLO rutas de archivos que hayas visto en el código analizado. Nunca inventes rutas como src/lib/ o src/middleware/ si no aparecen en los archivos del contexto.
 - Si no puedes confirmar la ruta exacta de un import, usa rutas relativas genéricas como './db.js' en lugar de '../lib/db.js'
-- El veredicto es PAUSAR solo si hay un fallo crítico sin mitigación posible. En todos los demás casos: MEJORAR`;
+- El veredicto es PAUSAR solo si hay un fallo crítico sin mitigación posible. En todos los demás casos: MEJORAR
+
+REGLAS ADICIONALES PARA prompt_agent — OBLIGATORIO:
+1. RUTA COMPLETA: en prompt_agent usa siempre la ruta completa del archivo tal como aparece en el código analizado (ej: "artifacts/api-server/src/lib/scanner.ts", NO solo "scanner.ts")
+2. FUNCIÓN EXACTA: especifica la función exacta y si es posible la línea aproximada (ej: "dentro del bloque catch de scanSymbol(), línea ~359", NO solo "en scanSymbol")
+3. TABLA O ENDPOINT EXACTO: si el análisis detectó que el proyecto usa una tabla específica (ej: active_symbols) o un endpoint específico (ej: /api/v2/mix/market/tickers?productType=USDT-FUTURES), ese dato DEBE aparecer explícito en el prompt_agent. NUNCA uses nombres genéricos cuando tienes el dato exacto.
+4. REFERENCIAS EXISTENTES: si la función o utilidad que necesita usar ya existe en el repo (ej: getDbPool() en db.ts, logger en utils/logger.ts), el prompt_agent DEBE mencionar "usa <función>() que ya existe en <archivo>" en lugar de dejar que el Agent lo descubra solo.
+5. FORMATO OBJETIVO: "[DEEP][MODIFICAR] En <ruta_exacta>, dentro de <función_exacta> (línea ~N), <qué hacer>. Usar <tabla/endpoint/función exacta> que ya existe en <archivo_existente>. NO usar <cosa_incorrecta>."
+6. ANTI-PATRÓN: NUNCA generes un prompt_agent que diga solo "modifica scanner.ts para mejorar X" — eso es insuficiente. Siempre incluye ruta completa + función + referencia exacta.`;
 
   const systemPrompt = `Eres el árbitro técnico del War Room de Jefferson. Produces veredictos de auditoría en formato JSON estructurado. Cada cambio que recomiendas debe ser implementable por un agente de código autónomo (Quark Agent) que leerá el repo en GitHub y hará el commit. Sé quirúrgico y específico.\n\n${BASE_CONTEXT}`;
 

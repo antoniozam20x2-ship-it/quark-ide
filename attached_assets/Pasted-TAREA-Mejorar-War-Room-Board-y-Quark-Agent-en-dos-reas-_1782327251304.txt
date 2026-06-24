@@ -1,0 +1,76 @@
+TAREA: Mejorar War Room (Board) y Quark Agent en dos áreas específicas.
+
+═══════════════════════════════════════
+MEJORA A — WAR ROOM: Prompts más específicos
+═══════════════════════════════════════
+
+CONTEXTO:
+War Room ya carga archivos del repo antes de generar su análisis.
+El problema es que los prompts que genera para Quark Agent son genéricos
+y pierden el contexto específico que War Room ya tiene disponible.
+
+QUÉ CAMBIAR:
+Modifica el prompt del sistema de War Room (Board) para que cuando genere
+los bloques "PROMPT PARA QUARK AGENT", incluya obligatoriamente:
+
+1. RUTA EXACTA del archivo: no solo "scanner.ts" sino
+   "artifacts/api-server/src/lib/scanner.ts"
+
+2. FUNCIÓN EXACTA donde hacer el cambio: no "modifica scanSymbol"
+   sino "dentro del bloque catch de la función scanSymbol(), línea ~359"
+
+3. TABLA O ENDPOINT EXACTO a usar: si War Room detectó que el proyecto
+   usa una tabla específica (ej: active_symbols, NO pair_memory) o un
+   endpoint específico (ej: /api/v2/mix/market/tickers?productType=USDT-FUTURES),
+   ese dato debe aparecer explícito en el prompt generado.
+
+4. REFERENCIAS A ARCHIVOS EXISTENTES: si la función que necesita usar
+   ya existe en el repo (ej: getDbPool() en db.ts), el prompt debe
+   mencionar "usa getDbPool() que ya existe en db.ts" en lugar de
+   asumir que el Agent lo descubrirá solo.
+
+FORMATO OBJETIVO del prompt generado por War Room:
+"[DEEP][MODIFICAR] En <ruta_exacta>, dentro de <función_exacta>,
+<qué hacer>. Usar <tabla/endpoint/función exacta> que ya existe en
+<archivo_existente>. NO usar <cosa_incorrecta>."
+
+═══════════════════════════════════════
+MEJORA B — QUARK AGENT: Validación pre-commit
+═══════════════════════════════════════
+
+CONTEXTO:
+Quark Agent actualmente aplica patches y commitea sin verificar que
+lo implementado coincide con lo que el prompt pidió. Además cuando
+TypeScript falla solo muestra "❌ Validación de TypeScript falló"
+sin mostrar el error exacto.
+
+QUÉ CAMBIAR:
+Antes de ejecutar el commit, Quark Agent debe realizar un checklist
+de validación con estos 3 puntos:
+
+1. VERIFICACIÓN DE ARCHIVO:
+   Confirmar que el archivo modificado coincide con el archivo
+   especificado en el prompt. Si no coincide, mostrar advertencia
+   antes de commitear.
+
+2. VERIFICACIÓN DE REFERENCIAS:
+   Si el prompt menciona una tabla, endpoint o función específica
+   (ej: "active_symbols", "USDT-FUTURES", "getDbPool"),
+   verificar que esa referencia aparece en el diff generado.
+   Si no aparece, mostrar advertencia: 
+   "⚠️ El prompt pedía [X] pero el diff no contiene esa referencia"
+
+3. ERROR DE TYPESCRIPT VISIBLE:
+   Cuando tsc falla, capturar el output completo del compilador
+   y mostrarlo en la UI antes de bloquear el commit. Formato:
+   "❌ TypeScript falló:
+   [archivo]:[línea] — [mensaje de error]"
+   En lugar del mensaje genérico actual.
+
+═══════════════════════════════════════
+NOTAS IMPORTANTES:
+═══════════════════════════════════════
+- No modificar el flujo general de War Room ni de Quark Agent
+- Solo añadir contexto en los prompts generados (Mejora A)
+- Solo añadir validación pre-commit (Mejora B)
+- Un cambio a la vez, verificar que no rompe el flujo existente

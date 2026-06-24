@@ -1401,7 +1401,7 @@ ${filesToValidate}
 Responde SOLO con este JSON:
 {
   "valid": true/false,
-  "errors": ["descripción del error 1", "descripción del error 2"],
+  "errors": ["archivo.ts:línea — descripción del error"],
   "affectedFiles": ["path/del/archivo"]
 }
 
@@ -1410,6 +1410,7 @@ Busca ÚNICAMENTE errores críticos:
 - Variables o funciones usadas sin declarar
 - Sintaxis inválida obvia
 - Exports faltantes que otros archivos necesitan
+Para cada error, usa el formato "archivo:línea — mensaje" si puedes inferir el número de línea. Si no puedes inferirlo, usa "archivo — mensaje".
 NO reportes advertencias de estilo ni errores menores.`,
         'Eres un validador de código experto. Devuelve SOLO el JSON solicitado sin markdown ni explicaciones.'
       )
@@ -1419,10 +1420,10 @@ NO reportes advertencias de estilo ni errores menores.`,
       ) as { valid: boolean; errors: string[]; affectedFiles: string[] }
 
       if (!validation.valid && validation.errors.length > 0) {
-        send('action', { text: `⚠️ ${validation.errors.length} error(es) detectado(s) — detalles:` })
+        send('action', { text: `❌ TypeScript falló — ${validation.errors.length} error(es):` })
         for (const err of validation.errors) {
-          const errMsg = err.length > 150 ? err.slice(0, 150) + '...' : err;
-          send('action', { text: `🔴 ${errMsg}` });
+          const errMsg = err.length > 200 ? err.slice(0, 200) + '...' : err;
+          send('action', { text: `  ${errMsg}` });
         }
 
         const filesToValidateStr = finalFiles
@@ -1509,6 +1510,34 @@ Responde con el mismo JSON de siempre:
         return originalContent !== undefined ? { ...f, originalContent } : { ...f };
       })
     );
+
+    // ── PRE-COMMIT CHECKLIST ──────────────────────────────────────────────────
+    // 1. Verificación de archivo: el archivo modificado debe coincidir con el mencionado en el prompt
+    const promptLower = prompt.toLowerCase();
+    for (const f of finalFiles) {
+      const fname = f.path.split('/').pop()?.toLowerCase() ?? '';
+      const fpath = f.path.toLowerCase();
+      if (!promptLower.includes(fname) && !promptLower.includes(fpath)) {
+        send('action', { text: `⚠️ El prompt no menciona "${f.path}" explícitamente — verifica que es el archivo correcto` });
+      }
+    }
+
+    // 2. Verificación de referencias: tablas, endpoints y funciones mencionadas en el prompt
+    const refCandidates: string[] = [
+      // Palabras snake_case (nombres de tabla)
+      ...Array.from(prompt.matchAll(/\b([a-z][a-z0-9]{2,}_[a-z][a-z0-9_]{2,})\b/g)).map(m => m[1]),
+      // Endpoints /api/... o /v\d/...
+      ...Array.from(prompt.matchAll(/\/(?:api|v\d)[a-zA-Z0-9/_\-?=&%.]+/g)).map(m => m[0]),
+      // Funciones explícitas getX() / doX()
+      ...Array.from(prompt.matchAll(/\b([a-zA-Z][a-zA-Z0-9]{3,})\(\)/g)).map(m => m[1]),
+    ];
+    const diffText = finalFiles.map(f => f.content).join('\n');
+    for (const ref of refCandidates) {
+      if (ref.length > 4 && !diffText.includes(ref)) {
+        send('action', { text: `⚠️ El prompt pedía "${ref}" pero el diff no contiene esa referencia` });
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     send('done', {
       files: filesWithOriginal,
