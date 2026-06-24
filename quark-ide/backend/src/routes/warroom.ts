@@ -161,8 +161,9 @@ const REPO_KEYWORDS: Record<string, string[]> = {
   ],
 };
 
-// ── In-memory repo context cache (per repo, lives for process lifetime) ───────
-const repoContextCache = new Map<string, { tree: string[]; keyFiles: { path: string; content: string }[] }>();
+const REPO_CACHE_TTL_MS = 30 * 60 * 1000;
+// ── In-memory repo context cache (per repo, 30-minute TTL) ───────────────────
+const repoContextCache = new Map<string, { tree: string[]; keyFiles: { path: string; content: string }[]; savedAt: number }>();
 
 async function extractSearchTermsWithAI(challenge: string): Promise<string[]> {
   const keys = getGroqKeys();
@@ -331,16 +332,22 @@ async function resolveRepoContext(
   const repoName = appName ? APP_NAME_TO_REPO[appName] : undefined;
   if (!repoName) return undefined;
 
-  // Step 1b: check in-memory per-repo cache first
+  // Step 1b: check in-memory per-repo cache first (30-minute TTL)
   const memCached = repoContextCache.get(repoName);
   if (memCached) {
-    const relevant = await isCacheRelevant(memCached.keyFiles, challenge);
-    if (relevant) {
-      console.log(`[warroom] In-memory caché hit para ${repoName} — ${memCached.keyFiles.length} archivo(s)`);
-      return memCached;
+    const cacheAge = Date.now() - memCached.savedAt;
+    if (cacheAge > REPO_CACHE_TTL_MS) {
+      console.log(`[warroom] In-memory caché expirado para ${repoName} — recargando`);
+      repoContextCache.delete(repoName);
+    } else {
+      const relevant = await isCacheRelevant(memCached.keyFiles, challenge);
+      if (relevant) {
+        console.log(`[warroom] In-memory caché hit para ${repoName} — ${memCached.keyFiles.length} archivo(s)`);
+        return memCached;
+      }
+      console.log(`[warroom] In-memory caché irrelevante para ${repoName} — recargando`);
+      repoContextCache.delete(repoName);
     }
-    console.log(`[warroom] In-memory caché stale para ${repoName} — recargando`);
-    repoContextCache.delete(repoName);
   }
 
   // Step 2: try the shared cache written by Agent
@@ -354,7 +361,7 @@ async function resolveRepoContext(
 
       const relevant = await isCacheRelevant(keyFiles, challenge);
       if (relevant) {
-        const ctx = { tree: keyFiles.map((f) => f.path), keyFiles };
+        const ctx = { tree: keyFiles.map((f) => f.path), keyFiles, savedAt: Date.now() };
         repoContextCache.set(repoName, ctx);
         console.log(`[warroom] Caché relevante — usando ${keyFiles.length} archivo(s) cacheados`);
         return ctx;
@@ -423,7 +430,7 @@ async function resolveRepoContext(
       }).catch(() => { /* non-blocking */ });
 
       console.log(`[warroom] Cached ${keyFiles.length} files for ${repoName}`);
-      const freshCtx = { tree: sortedKeyFiles.map((f) => f.path), keyFiles: sortedKeyFiles };
+      const freshCtx = { tree: sortedKeyFiles.map((f) => f.path), keyFiles: sortedKeyFiles, savedAt: Date.now() };
       repoContextCache.set(repoName, freshCtx);
       return freshCtx;
     }

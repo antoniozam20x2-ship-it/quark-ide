@@ -871,9 +871,9 @@ REGLAS GENERALES:
         cachedSig === currentSig ||
         currentSig.split('|').some((w: string) => cachedSig.includes(w))
       );
-      // Caché expira después de 5 minutos
+      // Caché expira después de 30 minutos
       const cacheAge = Date.now() - (savedCtx.savedAt ?? 0);
-      const cacheValid = cacheAge < 5 * 60 * 1000;
+      const cacheValid = cacheAge < 30 * 60 * 1000;
 
       if (hasBackend && sigMatch && cacheValid) {
         preloadedFiles = savedCtx.preloadedFiles;

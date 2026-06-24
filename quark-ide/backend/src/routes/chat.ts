@@ -354,6 +354,20 @@ ${filesStr}
     ? readmeResult.value.slice(0, 3000)
     : '(README no encontrado)';
 
+  // Persist fresh context to shared cache so Agent and War Room can reuse it
+  if (readmeContent !== '(README no encontrado)') {
+    pool.query(
+      `INSERT INTO memory_entries (key, content, namespace)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
+      [
+        'agent-context',
+        JSON.stringify({ preloadedFiles: [{ path: 'README.md', content: readmeContent }], repo: repoName, savedAt: Date.now(), querySignature: '' }),
+        'quark-agent',
+      ],
+    ).catch(() => { /* non-blocking */ });
+  }
+
   return `
 === CONTEXTO DE APP: ${repoName} ===
 Archivos principales:
