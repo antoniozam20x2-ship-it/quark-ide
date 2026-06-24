@@ -36,6 +36,7 @@ export async function loadSharedAgentContext(repo: string): Promise<{
   preloadedFiles: { path: string; content: string }[]
 } | null> {
   try {
+    console.log(`[CACHE] Attempting to load from memory_entries — repo: ${repo}`);
     const r = await pool.query<{ content: string }>(
       `SELECT content FROM memory_entries WHERE key = $1 AND namespace = $2 LIMIT 1`,
       ['agent-context', 'quark-agent'],
@@ -43,6 +44,10 @@ export async function loadSharedAgentContext(repo: string): Promise<{
     if (!r.rows[0]?.content) return null;
     const ctx = JSON.parse(r.rows[0].content);
     if (ctx.repo !== repo) return null;
+    const ageSeconds = ctx.savedAt ? Math.floor((Date.now() - ctx.savedAt) / 1000) : -1;
+    const isExpired = ageSeconds > 30 * 60;
+    const fileCount = (ctx.preloadedFiles ?? []).length;
+    console.log(`[CACHE] Found ${fileCount} files, age: ${ageSeconds}s, expired: ${isExpired}`);
     return { preloadedFiles: ctx.preloadedFiles ?? [] };
   } catch {
     return null;

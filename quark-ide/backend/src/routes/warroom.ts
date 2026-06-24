@@ -346,7 +346,8 @@ async function resolveRepoContext(
   if (memCached) {
     const cacheAge = Date.now() - memCached.savedAt;
     if (cacheAge > REPO_CACHE_TTL_MS) {
-      console.log(`[warroom] In-memory caché expirado para ${repoName} — recargando`);
+      const ageSeconds = Math.floor(cacheAge / 1000);
+      console.log(`[CACHE] Invalidated entry — repo: ${repoName}, reason: TTL expired (${ageSeconds}s)`);
       repoContextCache.delete(repoName);
     } else {
       const relevant = await isCacheRelevant(memCached.keyFiles, challenge);
@@ -431,6 +432,7 @@ async function resolveRepoContext(
         return priority(a.path) - priority(b.path);
       });
 
+      console.log(`[CACHE] Writing to memory_entries — repo: ${repoName}, source: warroom, files: ${sortedKeyFiles.length}`);
       await saveAgentContext({
         preloadedFiles: sortedKeyFiles,
         functionName:   null,
@@ -438,6 +440,7 @@ async function resolveRepoContext(
         repo:           repoName,
       }).catch(() => { /* non-blocking */ });
       cacheNotifications.emit('cache-update', { type: 'cache-update', repo: repoName, source: 'warroom', timestamp: new Date().toISOString() });
+      console.log(`[CACHE-EVENT] Emitted cache-update — repo: ${repoName}, source: warroom, timestamp: ${Date.now()}`);
 
       console.log(`[warroom] Cached ${keyFiles.length} files for ${repoName}`);
       const freshCtx = { tree: sortedKeyFiles.map((f) => f.path), keyFiles: sortedKeyFiles, savedAt: Date.now(), source: 'github' as const };

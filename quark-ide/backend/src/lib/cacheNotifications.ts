@@ -10,3 +10,5 @@ export interface CacheUpdateEvent {
 class CacheNotificationEmitter extends EventEmitter {}
 
 export const cacheNotifications = new CacheNotificationEmitter();
+
+console.log('[CACHE] EventEmitter initialized — listeners ready');

@@ -61,13 +61,17 @@ async function loadAgentContext(): Promise<{
   savedAt?: number
 } | null> {
   try {
+    console.log(`[CACHE] Attempting to load from memory_entries — repo: ${AGENT_SESSION_NS}`);
     const r = await pool.query<{ content: string }>(
       `SELECT content FROM memory_entries WHERE key = $1 AND namespace = $2 LIMIT 1`,
       ['agent-context', AGENT_SESSION_NS],
     );
     if (!r.rows[0]?.content) return null;
     const ctx = JSON.parse(r.rows[0].content);
-    // Contexto válido por 10 minutos
+    const ageSeconds = ctx.savedAt ? Math.floor((Date.now() - ctx.savedAt) / 1000) : -1;
+    const isExpired = ageSeconds > 30 * 60;
+    const fileCount = ctx.preloadedFiles?.length ?? 0;
+    console.log(`[CACHE] Found ${fileCount} files, age: ${ageSeconds}s, expired: ${isExpired}`);
     return ctx;
   } catch {
     return null;
