@@ -109,6 +109,22 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
   const appNameRef = useRef<string | null>(null);
   const [preloadedFiles, setPreloadedFiles] = useState<string[]>([]);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
+  const [cacheToast, setCacheToast] = useState<{ message: string; error: boolean } | null>(null);
+
+  const showCacheToast = (message: string, error = false) => {
+    setCacheToast({ message, error });
+    setTimeout(() => setCacheToast(null), 3000);
+  };
+
+  const handleClearCache = () => {
+    fetch(`${API_BASE}/api/warroom/cache`, { method: 'DELETE' })
+      .then((r) => r.ok ? r.json() : Promise.reject(r))
+      .then(() => {
+        showCacheToast('Caché vaciado');
+        setCacheStatus((prev) => prev ? { ...prev, cacheSize: 0, entries: [] } : prev);
+      })
+      .catch(() => showCacheToast('Error al limpiar caché', true));
+  };
 
   useEffect(() => {
     let active = true;
@@ -456,14 +472,48 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
             <div style={{ borderTop: '1px solid #1e1e3f', paddingTop: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ color: '#4b5563', fontSize: 10 }}>
                 TTL: {Math.floor(cacheStatus.ttlSeconds / 60)} min
-              </span>
-              <span style={{ color: '#4b5563', fontSize: 10 }}>
+                {' · '}
                 Next cleanup: {(() => {
                   const diff = Math.max(0, new Date(cacheStatus.nextCleanup).getTime() - Date.now());
                   return `${Math.ceil(diff / 60000)}m`;
                 })()}
               </span>
+              <button
+                onClick={handleClearCache}
+                style={{
+                  background: 'transparent',
+                  border: '1px solid #3f1e1e',
+                  borderRadius: 4,
+                  color: '#f43f5e',
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  padding: '2px 8px',
+                  cursor: 'pointer',
+                  letterSpacing: '0.04em',
+                  lineHeight: 1.4,
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(244,63,94,0.1)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+              >
+                🗑 LIMPIAR CACHÉ
+              </button>
             </div>
+          </div>
+        )}
+
+        {/* Cache toast */}
+        {cacheToast && (
+          <div style={{
+            position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
+            background: cacheToast.error ? 'rgba(244,63,94,0.15)' : 'rgba(0,255,136,0.10)',
+            border: `1px solid ${cacheToast.error ? '#f43f5e' : '#00ff88'}`,
+            borderRadius: 6, padding: '8px 14px',
+            fontFamily: 'JetBrains Mono, monospace', fontSize: 12,
+            color: cacheToast.error ? '#f43f5e' : '#00ff88',
+            pointerEvents: 'none',
+          }}>
+            {cacheToast.message}
           </div>
         )}
 

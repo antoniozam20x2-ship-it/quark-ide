@@ -999,6 +999,14 @@ When Jefferson searches for something, answer with full context of his ecosystem
   }
 });
 
+router.delete('/cache', (_req: Request, res: Response) => {
+  const cleared = repoContextCache.size;
+  repoContextCache.clear();
+  cacheNotifications.emit('cache-update', { source: 'manual-clear', repo: '*' });
+  console.log(`[CACHE] Manual clear — removed ${cleared} entr${cleared === 1 ? 'y' : 'ies'}`);
+  res.json({ cleared, timestamp: new Date().toISOString() });
+});
+
 router.get('/cache/status', (_req: Request, res: Response) => {
   const now = Date.now();
   const entries = Array.from(repoContextCache.entries()).map(([repo, entry]) => {
