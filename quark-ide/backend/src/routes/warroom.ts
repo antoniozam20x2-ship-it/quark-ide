@@ -163,7 +163,7 @@ const REPO_KEYWORDS: Record<string, string[]> = {
 
 const REPO_CACHE_TTL_MS = 30 * 60 * 1000;
 // ── In-memory repo context cache (per repo, 30-minute TTL) ───────────────────
-const repoContextCache = new Map<string, { tree: string[]; keyFiles: { path: string; content: string }[]; savedAt: number }>();
+const repoContextCache = new Map<string, { tree: string[]; keyFiles: { path: string; content: string }[]; savedAt: number; source: 'github' | 'agent' | 'chat' }>();
 
 async function extractSearchTermsWithAI(challenge: string): Promise<string[]> {
   const keys = getGroqKeys();
@@ -361,7 +361,7 @@ async function resolveRepoContext(
 
       const relevant = await isCacheRelevant(keyFiles, challenge);
       if (relevant) {
-        const ctx = { tree: keyFiles.map((f) => f.path), keyFiles, savedAt: Date.now() };
+        const ctx = { tree: keyFiles.map((f) => f.path), keyFiles, savedAt: Date.now(), source: 'agent' as const };
         repoContextCache.set(repoName, ctx);
         console.log(`[warroom] Caché relevante — usando ${keyFiles.length} archivo(s) cacheados`);
         return ctx;
@@ -430,7 +430,7 @@ async function resolveRepoContext(
       }).catch(() => { /* non-blocking */ });
 
       console.log(`[warroom] Cached ${keyFiles.length} files for ${repoName}`);
-      const freshCtx = { tree: sortedKeyFiles.map((f) => f.path), keyFiles: sortedKeyFiles, savedAt: Date.now() };
+      const freshCtx = { tree: sortedKeyFiles.map((f) => f.path), keyFiles: sortedKeyFiles, savedAt: Date.now(), source: 'github' as const };
       repoContextCache.set(repoName, freshCtx);
       return freshCtx;
     }
@@ -984,6 +984,32 @@ When Jefferson searches for something, answer with full context of his ecosystem
     const msg = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ error: msg });
   }
+});
+
+router.get('/cache/status', (_req: Request, res: Response) => {
+  const now = Date.now();
+  const entries = Array.from(repoContextCache.entries()).map(([repo, entry]) => {
+    const ageSeconds = Math.floor((now - entry.savedAt) / 1000);
+    return {
+      repo,
+      fileCount: entry.keyFiles.length,
+      ageSeconds,
+      expired: ageSeconds > REPO_CACHE_TTL_MS / 1000,
+      source: entry.source,
+    };
+  });
+
+  const oldestExpiredAt = entries.length > 0
+    ? Math.max(...Array.from(repoContextCache.values()).map((e) => e.savedAt)) + REPO_CACHE_TTL_MS
+    : now + REPO_CACHE_TTL_MS;
+
+  res.json({
+    timestamp: new Date().toISOString(),
+    cacheSize: repoContextCache.size,
+    entries,
+    ttlSeconds: REPO_CACHE_TTL_MS / 1000,
+    nextCleanup: new Date(oldestExpiredAt).toISOString(),
+  });
 });
 
 export default router;
