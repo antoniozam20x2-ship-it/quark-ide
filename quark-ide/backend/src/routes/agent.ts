@@ -761,41 +761,12 @@ router.post('/generate', async (req, res) => {
         try {
           const fileContext = (await Promise.all(readFiles.map(async (f) => {
             const lines = f.content.split('\n');
-            if (lines.length <= 120) {
-              return `--- ${f.path} (${lines.length} líneas) ---\n${f.content}`;
-            }
-            // Archivo grande: keyword search inteligente
-            try {
-              const kwRaw = await generateWithFallback(
-                `Dado este prompt de usuario: "${prompt}"\nGenera 5-8 keywords técnicas para buscar en código TypeScript.\nSOLO keywords separadas por coma. Sin explicación.`,
-                'Responde SOLO con keywords separadas por coma. Sin texto extra.'
-              );
-              const keywords = kwRaw.split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean);
-              const CTX = 30;
-              const ranges: [number, number][] = [];
-              lines.forEach((line, i) => {
-                if (keywords.some((kw: string) => line.toLowerCase().includes(kw))) {
-                  const lo = Math.max(0, i - CTX);
-                  const hi = Math.min(lines.length - 1, i + CTX);
-                  if (ranges.length && lo <= ranges[ranges.length - 1][1] + 1) {
-                    ranges[ranges.length - 1][1] = Math.max(ranges[ranges.length - 1][1], hi);
-                  } else {
-                    ranges.push([lo, hi]);
-                  }
-                }
-              });
-              if (ranges.length === 0) {
-                return `--- ${f.path} (${lines.length} líneas — sin hits para: ${keywords.join(', ')}) ---\n` +
-                  lines.slice(0, 120).join('\n') + `\n// ... fallback primeras 120 líneas`;
-              }
-              const sections = ranges.map(([lo, hi]) => lines.slice(lo, hi + 1).join('\n'));
-              const totalShown = ranges.reduce((acc, [lo, hi]) => acc + (hi - lo + 1), 0);
-              return `--- ${f.path} (${lines.length} líneas — mostrando ${totalShown} relevantes para: ${keywords.join(', ')}) ---\n` +
-                sections.join('\n\n// --- siguiente sección ---\n\n');
-            } catch {
-              return `--- ${f.path} (${lines.length} líneas) ---\n` +
-                lines.slice(0, 120).join('\n') + `\n// ... fallback primeras 120 líneas`;
-            }
+            // Limitar contexto al AI — máximo 80 líneas por archivo
+            const maxLines = 80;
+            const truncated = lines.length > maxLines
+              ? lines.slice(0, maxLines).join('\n') + `\n// ... (${lines.length - maxLines} líneas más omitidas)`
+              : f.content;
+            return `--- ${f.path} (${lines.length} líneas totales, mostrando ${Math.min(lines.length, maxLines)}) ---\n${truncated}`;
           }))).join('\n\n');
 
           const analysis = await generateWithFallback(
@@ -852,7 +823,7 @@ REGLAS GENERALES:
       // done with real file content — no commitMessage (read-only)
       const firstFile = readFiles[0];
       send('done', {
-        files:         readFiles.map((f) => ({ path: f.path, content: f.content })),
+        files:         [], // No mostrar archivos en modo lectura — solo el análisis
         commitMessage: '',
         mainComponent: firstFile?.path ?? '',
         mainContent:   '',
