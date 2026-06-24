@@ -64,6 +64,20 @@ export async function initDb(): Promise<void> {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS audit_history (
+      audit_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      repo_name   VARCHAR(100) NOT NULL,
+      audit_date  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      recommendations TEXT[] NOT NULL,
+      status      VARCHAR(20) NOT NULL DEFAULT 'pending',
+      review_date TIMESTAMPTZ NOT NULL,
+      verdict     TEXT,
+      results     TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_audit_history_repo ON audit_history(repo_name);
+    CREATE INDEX IF NOT EXISTS idx_audit_history_review_date ON audit_history(review_date);
     CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_memory_namespace ON memory_entries(namespace);
     CREATE INDEX IF NOT EXISTS idx_studio_projects_folder ON studio_projects(folder);
