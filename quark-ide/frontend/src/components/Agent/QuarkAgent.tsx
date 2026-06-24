@@ -84,9 +84,11 @@ function toPairedRows(diff: DiffLine[]): PairedRow[] {
 
 // Server-sent event shape
 interface AgentEvent {
-  event: 'action' | 'file' | 'done' | 'error';
+  event: 'action' | 'file' | 'done' | 'error' | 'replit_prompt';
   text?: string;
   path?: string;
+  file?: string;
+  task?: string;
   files?: { path: string; content: string; originalContent?: string }[];
   commitMessage?: string;
   mainComponent?: string;
@@ -97,10 +99,12 @@ interface AgentEvent {
 
 // Local feed items (superset — includes synthetic 'code' events)
 interface FeedItem {
-  event: 'action' | 'file' | 'done' | 'error' | 'code';
+  event: 'action' | 'file' | 'done' | 'error' | 'code' | 'replit_prompt';
   text?: string;
   path?: string;
   content?: string;
+  file?: string;
+  task?: string;
 }
 
 interface CommitResult {
@@ -416,6 +420,14 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               // For UI: same path marker
               setFeed((prev) => [...prev, { event: 'file', path: parsed.path }]);
 
+            } else if (parsed.event === 'replit_prompt') {
+              setFeed((prev) => [...prev, {
+                event: 'replit_prompt',
+                text: parsed.text,
+                file: parsed.file,
+                task: parsed.task,
+              }]);
+
             } else {
               setFeed((prev) => [...prev, { event: parsed.event, text: parsed.text }]);
               if (parsed.text?.startsWith('💡')) {
@@ -667,6 +679,46 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               color: '#ff4444', fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
             }}>
               ❌ {ev.text}
+            </div>
+          );
+
+          if (ev.event === 'replit_prompt') return (
+            <div key={i} style={{
+              background: 'linear-gradient(135deg, #2d1b69 0%, #1a0533 100%)',
+              border: '1px solid #7c3aed',
+              borderRadius: 8,
+              padding: 12,
+              margin: '8px 0',
+            }}>
+              <div style={{ color: '#a78bfa', fontWeight: 'bold', marginBottom: 8, fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
+                🟣 PROMPT PARA REPLIT
+              </div>
+              <pre style={{
+                color: '#e2d9f3',
+                fontSize: 11,
+                whiteSpace: 'pre-wrap',
+                fontFamily: 'JetBrains Mono, monospace',
+                margin: 0,
+                lineHeight: 1.6,
+              }}>
+                {ev.text}
+              </pre>
+              <button
+                onClick={() => navigator.clipboard.writeText(ev.text ?? '')}
+                style={{
+                  marginTop: 8,
+                  background: '#7c3aed',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: 4,
+                  padding: '6px 12px',
+                  cursor: 'pointer',
+                  fontSize: 11,
+                  fontFamily: 'JetBrains Mono, monospace',
+                }}
+              >
+                📋 Copiar prompt
+              </button>
             </div>
           );
 

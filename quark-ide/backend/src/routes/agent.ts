@@ -1132,24 +1132,57 @@ REGLAS:
         send('action', { text: `4️⃣ Copia EXACTAMENTE 3+ líneas de contexto antes y después` });
         send('action', { text: `5️⃣ Vuelve aquí y manda este prompt:\n` });
 
-        const replicPrompt = `
-[DEEP][MODIFICAR] En ${mainPreloaded?.path || 'archivo'}, reemplaza:
+        // Generar prompt detallado para Replit con Claude
+        send('action', { text: `🤖 Generando prompt detallado para Replit...` });
 
-\`\`\`old
-[PEGA AQUÍ EL BLOQUE EXACTO DE 3+ LÍNEAS QUE COPIASTE DE REPLIT]
-\`\`\`
+        let replitPrompt = '';
+        try {
+          const replitPromptRes = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': process.env.ANTHROPIC_API_KEY!,
+              'anthropic-version': '2023-06-01',
+            },
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-6',
+              max_tokens: 1024,
+              messages: [{
+                role: 'user',
+                content: `Eres un experto en TypeScript. Tienes el siguiente archivo y una tarea de modificación.
 
-Por:
+ARCHIVO: ${mainPreloaded?.path}
+CONTENIDO RELEVANTE:
+${mainPreloaded?.content?.split('\n').slice(0, 200).join('\n')}
 
-\`\`\`new
-[PEGA EL MISMO BLOQUE + TUS CAMBIOS]
-\`\`\`
+TAREA: ${prompt}
 
-RAZÓN: ${prompt}
-        `.trim();
+Genera un prompt EXPLÍCITO para Replit AI que incluya:
+1. El archivo EXACTO a abrir
+2. La función EXACTA donde hacer el cambio
+3. La línea EXACTA de referencia para ubicarse
+4. El código EXACTO a agregar/modificar (listo para copiar-pegar)
+5. Dónde colocarlo (antes/después de qué línea)
 
-        send('action', { text: replicPrompt });
-        send('action', { text: `\n✅ El Agent generará el str_replace exacto con ese contexto` });
+El prompt debe ser tan claro que Replit pueda ejecutarlo sin preguntas.
+Responde SOLO con el prompt para Replit, sin explicaciones.`,
+              }],
+            }),
+          });
+
+          const replitData = await replitPromptRes.json() as {
+            content?: Array<{ type: string; text: string }>
+          };
+          replitPrompt = replitData.content?.[0]?.text ?? '';
+        } catch {
+          replitPrompt = `En el archivo ${mainPreloaded?.path}, realiza este cambio: ${prompt}`;
+        }
+
+        send('replit_prompt', {
+          text: replitPrompt,
+          file: mainPreloaded?.path,
+          task: prompt,
+        });
 
         send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
         res.end();
