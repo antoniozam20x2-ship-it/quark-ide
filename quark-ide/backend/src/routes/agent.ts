@@ -436,6 +436,18 @@ MAPEO DE CONCEPTOS:
 - "screener" o "escaneo" o "filtrado de pares" → screener, minScore
 - "argumentos" o "parámetros" o "condiciones" o "requisitos" o "cuándo se activa" o "qué necesita" → mapear según la señal mencionada en el prompt (S1→checkS1Bull, S2→checkS2, S3→checkS3Bull, S4→checkS4, S5→checkS5ImpulsBull, S6→checkS6Bull); si no hay señal específica → fEval, tradingLogic
 
+MAPEO CORE AI (repo: Code-Coretest):
+- "agente" o "ATLAS" o "presidente" → ATLAS, streamNexusChat, AGENTS
+- "futuros" o "HELIX" o "derivados" → HELIX, runAssetCouncil, streamNexusChat
+- "spot" o "VEGA" o "mercado" → VEGA, useMarketTicker, WatchlistPanel
+- "research" o "CIPHER" o "análisis" → CIPHER, parseOracleVerdict, buildAuditContext
+- "riesgo" o "SIGMA" o "gestión" → SIGMA, runCouncil, agentStatus
+- "veredicto" o "ORACLE" o "decisión" → ORACLE, parseOracleVerdict, DecisionsPanel
+- "consejo" o "council" o "sesión" → runCouncil, runAssetCouncil, AGENTS
+- "historial" o "decisiones" → DecisionsPanel, loadDecisions, persistDecisions
+- "watchlist" o "activos" → WatchlistPanel, useMarketTicker, watchlist
+- "auditoría" o "audit" → buildAuditContext, sessionMode, runCouncil
+
 DISTINCIÓN CRÍTICA — dos sistemas de escaneo:
 - Si el usuario pregunta por señales, condiciones técnicas, cuándo entra 
   el bot, scores, S1-S6, calidad de setup → es el SCREENER → usar fEval, tradingLogic
