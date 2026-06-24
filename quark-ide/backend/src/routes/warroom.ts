@@ -150,9 +150,10 @@ const REPO_KEYWORDS: Record<string, string[]> = {
     'integrations', 'messages', 'schema',
   ],
   'Code-Coretest': [
-    'HERALD', 'ATLAS', 'QUANT', 'CIPHER', 'SIGMA',
-    'boardroom', 'consensus', 'agent', 'cyberpunk',
-    'multiAgent', 'decision',
+    'ATLAS', 'HELIX', 'VEGA', 'CIPHER', 'SIGMA', 'ORACLE',
+    'streamNexusChat', 'runCouncil', 'runAssetCouncil',
+    'DecisionsPanel', 'parseOracleVerdict', 'CoreAI',
+    'useMarketTicker', 'AgentCard', 'sessionMode',
   ],
   'quark-ide': [
     'warroom', 'generateConsensus', 'quarkAgent', 'boardRoom',
