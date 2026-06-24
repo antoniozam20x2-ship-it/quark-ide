@@ -160,6 +160,9 @@ const REPO_KEYWORDS: Record<string, string[]> = {
   ],
 };
 
+// ── In-memory repo context cache (per repo, lives for process lifetime) ───────
+const repoContextCache = new Map<string, { tree: string[]; keyFiles: { path: string; content: string }[] }>();
+
 async function extractSearchTermsWithAI(challenge: string): Promise<string[]> {
   const keys = getGroqKeys();
   if (keys.length === 0) return [];
@@ -327,6 +330,18 @@ async function resolveRepoContext(
   const repoName = appName ? APP_NAME_TO_REPO[appName] : undefined;
   if (!repoName) return undefined;
 
+  // Step 1b: check in-memory per-repo cache first
+  const memCached = repoContextCache.get(repoName);
+  if (memCached) {
+    const relevant = await isCacheRelevant(memCached.keyFiles, challenge);
+    if (relevant) {
+      console.log(`[warroom] In-memory caché hit para ${repoName} — ${memCached.keyFiles.length} archivo(s)`);
+      return memCached;
+    }
+    console.log(`[warroom] In-memory caché stale para ${repoName} — recargando`);
+    repoContextCache.delete(repoName);
+  }
+
   // Step 2: try the shared cache written by Agent
   try {
     const cached = await loadSharedAgentContext(repoName);
@@ -338,11 +353,10 @@ async function resolveRepoContext(
 
       const relevant = await isCacheRelevant(keyFiles, challenge);
       if (relevant) {
+        const ctx = { tree: keyFiles.map((f) => f.path), keyFiles };
+        repoContextCache.set(repoName, ctx);
         console.log(`[warroom] Caché relevante — usando ${keyFiles.length} archivo(s) cacheados`);
-        return {
-          tree: keyFiles.map((f) => f.path),
-          keyFiles,
-        };
+        return ctx;
       }
       console.log(`[warroom] Caché ignorado — yendo a GitHub Search`);
     }
@@ -408,7 +422,9 @@ async function resolveRepoContext(
       }).catch(() => { /* non-blocking */ });
 
       console.log(`[warroom] Cached ${keyFiles.length} files for ${repoName}`);
-      return { tree: keyFiles.map((f) => f.path), keyFiles };
+      const freshCtx = { tree: sortedKeyFiles.map((f) => f.path), keyFiles: sortedKeyFiles };
+      repoContextCache.set(repoName, freshCtx);
+      return freshCtx;
     }
   } catch (err) {
     console.warn(`[warroom] GitHub search failed for ${repoName}:`, err instanceof Error ? err.message : err);

@@ -430,6 +430,38 @@ export default function BoardRoom({ initialBrief, onBriefConsumed, onSendToAgent
             onChange={(e) => setChallenge(e.target.value)}
             disabled={running}
           />
+          {/* Repo selector — always visible, independent of Quark Agent */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            background: '#0d0d1a', border: '1px solid #1e1e3f',
+            borderRadius: 6, padding: '6px 10px',
+          }}>
+            <span style={{
+              fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#3a3a5c',
+              flexShrink: 0,
+            }}>
+              // repo
+            </span>
+            <select
+              value={targetRepo || appNameRef.current || PROJECT_NAMES[0]}
+              onChange={(e) => {
+                const val = e.target.value;
+                setTargetRepo(val);
+                appNameRef.current = val;
+              }}
+              disabled={running}
+              style={{
+                background: 'transparent', border: 'none', outline: 'none',
+                color: '#00ff88', fontFamily: 'JetBrains Mono, monospace',
+                fontSize: 11, fontWeight: 700, cursor: 'pointer', flex: 1,
+              }}
+            >
+              {PROJECT_NAMES.map((name) => (
+                <option key={name} value={name} style={{ background: '#12121A' }}>{name}</option>
+              ))}
+            </select>
+          </div>
+
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <button
