@@ -2106,6 +2106,14 @@ router.post('/apply-patch', async (req, res) => {
   }
 });
 
+async function generateSimpleGroqOnly(prompt: string, system: string): Promise<string> {
+  try {
+    return await callGroqAgent(prompt, system, 1024);
+  } catch (err) {
+    throw new Error(`Groq falló: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function runChatTurn(
   sessionId: string,
   userMessage: string,
@@ -2123,7 +2131,7 @@ async function runChatTurn(
   send('action', { text: complexity === 'complex' ? '🧠 Pregunta compleja — usando Claude' : '⚡ Pregunta simple — respuesta rápida' });
 
   if (complexity === 'simple') {
-    const answer = await generateWithFallback(userMessage, systemPromptSimple);
+    const answer = await generateSimpleGroqOnly(userMessage, systemPromptSimple);
     send('chat_message', { text: answer });
     messages.push({ role: 'assistant', content: [{ type: 'text', text: answer }] });
     await saveChatHistory(sessionId, messages);
