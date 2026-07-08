@@ -2170,15 +2170,25 @@ async function runChatTurn(
   userMessage: string,
   repo: string,
   send: (event: string, data: Record<string, unknown>) => void,
-  maxToolSteps = 10,
+  maxToolSteps = 20,
 ): Promise<void> {
   const history = await loadChatHistory(sessionId);
   const complexity = classifyComplexity(userMessage);
 
+  // Preload cached agent context (populated by QuarkAgent deep analysis runs)
+  const cachedCtx = await loadAgentContext().catch(() => null);
+  let seedContext = '';
+  if (cachedCtx && cachedCtx.repo === repo) {
+    const cacheAge = Date.now() - (cachedCtx.savedAt ?? 0);
+    if (cacheAge < 30 * 60 * 1000 && cachedCtx.preloadedFiles?.length > 0) {
+      seedContext = `\n\nCONTEXTO YA INVESTIGADO RECIENTEMENTE (por otra herramienta de este mismo sistema, hace menos de 30 min) — revisa si es relevante para esta pregunta antes de buscar de nuevo con grep_code:\n${cachedCtx.preloadedFiles.map((f: any) => f.path).join('\n')}\n\nSi es relevante, usa read_file directamente en esos paths en vez de grep_code desde cero.`;
+    }
+  }
+
   // messages is initialized here so both paths (simple escalation + complex) share it
   const messages: any[] = [
     ...history,
-    { role: 'user', content: userMessage },
+    { role: 'user', content: userMessage + seedContext },
   ];
 
   // ── Simple path: Groq triage (text-only, no tools) ───────────────────────────
@@ -2254,6 +2264,7 @@ REGLAS:
     messages.push({ role: 'user', content: toolResults });
   }
 
+  send('action', { text: `⚠️ Se alcanzó el límite de ${maxToolSteps} turnos sin una respuesta final — el análisis puede estar incompleto` });
   await saveChatHistory(sessionId, messages);
 }
 

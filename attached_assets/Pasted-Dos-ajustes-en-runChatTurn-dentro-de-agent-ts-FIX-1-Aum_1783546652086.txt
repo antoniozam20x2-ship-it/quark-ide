@@ -1,0 +1,49 @@
+Dos ajustes en runChatTurn dentro de agent.ts:
+
+═══════════════════════════════════════
+FIX 1 — Aumentar el límite de turnos y loguear cuando se alcanza
+═══════════════════════════════════════
+Busca la firma de runChatTurn:
+
+async function runChatTurn(
+  sessionId: string,
+  userMessage: string,
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+  maxToolSteps = 10,
+): Promise<void> {
+
+Cámbiala a:
+
+async function runChatTurn(
+  sessionId: string,
+  userMessage: string,
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+  maxToolSteps = 20,
+): Promise<void> {
+
+Y en el for loop, justo después de que termina sin haber hecho return (es decir, se agotaron los steps sin que el modelo devolviera solo texto), agrega antes del final de la función:
+
+  send('action', { text: `⚠️ Se alcanzó el límite de ${maxToolSteps} turnos sin una respuesta final — el análisis puede estar incompleto` });
+  await saveChatHistory(sessionId, messages);
+
+(si ya existe algo similar al final de la función, no lo dupliques, solo confirma que el mensaje de acción se envía ANTES de terminar, no en silencio)
+
+═══════════════════════════════════════
+FIX 2 — Precargar el caché de contexto del modo DEEP al iniciar el chat
+═══════════════════════════════════════
+Al principio de runChatTurn, después de cargar el historial (loadChatHistory) y antes de construir el system prompt, agrega:
+
+  const cachedCtx = await loadAgentContext().catch(() => null);
+  let seedContext = '';
+  if (cachedCtx && cachedCtx.repo === repo) {
+    const cacheAge = Date.now() - (cachedCtx.savedAt ?? 0);
+    if (cacheAge < 30 * 60 * 1000 && cachedCtx.preloadedFiles?.length > 0) {
+      seedContext = `\n\nCONTEXTO YA INVESTIGADO RECIENTEMENTE (por otra herramienta de este mismo sistema, hace menos de 30 min) — revisa si es relevante para esta pregunta antes de buscar de nuevo con grep_code:\n${cachedCtx.preloadedFiles.map((f: any) => f.path).join('\n')}\n\nSi es relevante, usa read_file directamente en esos paths en vez de grep_code desde cero.`;
+    }
+  }
+
+Y agrega seedContext al mensaje inicial del usuario (donde se arma el primer mensaje de "messages"), concatenado al final del contenido.
+
+Después de aplicar ambos, prueba de nuevo la pregunta del circuit breaker completa y dime si esta vez llega a una respuesta final.
