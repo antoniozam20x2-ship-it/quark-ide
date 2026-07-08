@@ -173,7 +173,11 @@ async function callDeepSeekAgent(prompt: string, system: string, maxTokens = 409
   return json.choices?.[0]?.message?.content ?? ''
 }
 
-async function generateWithFallback(prompt: string, system: string): Promise<string> {
+async function generateWithFallback(
+  prompt: string,
+  system: string,
+  onFail?: (label: string, msg: string) => void,
+): Promise<string> {
   const providers = [
     { label: 'Groq',     fn: () => callGroqAgent(prompt, system, 4096) },
     { label: 'DeepSeek', fn: () => callDeepSeekAgent(prompt, system, 4096) },
@@ -186,6 +190,7 @@ async function generateWithFallback(prompt: string, system: string): Promise<str
     } catch (err) {
       lastErr = err instanceof Error ? err : new Error(String(err))
       console.warn(`[agent] ${label} failed: ${lastErr.message}`)
+      onFail?.(label, lastErr.message)
     }
   }
   throw lastErr
@@ -2106,14 +2111,6 @@ router.post('/apply-patch', async (req, res) => {
   }
 });
 
-async function generateSimpleGroqOnly(prompt: string, system: string): Promise<string> {
-  try {
-    return await callGroqAgent(prompt, system, 1024);
-  } catch (err) {
-    throw new Error(`Groq falló: ${err instanceof Error ? err.message : String(err)}`);
-  }
-}
-
 async function runChatTurn(
   sessionId: string,
   userMessage: string,
@@ -2131,7 +2128,11 @@ async function runChatTurn(
   send('action', { text: complexity === 'complex' ? '🧠 Pregunta compleja — usando Claude' : '⚡ Pregunta simple — respuesta rápida' });
 
   if (complexity === 'simple') {
-    const answer = await generateSimpleGroqOnly(userMessage, systemPromptSimple);
+    const answer = await generateWithFallback(
+      userMessage,
+      systemPromptSimple,
+      (label, msg) => send('action', { text: `⚠️ ${label} falló (${msg}) — probando siguiente proveedor...` }),
+    );
     send('chat_message', { text: answer });
     messages.push({ role: 'assistant', content: [{ type: 'text', text: answer }] });
     await saveChatHistory(sessionId, messages);
