@@ -4,6 +4,10 @@ import { callAI } from '../lib/aiRouter.js';
 import { generateContent } from '../services/gemini.js';
 import pool from '../services/db.js';
 import { cacheNotifications } from '../lib/cacheNotifications.js';
+import { execSync } from 'child_process';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import path from 'path';
 
 // ── Agent session persistence (reuses memory_entries table) ───────────────────
 
@@ -754,6 +758,50 @@ async function runAgenticLoop(
     files: Array.from(modifiedFiles.entries()).map(([path, content]) => ({ path, content })),
     commitMessage,
   };
+}
+
+async function validateWithTsc(
+  finalFiles: { path: string; content: string }[],
+  preloadedFiles: { path: string; content: string; fullContent?: string }[],
+  repo: string,
+): Promise<{ valid: boolean; errors: string[] }> {
+  const tmpDir = mkdtempSync(path.join(tmpdir(), 'quark-validate-'));
+
+  try {
+    for (const f of finalFiles) {
+      const fullPath = path.join(tmpDir, f.path);
+      mkdirSync(path.dirname(fullPath), { recursive: true });
+      writeFileSync(fullPath, f.content, 'utf-8');
+    }
+
+    for (const f of preloadedFiles) {
+      if (finalFiles.some(ff => ff.path === f.path)) continue;
+      const fullPath = path.join(tmpDir, f.path);
+      mkdirSync(path.dirname(fullPath), { recursive: true });
+      writeFileSync(fullPath, f.fullContent ?? f.content, 'utf-8');
+    }
+
+    const tsconfigContent = await getFileContent('tsconfig.json', repo).catch(() => null);
+    if (tsconfigContent) {
+      writeFileSync(path.join(tmpDir, 'tsconfig.json'), tsconfigContent, 'utf-8');
+    }
+
+    execSync(
+      `npx tsc --noEmit --pretty false --skipLibCheck --moduleResolution node ${finalFiles.map(f => `"${f.path}"`).join(' ')}`,
+      { cwd: tmpDir, timeout: 20_000, encoding: 'utf-8' },
+    );
+    return { valid: true, errors: [] };
+  } catch (err: any) {
+    const output: string = err.stdout?.toString() ?? '';
+    const errors = output
+      .split('\n')
+      .filter((line) => /error TS\d+:/.test(line))
+      .filter((line) => finalFiles.some(f => line.includes(f.path.split('/').pop() ?? '')))
+      .slice(0, 15);
+    return { valid: errors.length === 0, errors };
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
 }
 
 router.post('/generate', async (req, res) => {
@@ -1568,38 +1616,10 @@ REGLAS CRÍTICAS PARA old_str:
     const mainFile = finalFiles.find((f) => f.path.endsWith('.tsx')) ?? finalFiles[0];
 
     // ── VALIDACIÓN ANTES DEL DIFF ─────────────────────────────────────────────
-    send('action', { text: '🔍 Validando código generado...' })
+    send('action', { text: '🔍 Validando código generado con TypeScript compiler...' })
 
     try {
-      const filesToValidate = finalFiles
-        .map((f: { path: string; content: string }) => `--- ${f.path} ---\n${f.content.split('\n').slice(0, 100).join('\n')}`)
-        .join('\n\n')
-
-      const validationRaw = await generateWithFallback(
-        `Analiza estos archivos de código TypeScript/JavaScript generados y detecta errores críticos.
-    
-${filesToValidate}
-
-Responde SOLO con este JSON:
-{
-  "valid": true/false,
-  "errors": ["archivo.ts:línea — descripción del error"],
-  "affectedFiles": ["path/del/archivo"]
-}
-
-Busca ÚNICAMENTE errores críticos:
-- Imports rotos o referencias a módulos inexistentes
-- Variables o funciones usadas sin declarar
-- Sintaxis inválida obvia
-- Exports faltantes que otros archivos necesitan
-Para cada error, usa el formato "archivo:línea — mensaje" si puedes inferir el número de línea. Si no puedes inferirlo, usa "archivo — mensaje".
-NO reportes advertencias de estilo ni errores menores.`,
-        'Eres un validador de código experto. Devuelve SOLO el JSON solicitado sin markdown ni explicaciones.'
-      )
-
-      const validation = JSON.parse(
-        validationRaw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim()
-      ) as { valid: boolean; errors: string[]; affectedFiles: string[] }
+      const validation = await validateWithTsc(finalFiles, preloadedFiles, repo)
 
       if (!validation.valid && validation.errors.length > 0) {
         send('action', { text: `❌ TypeScript falló — ${validation.errors.length} error(es):` })
