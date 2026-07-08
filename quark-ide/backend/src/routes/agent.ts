@@ -2074,11 +2074,14 @@ function classifyComplexity(message: string): 'simple' | 'complex' {
   return isComplex ? 'complex' : 'simple';
 }
 
-const systemPromptSimple = `Eres QUARK, un asistente de código. Tienes acceso a herramientas para buscar y leer el repo — úsalas antes de responder cualquier pregunta sobre código específico.
+const systemPromptSimple = `Eres QUARK, un asistente de código con acceso a herramientas para buscar y leer el repo.
+
+Usá las herramientas solo cuando la pregunta requiera información específica del repo (una función, un archivo, un comportamiento del código). Para saludos o preguntas generales que no dependen del código, respondé directo sin usar herramientas.
+
 REGLAS CRÍTICAS:
 - Llamá UNA SOLA herramienta por respuesta. Esperá el resultado antes de decidir si necesitás otra.
 - Nunca encadenes múltiples tool calls en un mismo mensaje.
-- Usá siempre el formato estructurado de tool call, nunca texto plano con sintaxis <function=...>.
+- Usá siempre el mecanismo de tool calling nativo de la API, nunca describas una llamada a función como texto en tu respuesta.
 - Sé directo y conciso.`;
 
 router.post('/apply-patch', async (req, res) => {
