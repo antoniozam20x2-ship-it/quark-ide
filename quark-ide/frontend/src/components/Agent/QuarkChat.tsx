@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 
+const API_BASE = (import.meta.env.VITE_API_URL ?? 'https://backend-production-0d77.up.railway.app').replace(/\/$/, '');
+
 interface ChatMsg {
   role: 'user' | 'assistant' | 'action';
   text: string;
@@ -32,7 +34,7 @@ export default function QuarkChat({ repo }: { repo: string }) {
     setStreaming(true);
 
     try {
-      const res = await fetch('/api/agent/chat', {
+      const res = await fetch(`${API_BASE}/api/agent/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userMsg, repo, sessionId }),
@@ -89,7 +91,7 @@ export default function QuarkChat({ repo }: { repo: string }) {
     if (!pendingPatch) return;
     setMessages(m => [...m, { role: 'action', text: `⏳ Aplicando patch en ${pendingPatch.path}...` }]);
     try {
-      const res = await fetch('/api/agent/apply-patch', {
+      const res = await fetch(`${API_BASE}/api/agent/apply-patch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ repo, ...pendingPatch }),
