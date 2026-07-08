@@ -2074,15 +2074,9 @@ function classifyComplexity(message: string): 'simple' | 'complex' {
   return isComplex ? 'complex' : 'simple';
 }
 
-const systemPromptSimple = `Eres QUARK, un asistente de código con acceso a herramientas para buscar y leer el repo.
-
-Usá las herramientas solo cuando la pregunta requiera información específica del repo (una función, un archivo, un comportamiento del código). Para saludos o preguntas generales que no dependen del código, respondé directo sin usar herramientas.
-
-REGLAS CRÍTICAS:
-- Llamá UNA SOLA herramienta por respuesta. Esperá el resultado antes de decidir si necesitás otra.
-- Nunca encadenes múltiples tool calls en un mismo mensaje.
-- Usá siempre el mecanismo de tool calling nativo de la API, nunca describas una llamada a función como texto en tu respuesta.
-- Sé directo y conciso.`;
+const systemPromptTriage = `Responde de forma breve y directa, usando SOLO tu conocimiento general — no tienes acceso a herramientas ni al código real del repo.
+Si la pregunta requiere leer código específico, archivos, o investigar algo que no podés saber de memoria, responde ÚNICAMENTE con: "NEEDS_TOOLS: " seguido de una razón breve (por ejemplo "NEEDS_TOOLS: necesito leer el archivo de circuit breaker para explicar el flujo real").
+Si podés responder con confianza sin ver código, responde normal, sin ese prefijo.`;
 
 router.post('/apply-patch', async (req, res) => {
   const { repo, path: filePath, old_str, new_str } = req.body as {
@@ -2119,37 +2113,7 @@ router.post('/apply-patch', async (req, res) => {
   }
 });
 
-// ── Format converters: Anthropic ↔ Groq/OpenAI ──────────────────────────────
-
-function toGroqTools(anthropicTools: any[]): any[] {
-  return anthropicTools.map((t) => ({
-    type: 'function',
-    function: {
-      name: t.name,
-      description: t.description,
-      parameters: t.input_schema,
-    },
-  }));
-}
-
-// Strips tool-use turns from history; keeps only plain text exchanges for Groq context.
-function toGroqHistory(anthropicMessages: any[]): any[] {
-  const out: any[] = [];
-  for (const msg of anthropicMessages) {
-    if (msg.role === 'user' && typeof msg.content === 'string') {
-      out.push({ role: 'user', content: msg.content });
-    } else if (msg.role === 'assistant' && Array.isArray(msg.content)) {
-      const text = (msg.content as any[])
-        .filter((b) => b.type === 'text')
-        .map((b: any) => b.text as string)
-        .join('\n');
-      if (text) out.push({ role: 'assistant', content: text });
-    }
-  }
-  return out;
-}
-
-// ── Shared tool executor (model-agnostic) ─────────────────────────────────────
+// ── Shared tool executor ──────────────────────────────────────────────────────
 
 async function executeChatTool(
   name: string,
@@ -2199,17 +2163,6 @@ async function executeChatTool(
   return `Tool desconocida: ${name}`;
 }
 
-// ── Groq fallback sentinel ────────────────────────────────────────────────────
-
-class GroqFallbackError extends Error {
-  constructor(reason: string) { super(reason); this.name = 'GroqFallbackError'; }
-}
-
-function isToolUseFailed(content: string | null): boolean {
-  // Llama sometimes emits text-format function calls instead of structured tool_calls
-  return typeof content === 'string' && content.includes('<function=');
-}
-
 // ── runChatTurn ───────────────────────────────────────────────────────────────
 
 async function runChatTurn(
@@ -2222,119 +2175,33 @@ async function runChatTurn(
   const history = await loadChatHistory(sessionId);
   const complexity = classifyComplexity(userMessage);
 
-  // ── Simple path: Groq + CHAT_TOOLS (OpenAI-compatible format) ────────────────
-  if (complexity === 'simple') {
-    send('action', { text: '⚡ Modo rápido — Groq' });
-    let groqFallbackReason: string | null = null;
-
-    try {
-      const groqMessages: any[] = [
-        ...toGroqHistory(history),
-        { role: 'user', content: userMessage },
-      ];
-      const groqTools = toGroqTools(CHAT_TOOLS);
-      const keys = getGroqKeys();
-      if (keys.length === 0) throw new GroqFallbackError('No GROQ_API_KEY configurada');
-      const key = keys[0];
-      let finalText = '';
-      let retried = false;
-
-      for (let step = 0; step < maxToolSteps; step++) {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), PROVIDER_TIMEOUT_MS);
-        const res = await fetch(GROQ_URL, {
-          method: 'POST',
-          signal: ctrl.signal,
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-          body: JSON.stringify({
-            model: GROQ_MODEL,
-            max_tokens: 4096,
-            tools: groqTools,
-            tool_choice: 'auto',
-            messages: [
-              { role: 'system', content: systemPromptSimple },
-              ...groqMessages,
-            ],
-          }),
-        }).finally(() => clearTimeout(timer));
-
-        if (res.status === 429) throw new GroqFallbackError('límite de TPM (429)');
-        if (!res.ok) throw new Error(`Groq error: ${res.status} ${await res.text()}`);
-
-        const data = await res.json() as {
-          error?: { type?: string; message?: string };
-          choices: Array<{
-            message: {
-              role: string;
-              content: string | null;
-              tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
-            };
-            finish_reason: string;
-          }>;
-        };
-
-        if (data.error) throw new GroqFallbackError(`error de API: ${data.error.message ?? data.error.type}`);
-
-        const choice = data.choices[0].message;
-
-        // Detect malformed text-format function call (failed_generation)
-        if (isToolUseFailed(choice.content)) {
-          if (retried) throw new GroqFallbackError('tool_use_failed tras reintento');
-          retried = true;
-          send('action', { text: '⚠️ Groq generó tool call inválido — reintentando con restricciones' });
-          groqMessages.push({
-            role: 'assistant',
-            content: choice.content,
-          });
-          groqMessages.push({
-            role: 'user',
-            content: 'Error: usá el formato estructurado de tool call. Llamá UNA sola herramienta en este turno.',
-          });
-          continue;
-        }
-
-        groqMessages.push(choice);
-
-        if (choice.content) {
-          finalText += choice.content;
-          send('chat_message', { text: choice.content });
-        }
-
-        const toolCalls = choice.tool_calls ?? [];
-        if (toolCalls.length === 0) break;
-
-        for (const tc of toolCalls) {
-          let input: Record<string, any>;
-          try { input = JSON.parse(tc.function.arguments); } catch { input = {}; }
-          const resultText = await executeChatTool(tc.function.name, input, repo, send);
-          groqMessages.push({ role: 'tool', tool_call_id: tc.id, content: resultText });
-        }
-      }
-
-      // Save history in Anthropic format for consistency across paths
-      await saveChatHistory(sessionId, [
-        ...history,
-        { role: 'user', content: userMessage },
-        { role: 'assistant', content: [{ type: 'text', text: finalText }] },
-      ]);
-      return;
-
-    } catch (err) {
-      if (err instanceof GroqFallbackError) {
-        groqFallbackReason = err.message;
-      } else {
-        throw err;
-      }
-    }
-
-    send('action', { text: `⚠️ Groq: ${groqFallbackReason} — Claude como fallback` });
-  }
-
-  // ── Complex path (or Groq fallback): Claude + adaptive thinking + CHAT_TOOLS ─
+  // messages is initialized here so both paths (simple escalation + complex) share it
   const messages: any[] = [
     ...history,
     { role: 'user', content: userMessage },
   ];
+
+  // ── Simple path: Groq triage (text-only, no tools) ───────────────────────────
+  if (complexity === 'simple') {
+    send('action', { text: '⚡ Modo rápido — Groq' });
+    const groqAnswer = await callGroqAgent(userMessage, systemPromptTriage, 512);
+
+    if (!groqAnswer.trim().startsWith('NEEDS_TOOLS:')) {
+      send('chat_message', { text: groqAnswer });
+      messages.push({ role: 'assistant', content: [{ type: 'text', text: groqAnswer }] });
+      await saveChatHistory(sessionId, messages);
+      return;
+    }
+
+    const reason = groqAnswer.replace('NEEDS_TOOLS:', '').trim();
+    send('action', { text: `🧠 Groq necesita más contexto — escalando a Claude (${reason})` });
+    messages.push({
+      role: 'user',
+      content: `[Contexto: Groq intentó responder esto primero y determinó que necesita ver código real. Razón: ${reason}]`,
+    });
+  }
+
+  // ── Complex path (or escalated from simple): Claude + adaptive thinking + CHAT_TOOLS ─
 
   const systemPrompt = `Eres QUARK, un asistente de código que conversa con el usuario igual que un ingeniero senior — no un generador de una sola pasada.
 

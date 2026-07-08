@@ -1,0 +1,41 @@
+Quiero cambiar la arquitectura del modo "simple" del chat para que sea un triage de dos pasos, en vez de intentar que Groq use tools directamente (eso no funciona, Groq y Claude usan formatos de tool-calling incompatibles).
+
+Nuevo flujo dentro de runChatTurn, reemplazando el bloque actual de "if (complexity === 'simple')":
+
+1. Groq responde SOLO con texto, sin ningún array de tools en el request.
+2. Si Groq no puede responder con certeza, debe contestar exactamente empezando con "NEEDS_TOOLS: " seguido de una razón breve — esto se le indica en el system prompt.
+3. Si la respuesta de Groq empieza con "NEEDS_TOOLS:", el código relanza el mismo turno pero con el flujo completo de Claude + tools (el mismo loop que ya existe para complexity === 'complex'), incluyendo lo que Groq ya intentó como contexto adicional.
+4. Si Groq responde normal (sin ese prefijo), se devuelve tal cual al usuario — path barato, terminado ahí.
+
+Código:
+
+const systemPromptTriage = `Responde de forma breve y directa, usando SOLO tu conocimiento general — no tienes acceso a herramientas ni al código real del repo.
+Si la pregunta requiere leer código específico, archivos, o investigar algo que no podés saber de memoria, responde ÚNICAMENTE con: "NEEDS_TOOLS: " seguido de una razón breve (por ejemplo "NEEDS_TOOLS: necesito leer el archivo de circuit breaker para explicar el flujo real").
+Si podés responder con confianza sin ver código, responde normal, sin ese prefijo.`;
+
+// Dentro de runChatTurn, reemplazar el bloque "if (complexity === 'simple')" por:
+
+if (complexity === 'simple') {
+  send('action', { text: '⚡ Modo rápido — Groq' });
+  const groqAnswer = await callGroqAgent(userMessage, systemPromptTriage, 512);
+
+  if (!groqAnswer.trim().startsWith('NEEDS_TOOLS:')) {
+    send('chat_message', { text: groqAnswer });
+    messages.push({ role: 'assistant', content: [{ type: 'text', text: groqAnswer }] });
+    await saveChatHistory(sessionId, messages);
+    return;
+  }
+
+  send('action', { text: `🧠 Groq necesita más contexto — escalando a Claude (${groqAnswer.replace('NEEDS_TOOLS:', '').trim()})` });
+  // No hacer return acá — dejar que el código siga hacia el bloque de Claude + tools que ya existe más abajo
+  messages.push({
+    role: 'user',
+    content: `[Contexto: Groq intentó responder esto primero y determinó que necesita ver código real. Razón: ${groqAnswer.replace('NEEDS_TOOLS:', '').trim()}]`,
+  });
+}
+
+// A partir de acá continúa el código existente del loop de Claude + tools sin cambios,
+// ya que ahora tanto complexity === 'complex' como el caso de escalación desde 'simple' 
+// caen en el mismo flujo.
+
+Ajusta el flujo de control (if/else, o quitar el "return" temprano que ya existía) según cómo esté estructurada la función actualmente, para que el bloque de Claude se ejecute tanto cuando complexity === 'complex' como cuando Groq pidió escalar. Después de aplicar, prueba con "¿Qué significa VALIDO_BEAR en Signal OS?" (debería resolver con Groq solo) y con una pregunta que sepas que requiere código real, para confirmar que escala bien a Claude.
