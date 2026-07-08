@@ -2148,7 +2148,7 @@ REGLAS:
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-5',
+        model: 'claude-sonnet-4-6',
         max_tokens: 2048,
         system: systemPrompt,
         tools: CHAT_TOOLS,
@@ -2156,7 +2156,10 @@ REGLAS:
       }),
     });
 
-    const data = await res.json() as { content: any[] };
+    const data = await res.json() as { type?: string; error?: { message: string }; content: any[] };
+    if (!res.ok || data.type === 'error') {
+      throw new Error(`Anthropic API error ${res.status}: ${data.error?.message ?? JSON.stringify(data)}`);
+    }
     messages.push({ role: 'assistant', content: data.content });
 
     const textBlocks = data.content.filter((b: any) => b.type === 'text');
@@ -2232,7 +2235,9 @@ router.post('/chat', async (req, res) => {
     await runChatTurn(sessionId, message, repo, send);
     send('done', {});
   } catch (err) {
-    send('error', { text: err instanceof Error ? err.message : String(err) });
+    const stack = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    console.error('[CHAT] error en runChatTurn:', stack);
+    send('error', { text: stack });
   }
   res.end();
 });
