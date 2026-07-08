@@ -293,7 +293,7 @@ Por:
 
 // ── Read intent detection ────────────────────────────────────────────────────
 const READ_KEYWORDS  = /\b(lee|leer|muéstrame|muestra|busca|buscar|encuentra|ver|dime|qué tiene|qué hay|analiza|analizar|diagnóstico|diagnóstica|revisa|revisar|explica|explicar|describe|describir|inspecciona|inspeccionar|abre|abrir|lista|listar|qué hace|cómo está|cómo funciona|show me|read|find|look at)\b/i;
-const GEN_KEYWORDS   = /\b(genera|generar|crea|crear|escribe|escribir|implementa|implementar|añade|añadir|agrega|agregar|cambia|cambiar|modifica|modificar|fix|arregla|arreglar|refactoriza|refactorizar|construye|construir|desarrolla|desarrollar|actualiza|actualizar|add|create|write|implement|modify|change|build)\b/i;
+const GEN_KEYWORDS   = /\b(genera|generar|crea|crear|escribe|escribir|implementa|implementar|añade|añadir|agrega|agregar|cambia|cambiar|modifica|modificar|fix|arregla|arreglar|corrige|corregir|resetea|resetear|resuelve|resolver|sincroniza|sincronizar|repara|reparar|refactoriza|refactorizar|construye|construir|desarrolla|desarrollar|actualiza|actualizar|add|create|write|implement|modify|change|build|correct|resolve|reset|sync)\b/i;
 
 const ANALYSIS_KEYWORDS = /\b(qué significa|qué es|cómo funciona|explica|cuándo se activa|por qué|cuáles son|qué argumentos|qué condiciones|cómo se calcula|señal|signal|S1|S2|S3|S4|S5|S6|score|scoring|bias|screener|scanner|trailing|streak|circuit)\b/i;
 
@@ -539,11 +539,9 @@ async function searchAndLoadFiles(
           const lines = fullContent.split('\n');
           
           if (lines.length <= 300) {
-            return { path: r.path, content: fullContent };
+            return { path: r.path, content: fullContent, fullContent };
           }
 
-          // Archivo grande — encontrar la sección relevante
-          // Buscar el término que dio hit y extraer ±150 líneas
           const hitTerm = searchTerms.find(t => 
             fullContent.toLowerCase().includes(t.toLowerCase())
           ) ?? searchTerms[0];
@@ -553,7 +551,7 @@ async function searchAndLoadFiles(
           );
 
           if (hitLine === -1) {
-            return { path: r.path, content: lines.slice(0, 300).join('\n') };
+            return { path: r.path, content: lines.slice(0, 300).join('\n'), fullContent };
           }
 
           const start = Math.max(0, hitLine - 3);
@@ -564,14 +562,15 @@ async function searchAndLoadFiles(
           
           return { 
             path: r.path, 
-            content: `// ... (líneas 1-${start} omitidas)\n\n${section}\n\n// ... (líneas ${end}-${lines.length} omitidas)`
+            content: `// ... (líneas 1-${start} omitidas)\n\n${section}\n\n// ... (líneas ${end}-${lines.length} omitidas)`,
+            fullContent,
           };
         })
       );
 
       return loaded
-        .filter((r): r is PromiseFulfilledResult<{ path: string; content: string }> => r.status === 'fulfilled')
-        .map((r) => ({ ...r.value, fullContent: r.value.content }));
+        .filter((r): r is PromiseFulfilledResult<{ path: string; content: string; fullContent: string }> => r.status === 'fulfilled')
+        .map((r) => r.value);
     }
 
     console.log(`[agent] Term "${term}" → 0 code files, trying next...`);
@@ -756,6 +755,9 @@ router.post('/generate', async (req, res) => {
   if (rawPrompt?.includes('[DEEP]')) deepMode = true;
   if (rawPrompt?.includes('[FAST]')) deepMode = false;
 
+  // Capturar intención explícita ANTES de borrar los prefijos
+  const forceModifyIntent = /\[DEEP\]\[MODIFICAR\]|\[DEEP\]\[CREAR\]/i.test(rawPrompt ?? '');
+
   // Strip prefixes from prompt
   const prompt = rawPrompt
     ?.replace(/\[DEEP\]\[CREAR\]/gi, '')
@@ -800,12 +802,28 @@ router.post('/generate', async (req, res) => {
   try {
     // ── FAST READ PATH — explicit filename in prompt, skip tree + Gemini ──────
     const fastFileMatch = prompt.match(/[\w/\-\.]+\.(tsx|jsx|yaml|json|html|css|yml|env|py|md|ts|js|sh)/);
-    if (fastFileMatch && READ_KEYWORDS.test(prompt) && !GEN_KEYWORDS.test(prompt)) {
+    if (!forceModifyIntent && fastFileMatch && READ_KEYWORDS.test(prompt) && !GEN_KEYWORDS.test(prompt)) {
       const filePath = fastFileMatch[0];
       send('action', { text: `📖 Modo lectura directa — ${filePath}` });
+      let content: string;
       try {
-        const content = await getFileContent(filePath, repo);
+        content = await getFileContent(filePath, repo);
+      } catch {
+        send('action', { text: `⚠️ ${filePath} no encontrado en la raíz — buscando ruta real...` });
+        const searchResults = await searchCodeInRepo(filePath.split('/').pop() ?? filePath, repo);
+        if (searchResults.length === 0) {
+          send('action', { text: `❌ No se encontró ningún archivo llamado ${filePath} en el repo` });
+          send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+          await new Promise((r) => setTimeout(r, 100));
+          res.end();
+          return;
+        }
+        const realPath = searchResults[0].path;
+        send('action', { text: `📍 Encontrado en: ${realPath}` });
+        content = await getFileContent(realPath, repo);
+      }
 
+      try {
         const keyword = prompt.match(/\b(EXPIRED|cronSchedule|cron|TTL|sweeper|signal|snipe|entry|exit|strategy|trigger|filter|interval|timeout|delay|retry|limit|threshold|price|fee|slippage)\b/i)?.[0];
 
         let finalContent: string;
@@ -888,7 +906,7 @@ router.post('/generate', async (req, res) => {
       .join('\n');
 
     // ── READ PATH — no Gemini generation, just fetch real file content ────────
-    if (detectReadIntent(prompt)) {
+    if (!forceModifyIntent && detectReadIntent(prompt)) {
       send('action', { text: '📖 Modo lectura — buscando en GitHub...' });
 
       let readFiles: { path: string; content: string; fullContent?: string; startLine?: number; endLine?: number }[] = [];

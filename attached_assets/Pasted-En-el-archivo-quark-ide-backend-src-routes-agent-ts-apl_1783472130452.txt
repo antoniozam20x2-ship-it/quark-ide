@@ -1,0 +1,182 @@
+En el archivo quark-ide/backend/src/routes/agent.ts, aplica estas 5 correcciones exactas. Son ediciones independientes — aplícalas todas, no te saltes ninguna. Después de aplicarlas, reinicia la app y confirma que compila sin errores de TypeScript.
+
+═══════════════════════════════════════
+FIX 1 (CRÍTICO — riesgo de corromper archivos al commitear)
+═══════════════════════════════════════
+Dentro de la función searchAndLoadFiles, reemplaza:
+
+const loaded = await Promise.allSettled(
+        codeFiles.slice(0, 3).map(async (r) => {
+          const fullContent = await getFileContent(r.path, repo);
+          const lines = fullContent.split('\n');
+          
+          if (lines.length <= 300) {
+            return { path: r.path, content: fullContent };
+          }
+
+          // Archivo grande — encontrar la sección relevante
+          // Buscar el término que dio hit y extraer ±150 líneas
+          const hitTerm = searchTerms.find(t => 
+            fullContent.toLowerCase().includes(t.toLowerCase())
+          ) ?? searchTerms[0];
+          
+          const hitLine = lines.findIndex(l => 
+            l.toLowerCase().includes(hitTerm.toLowerCase())
+          );
+
+          if (hitLine === -1) {
+            return { path: r.path, content: lines.slice(0, 300).join('\n') };
+          }
+
+          const start = Math.max(0, hitLine - 3);
+          const end = Math.min(lines.length, hitLine + 25);
+          const section = lines.slice(start, end).join('\n');
+          
+          console.log(`[agent] ${r.path}: extracting lines ${start}-${end} around "${hitTerm}" (hit at line ${hitLine})`);
+          
+          return { 
+            path: r.path, 
+            content: `// ... (líneas 1-${start} omitidas)\n\n${section}\n\n// ... (líneas ${end}-${lines.length} omitidas)`
+          };
+        })
+      );
+
+      return loaded
+        .filter((r): r is PromiseFulfilledResult<{ path: string; content: string }> => r.status === 'fulfilled')
+        .map((r) => ({ ...r.value, fullContent: r.value.content }));
+
+Por:
+
+const loaded = await Promise.allSettled(
+        codeFiles.slice(0, 3).map(async (r) => {
+          const fullContent = await getFileContent(r.path, repo);
+          const lines = fullContent.split('\n');
+          
+          if (lines.length <= 300) {
+            return { path: r.path, content: fullContent, fullContent };
+          }
+
+          const hitTerm = searchTerms.find(t => 
+            fullContent.toLowerCase().includes(t.toLowerCase())
+          ) ?? searchTerms[0];
+          
+          const hitLine = lines.findIndex(l => 
+            l.toLowerCase().includes(hitTerm.toLowerCase())
+          );
+
+          if (hitLine === -1) {
+            return { path: r.path, content: lines.slice(0, 300).join('\n'), fullContent };
+          }
+
+          const start = Math.max(0, hitLine - 3);
+          const end = Math.min(lines.length, hitLine + 25);
+          const section = lines.slice(start, end).join('\n');
+          
+          console.log(`[agent] ${r.path}: extracting lines ${start}-${end} around "${hitTerm}" (hit at line ${hitLine})`);
+          
+          return { 
+            path: r.path, 
+            content: `// ... (líneas 1-${start} omitidas)\n\n${section}\n\n// ... (líneas ${end}-${lines.length} omitidas)`,
+            fullContent,
+          };
+        })
+      );
+
+      return loaded
+        .filter((r): r is PromiseFulfilledResult<{ path: string; content: string; fullContent: string }> => r.status === 'fulfilled')
+        .map((r) => r.value);
+
+═══════════════════════════════════════
+FIX 2 — capturar intención [DEEP][MODIFICAR] antes de borrarla
+═══════════════════════════════════════
+Reemplaza:
+
+  // Auto-detect mode from prefixes — takes priority over toggle
+  if (rawPrompt?.includes('[DEEP]')) deepMode = true;
+  if (rawPrompt?.includes('[FAST]')) deepMode = false;
+
+  // Strip prefixes from prompt
+  const prompt = rawPrompt
+
+Por:
+
+  // Auto-detect mode from prefixes — takes priority over toggle
+  if (rawPrompt?.includes('[DEEP]')) deepMode = true;
+  if (rawPrompt?.includes('[FAST]')) deepMode = false;
+
+  // Capturar intención explícita ANTES de borrar los prefijos
+  const forceModifyIntent = /\[DEEP\]\[MODIFICAR\]|\[DEEP\]\[CREAR\]/i.test(rawPrompt ?? '');
+
+  // Strip prefixes from prompt
+  const prompt = rawPrompt
+
+═══════════════════════════════════════
+FIX 3 — aplicar el guard en el READ PATH principal
+═══════════════════════════════════════
+Reemplaza:
+
+    // ── READ PATH — no Gemini generation, just fetch real file content ────────
+    if (detectReadIntent(prompt)) {
+
+Por:
+
+    // ── READ PATH — no Gemini generation, just fetch real file content ────────
+    if (!forceModifyIntent && detectReadIntent(prompt)) {
+
+═══════════════════════════════════════
+FIX 4 — aplicar el mismo guard en el FAST READ PATH
+═══════════════════════════════════════
+Reemplaza:
+
+    // ── FAST READ PATH — explicit filename in prompt, skip tree + Gemini ──────
+    const fastFileMatch = prompt.match(/[\w/\-\.]+\.(tsx|jsx|yaml|json|html|css|yml|env|py|md|ts|js|sh)/);
+    if (fastFileMatch && READ_KEYWORDS.test(prompt) && !GEN_KEYWORDS.test(prompt)) {
+
+Por:
+
+    // ── FAST READ PATH — explicit filename in prompt, skip tree + Gemini ──────
+    const fastFileMatch = prompt.match(/[\w/\-\.]+\.(tsx|jsx|yaml|json|html|css|yml|env|py|md|ts|js|sh)/);
+    if (!forceModifyIntent && fastFileMatch && READ_KEYWORDS.test(prompt) && !GEN_KEYWORDS.test(prompt)) {
+
+Y justo debajo, dentro del mismo bloque, reemplaza:
+
+      try {
+        const content = await getFileContent(filePath, repo);
+
+        const keyword = prompt.match(/\b(EXPIRED|cronSchedule|cron|TTL|sweeper|signal|snipe|entry|exit|strategy|trigger|filter|interval|timeout|delay|retry|limit|threshold|price|fee|slippage)\b/i)?.[0];
+
+Por:
+
+      let content: string;
+      try {
+        content = await getFileContent(filePath, repo);
+      } catch {
+        send('action', { text: `⚠️ ${filePath} no encontrado en la raíz — buscando ruta real...` });
+        const searchResults = await searchCodeInRepo(filePath.split('/').pop() ?? filePath, repo);
+        if (searchResults.length === 0) {
+          send('action', { text: `❌ No se encontró ningún archivo llamado ${filePath} en el repo` });
+          send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+          await new Promise((r) => setTimeout(r, 100));
+          res.end();
+          return;
+        }
+        const realPath = searchResults[0].path;
+        send('action', { text: `📍 Encontrado en: ${realPath}` });
+        content = await getFileContent(realPath, repo);
+      }
+
+      try {
+        const keyword = prompt.match(/\b(EXPIRED|cronSchedule|cron|TTL|sweeper|signal|snipe|entry|exit|strategy|trigger|filter|interval|timeout|delay|retry|limit|threshold|price|fee|slippage)\b/i)?.[0];
+
+═══════════════════════════════════════
+FIX 5 — completar la lista de verbos de modificación
+═══════════════════════════════════════
+Reemplaza:
+
+const GEN_KEYWORDS   = /\b(genera|generar|crea|crear|escribe|escribir|implementa|implementar|añade|añadir|agrega|agregar|cambia|cambiar|modifica|modificar|fix|arregla|arreglar|refactoriza|refactorizar|construye|construir|desarrolla|desarrollar|actualiza|actualizar|add|create|write|implement|modify|change|build)\b/i;
+
+Por:
+
+const GEN_KEYWORDS   = /\b(genera|generar|crea|crear|escribe|escribir|implementa|implementar|añade|añadir|agrega|agregar|cambia|cambiar|modifica|modificar|fix|arregla|arreglar|corrige|corregir|resetea|resetear|resuelve|resolver|sincroniza|sincronizar|repara|reparar|refactoriza|refactorizar|construye|construir|desarrolla|desarrollar|actualiza|actualizar|add|create|write|implement|modify|change|build|correct|resolve|reset|sync)\b/i;
+
+No cambies nada más del archivo.
