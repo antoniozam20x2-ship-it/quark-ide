@@ -2074,7 +2074,7 @@ function classifyComplexity(message: string): 'simple' | 'complex' {
   return isComplex ? 'complex' : 'simple';
 }
 
-const systemPromptSimple = `Responde de forma breve y directa. No inventes contenido de archivos que no tengas — si la pregunta requiere leer código específico, di que necesitas más contexto en vez de adivinar.`;
+const systemPromptSimple = `Eres QUARK, un asistente de código. Tienes acceso a herramientas para buscar y leer el repo — úsalas antes de responder cualquier pregunta sobre código específico. Sé directo y conciso.`;
 
 router.post('/apply-patch', async (req, res) => {
   const { repo, path: filePath, old_str, new_str } = req.body as {
@@ -2111,6 +2111,75 @@ router.post('/apply-patch', async (req, res) => {
   }
 });
 
+// ── Format converters: Anthropic ↔ Groq/OpenAI ──────────────────────────────
+
+function toGroqTools(anthropicTools: any[]): any[] {
+  return anthropicTools.map((t) => ({
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.input_schema,
+    },
+  }));
+}
+
+// Strips tool-use turns from history; keeps only plain text exchanges for Groq context.
+function toGroqHistory(anthropicMessages: any[]): any[] {
+  const out: any[] = [];
+  for (const msg of anthropicMessages) {
+    if (msg.role === 'user' && typeof msg.content === 'string') {
+      out.push({ role: 'user', content: msg.content });
+    } else if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+      const text = (msg.content as any[])
+        .filter((b) => b.type === 'text')
+        .map((b: any) => b.text as string)
+        .join('\n');
+      if (text) out.push({ role: 'assistant', content: text });
+    }
+  }
+  return out;
+}
+
+// ── Shared tool executor (model-agnostic) ─────────────────────────────────────
+
+async function executeChatTool(
+  name: string,
+  input: Record<string, any>,
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+): Promise<string> {
+  if (name === 'list_files') {
+    const tree = await getFileTree(repo, 'main');
+    return tree.filter((f: any) => f.type === 'blob').map((f: any) => f.path).join('\n');
+  }
+  if (name === 'read_file') {
+    send('action', { text: `📖 Leyendo ${input.path}` });
+    const content = await getFileContent(input.path, repo);
+    const lines = content.split('\n');
+    return input.start_line
+      ? lines.slice(input.start_line - 1, input.end_line ?? lines.length).join('\n')
+      : (lines.length > 500 ? lines.slice(0, 500).join('\n') + `\n// ... (${lines.length - 500} más)` : content);
+  }
+  if (name === 'grep_code') {
+    send('action', { text: `🔎 Buscando "${input.pattern}"` });
+    const results = await searchCodeInRepo(input.pattern, repo);
+    return results.slice(0, 10).map((r: any) => r.path).join('\n') || 'Sin resultados';
+  }
+  if (name === 'propose_patch') {
+    send('patch_proposal', {
+      path: input.path,
+      old_str: input.old_str,
+      new_str: input.new_str,
+      reasoning: input.reasoning,
+    });
+    return 'Patch propuesto al usuario — esperando aprobación. No lo des por aplicado.';
+  }
+  return `Tool desconocida: ${name}`;
+}
+
+// ── runChatTurn ───────────────────────────────────────────────────────────────
+
 async function runChatTurn(
   sessionId: string,
   userMessage: string,
@@ -2119,25 +2188,85 @@ async function runChatTurn(
   maxToolSteps = 10,
 ): Promise<void> {
   const history = await loadChatHistory(sessionId);
+  const complexity = classifyComplexity(userMessage);
+  send('action', { text: complexity === 'complex' ? '🧠 Modo profundo — Claude' : '⚡ Modo rápido — Groq' });
+
+  // ── Simple path: Groq + CHAT_TOOLS (OpenAI-compatible format) ────────────────
+  if (complexity === 'simple') {
+    const groqMessages: any[] = [
+      ...toGroqHistory(history),
+      { role: 'user', content: userMessage },
+    ];
+    const groqTools = toGroqTools(CHAT_TOOLS);
+    const keys = getGroqKeys();
+    if (keys.length === 0) throw new Error('No GROQ_API_KEY configured');
+    const key = keys[0];
+    let finalText = '';
+
+    for (let step = 0; step < maxToolSteps; step++) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), PROVIDER_TIMEOUT_MS);
+      const res = await fetch(GROQ_URL, {
+        method: 'POST',
+        signal: ctrl.signal,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({
+          model: GROQ_MODEL,
+          max_tokens: 4096,
+          tools: groqTools,
+          tool_choice: 'auto',
+          messages: [
+            { role: 'system', content: systemPromptSimple },
+            ...groqMessages,
+          ],
+        }),
+      }).finally(() => clearTimeout(timer));
+
+      if (!res.ok) throw new Error(`Groq error: ${res.status} ${await res.text()}`);
+      const data = await res.json() as {
+        choices: Array<{
+          message: {
+            role: string;
+            content: string | null;
+            tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
+          };
+          finish_reason: string;
+        }>;
+      };
+
+      const choice = data.choices[0].message;
+      groqMessages.push(choice);
+
+      if (choice.content) {
+        finalText += choice.content;
+        send('chat_message', { text: choice.content });
+      }
+
+      const toolCalls = choice.tool_calls ?? [];
+      if (toolCalls.length === 0) break;
+
+      for (const tc of toolCalls) {
+        let input: Record<string, any>;
+        try { input = JSON.parse(tc.function.arguments); } catch { input = {}; }
+        const resultText = await executeChatTool(tc.function.name, input, repo, send);
+        groqMessages.push({ role: 'tool', tool_call_id: tc.id, content: resultText });
+      }
+    }
+
+    // Save history in Anthropic format for consistency across paths
+    await saveChatHistory(sessionId, [
+      ...history,
+      { role: 'user', content: userMessage },
+      { role: 'assistant', content: [{ type: 'text', text: finalText }] },
+    ]);
+    return;
+  }
+
+  // ── Complex path: Claude + adaptive thinking + CHAT_TOOLS ────────────────────
   const messages: any[] = [
     ...history,
     { role: 'user', content: userMessage },
   ];
-
-  const complexity = classifyComplexity(userMessage);
-  send('action', { text: complexity === 'complex' ? '🧠 Pregunta compleja — usando Claude' : '⚡ Pregunta simple — respuesta rápida' });
-
-  if (complexity === 'simple') {
-    const answer = await generateWithFallback(
-      userMessage,
-      systemPromptSimple,
-      (label, msg) => send('action', { text: `⚠️ ${label} falló (${msg}) — probando siguiente proveedor...` }),
-    );
-    send('chat_message', { text: answer });
-    messages.push({ role: 'assistant', content: [{ type: 'text', text: answer }] });
-    await saveChatHistory(sessionId, messages);
-    return;
-  }
 
   const systemPrompt = `Eres QUARK, un asistente de código que conversa con el usuario igual que un ingeniero senior — no un generador de una sola pasada.
 
@@ -2158,7 +2287,8 @@ REGLAS:
       },
       body: JSON.stringify({
         model: 'claude-sonnet-5',
-        max_tokens: 2048,
+        max_tokens: 16000,
+        thinking: { type: 'adaptive' },
         system: systemPrompt,
         tools: CHAT_TOOLS,
         messages,
@@ -2169,6 +2299,8 @@ REGLAS:
     if (!res.ok || data.type === 'error') {
       throw new Error(`Anthropic API error ${res.status}: ${data.error?.message ?? JSON.stringify(data)}`);
     }
+    // data.content is pushed intact — thinking blocks must not be filtered or
+    // reconstructed before being stored, or Anthropic returns 400.
     messages.push({ role: 'assistant', content: data.content });
 
     const textBlocks = data.content.filter((b: any) => b.type === 'text');
@@ -2177,41 +2309,11 @@ REGLAS:
     }
 
     const toolUses = data.content.filter((b: any) => b.type === 'tool_use');
-    if (toolUses.length === 0) {
-      break;
-    }
+    if (toolUses.length === 0) break;
 
     const toolResults: any[] = [];
     for (const tool of toolUses) {
-      let resultText = '';
-
-      if (tool.name === 'list_files') {
-        const tree = await getFileTree(repo, 'main');
-        resultText = tree.filter((f: any) => f.type === 'blob').map((f: any) => f.path).join('\n');
-      }
-      if (tool.name === 'read_file') {
-        send('action', { text: `📖 Leyendo ${tool.input.path}` });
-        const content = await getFileContent(tool.input.path, repo);
-        const lines = content.split('\n');
-        resultText = tool.input.start_line
-          ? lines.slice(tool.input.start_line - 1, tool.input.end_line ?? lines.length).join('\n')
-          : (lines.length > 500 ? lines.slice(0, 500).join('\n') + `\n// ... (${lines.length - 500} más)` : content);
-      }
-      if (tool.name === 'grep_code') {
-        send('action', { text: `🔎 Buscando "${tool.input.pattern}"` });
-        const results = await searchCodeInRepo(tool.input.pattern, repo);
-        resultText = results.slice(0, 10).map((r: any) => r.path).join('\n') || 'Sin resultados';
-      }
-      if (tool.name === 'propose_patch') {
-        send('patch_proposal', {
-          path: tool.input.path,
-          old_str: tool.input.old_str,
-          new_str: tool.input.new_str,
-          reasoning: tool.input.reasoning,
-        });
-        resultText = 'Patch propuesto al usuario — esperando aprobación. No lo des por aplicado.';
-      }
-
+      const resultText = await executeChatTool(tool.name, tool.input, repo, send);
       toolResults.push({ type: 'tool_result', tool_use_id: tool.id, content: resultText });
     }
     messages.push({ role: 'user', content: toolResults });
