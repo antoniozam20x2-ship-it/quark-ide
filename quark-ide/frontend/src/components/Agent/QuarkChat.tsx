@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
+import ProjectSwitcher from '../Projects/ProjectSwitcher';
+import type { Project } from '../../App';
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? 'https://backend-production-0d77.up.railway.app').replace(/\/$/, '');
 
@@ -14,7 +16,13 @@ interface PendingPatch {
   reasoning: string;
 }
 
-export default function QuarkChat({ repo }: { repo: string }) {
+interface QuarkChatProps {
+  repo: string;
+  activeProject: Project;
+  onProjectChange: (p: Project) => void;
+}
+
+export default function QuarkChat({ repo, activeProject, onProjectChange }: QuarkChatProps) {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState('');
   const [pendingPatch, setPendingPatch] = useState<PendingPatch | null>(null);
@@ -106,8 +114,13 @@ export default function QuarkChat({ repo }: { repo: string }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0a0a0f' }}>
-      <div style={{ padding: '12px 16px', borderBottom: '1px solid #222', color: '#a78bfa', fontWeight: 600 }}>
-        💬 QUARK CHAT — {repo}
+      <div style={{ borderBottom: '1px solid #222', display: 'flex', alignItems: 'center' }}>
+        <div style={{ flex: 1 }}>
+          <ProjectSwitcher activeProject={activeProject} onSwitch={onProjectChange} />
+        </div>
+        <div style={{ padding: '0 16px', color: '#a78bfa', fontWeight: 600, fontSize: 13, flexShrink: 0 }}>
+          💬 QUARK CHAT
+        </div>
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
         {messages.map((m, i) => (

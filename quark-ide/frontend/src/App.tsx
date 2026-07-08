@@ -130,7 +130,11 @@ export default function App() {
         {page === 'health' && <HealthPage />}
         {page === 'chat' && (
           <div style={{ height: '100dvh', maxHeight: '100dvh', overflow: 'hidden' }}>
-            <QuarkChat repo={activeProject.repo} />
+            <QuarkChat
+              repo={activeProject.repo}
+              activeProject={activeProject}
+              onProjectChange={setActiveProject}
+            />
           </div>
         )}
       </div>
