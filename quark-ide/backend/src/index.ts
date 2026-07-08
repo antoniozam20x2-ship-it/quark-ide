@@ -43,6 +43,7 @@ app.use('/api/preview', previewRouter);
 app.use('/api/warroom/search', searchRouter);
 app.use('/api/memory', memoryRouter);
 app.use('/agent', agentRouter);
+app.use('/api/agent', agentRouter);
 app.use('/api/editor', editorRouter);
 app.use('/api/studio', studioRouter);
 app.use('/api/health', healthRouter);
