@@ -1,0 +1,66 @@
+En el archivo quark-ide/backend/src/routes/agent.ts, aplica estas 2 correcciones relacionadas (son una sola mejora, edítalas juntas). Después reinicia la app y confirma que compila sin errores de TypeScript.
+
+═══════════════════════════════════════
+FIX — el loop agéntico no reutiliza el contexto ya investigado por el modo DEEP
+═══════════════════════════════════════
+
+PARTE A — Actualiza la firma de la función runAgenticLoop.
+
+Reemplaza:
+
+async function runAgenticLoop(
+  prompt: string,
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+  maxTurns = 8,
+): Promise<{ files: { path: string; content: string }[]; commitMessage: string }> {
+  const modifiedFiles = new Map<string, string>(); // path -> contenido actual en memoria
+  const messages: any[] = [
+    { role: 'user', content: `TAREA: ${prompt}\n\nRepo: ${repo}\n\nUsa las tools para explorar el código, entender el problema y aplicar el fix mínimo necesario. Verifica que old_str exista literalmente antes de usar apply_patch. Cuando termines, llama a task_complete.` }
+  ];
+
+Por:
+
+async function runAgenticLoop(
+  prompt: string,
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+  seedFiles: { path: string; content: string }[] = [],
+  seedReasoning: string = '',
+  maxTurns = 12,
+): Promise<{ files: { path: string; content: string }[]; commitMessage: string }> {
+  const modifiedFiles = new Map<string, string>(); // path -> contenido actual en memoria
+  for (const f of seedFiles) {
+    modifiedFiles.set(f.path, f.content);
+  }
+  const seedContext = seedFiles.length > 0
+    ? `\n\nYA SE INVESTIGÓ Y SE CARGARON ESTOS ARCHIVOS — NO los vuelvas a buscar con grep_code, léelos directo con read_file si necesitas más detalle, o modifícalos directo con apply_patch:\n${seedFiles.map(f => f.path).join('\n')}` 
+    : '';
+  const reasoningNote = seedReasoning
+    ? `\n\nANÁLISIS PREVIO DE CAUSA RAÍZ (ya hecho, no lo repitas, úsalo como punto de partida):\n${seedReasoning}`
+    : '';
+  const messages: any[] = [
+    { role: 'user', content: `TAREA: ${prompt}\n\nRepo: ${repo}${seedContext}${reasoningNote}\n\nUsa las tools para explorar el código, entender el problema y aplicar el fix mínimo necesario. Verifica que old_str exista literalmente antes de usar apply_patch. Cuando termines, llama a task_complete.` }
+  ];
+
+PARTE B — Actualiza el punto donde se llama a runAgenticLoop dentro del bloque isComplexChange.
+
+Reemplaza:
+
+if (isComplexChange) {
+  send('action', { text: `🤖 Cambio complejo — activando modo agéntico (Claude explora y corrige en loop)` });
+  const agenticResult = await runAgenticLoop(prompt, repo, send);
+
+Por:
+
+if (isComplexChange) {
+  send('action', { text: `🤖 Cambio complejo — activando modo agéntico (Claude explora y corrige en loop)` });
+  const agenticResult = await runAgenticLoop(
+    prompt,
+    repo,
+    send,
+    preloadedFiles.map(f => ({ path: f.path, content: f.fullContent ?? f.content })),
+    reasoningContext,
+  );
+
+No cambies nada más del archivo.

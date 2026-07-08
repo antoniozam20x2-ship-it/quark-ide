@@ -639,11 +639,22 @@ async function runAgenticLoop(
   prompt: string,
   repo: string,
   send: (event: string, data: Record<string, unknown>) => void,
-  maxTurns = 8,
+  seedFiles: { path: string; content: string }[] = [],
+  seedReasoning: string = '',
+  maxTurns = 12,
 ): Promise<{ files: { path: string; content: string }[]; commitMessage: string }> {
   const modifiedFiles = new Map<string, string>();
+  for (const f of seedFiles) {
+    modifiedFiles.set(f.path, f.content);
+  }
+  const seedContext = seedFiles.length > 0
+    ? `\n\nYA SE INVESTIGÓ Y SE CARGARON ESTOS ARCHIVOS — NO los vuelvas a buscar con grep_code, léelos directo con read_file si necesitas más detalle, o modifícalos directo con apply_patch:\n${seedFiles.map(f => f.path).join('\n')}` 
+    : '';
+  const reasoningNote = seedReasoning
+    ? `\n\nANÁLISIS PREVIO DE CAUSA RAÍZ (ya hecho, no lo repitas, úsalo como punto de partida):\n${seedReasoning}`
+    : '';
   const messages: any[] = [
-    { role: 'user', content: `TAREA: ${prompt}\n\nRepo: ${repo}\n\nUsa las tools para explorar el código, entender el problema y aplicar el fix mínimo necesario. Verifica que old_str exista literalmente antes de usar apply_patch. Cuando termines, llama a task_complete.` }
+    { role: 'user', content: `TAREA: ${prompt}\n\nRepo: ${repo}${seedContext}${reasoningNote}\n\nUsa las tools para explorar el código, entender el problema y aplicar el fix mínimo necesario. Verifica que old_str exista literalmente antes de usar apply_patch. Cuando termines, llama a task_complete.` }
   ];
 
   let commitMessage = 'fix: cambio aplicado por QUARK Agent (modo agéntico)';
@@ -1311,7 +1322,13 @@ REGLAS:
 
       if (isComplexChange) {
         send('action', { text: `🤖 Cambio complejo — activando modo agéntico (Claude explora y corrige en loop)` });
-        const agenticResult = await runAgenticLoop(prompt, repo, send);
+        const agenticResult = await runAgenticLoop(
+          prompt,
+          repo,
+          send,
+          preloadedFiles.map(f => ({ path: f.path, content: f.fullContent ?? f.content })),
+          reasoningContext,
+        );
 
         if (agenticResult.files.length === 0) {
           send('action', { text: `⚠ El agente no logró resolver el cambio en el límite de turnos — revisión manual recomendada` });
