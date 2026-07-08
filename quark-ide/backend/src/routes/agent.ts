@@ -764,7 +764,7 @@ async function validateWithTsc(
   finalFiles: { path: string; content: string }[],
   preloadedFiles: { path: string; content: string; fullContent?: string }[],
   repo: string,
-): Promise<{ valid: boolean; errors: string[] }> {
+): Promise<{ valid: boolean; errors: string[]; affectedFiles: string[] }> {
   const tmpDir = mkdtempSync(path.join(tmpdir(), 'quark-validate-'));
 
   try {
@@ -790,7 +790,7 @@ async function validateWithTsc(
       `npx tsc --noEmit --pretty false --skipLibCheck --moduleResolution node ${finalFiles.map(f => `"${f.path}"`).join(' ')}`,
       { cwd: tmpDir, timeout: 20_000, encoding: 'utf-8' },
     );
-    return { valid: true, errors: [] };
+    return { valid: true, errors: [], affectedFiles: [] };
   } catch (err: any) {
     const output: string = err.stdout?.toString() ?? '';
     const errors = output
@@ -798,7 +798,10 @@ async function validateWithTsc(
       .filter((line) => /error TS\d+:/.test(line))
       .filter((line) => finalFiles.some(f => line.includes(f.path.split('/').pop() ?? '')))
       .slice(0, 15);
-    return { valid: errors.length === 0, errors };
+    const affectedFiles = finalFiles
+      .filter(f => errors.some(e => e.includes(f.path.split('/').pop() ?? '')))
+      .map(f => f.path);
+    return { valid: errors.length === 0, errors, affectedFiles };
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
