@@ -613,7 +613,7 @@ async function searchAndLoadFiles(
 const AGENT_TOOLS = [
   {
     name: "read_file",
-    description: "Lee el contenido completo o un rango de líneas de un archivo del repo",
+    description: "Lee un archivo del repo. Para archivos grandes, especificá start_line/end_line para traer solo la sección relevante (más eficiente). Si no especificás rango, se devuelven las primeras ~2000 tokens del archivo.",
     input_schema: {
       type: "object",
       properties: {
@@ -2157,9 +2157,22 @@ async function executeChatTool(
     send('action', { text: `📖 Leyendo ${input.path}` });
     const content = await getFileContent(input.path, repo);
     const lines = content.split('\n');
-    return input.start_line
-      ? lines.slice(input.start_line - 1, input.end_line ?? lines.length).join('\n')
-      : (lines.length > 500 ? lines.slice(0, 500).join('\n') + `\n// ... (${lines.length - 500} más)` : content);
+    if (input.start_line) {
+      return lines.slice(input.start_line - 1, input.end_line ?? lines.length).join('\n');
+    }
+    // No range specified — truncate by character count (~8000 chars ≈ 2000 tokens),
+    // cutting at the nearest line boundary to avoid splitting mid-line.
+    const CHAR_LIMIT = 8000;
+    if (content.length <= CHAR_LIMIT) return content;
+    let chars = 0;
+    let cutLine = 0;
+    for (let i = 0; i < lines.length; i++) {
+      chars += lines[i].length + 1; // +1 for the newline
+      if (chars > CHAR_LIMIT) { cutLine = i; break; }
+    }
+    const remaining = lines.length - cutLine;
+    return lines.slice(0, cutLine).join('\n') +
+      `\n// ... (${remaining} líneas más — usá start_line/end_line para leer una sección específica)`;
   }
   if (name === 'grep_code') {
     send('action', { text: `🔎 Buscando "${input.pattern}"` });
