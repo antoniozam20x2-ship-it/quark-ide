@@ -6,8 +6,9 @@ import WarRoomPage from './pages/WarRoomPage';
 import DebuggerPage from './pages/DebuggerPage';
 import StudioPage from './pages/StudioPage';
 import HealthPage from './pages/HealthPage';
+import QuarkChat from './components/Agent/QuarkChat';
 
-export type Page = 'agent' | 'editor' | 'warroom' | 'debugger' | 'studio' | 'health';
+export type Page = 'agent' | 'editor' | 'warroom' | 'debugger' | 'studio' | 'health' | 'chat';
 
 export interface BoardBrief {
   challenge: string;
@@ -127,6 +128,11 @@ export default function App() {
           />
         )}
         {page === 'health' && <HealthPage />}
+        {page === 'chat' && (
+          <div style={{ height: '100dvh', maxHeight: '100dvh', overflow: 'hidden' }}>
+            <QuarkChat repo={activeProject.repo} />
+          </div>
+        )}
       </div>
     </div>
   );

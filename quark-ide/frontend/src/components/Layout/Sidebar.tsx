@@ -71,6 +71,15 @@ export default function Sidebar({ activePage, onNavigate }: Props) {
         onClick={() => onNavigate('health')}
       />
 
+      {/* Chat Nav */}
+      <NavItem
+        icon="💬"
+        label="Chat"
+        active={activePage === 'chat'}
+        onClick={() => onNavigate('chat')}
+        violet
+      />
+
       <div className="flex-1" />
 
       {/* Settings */}

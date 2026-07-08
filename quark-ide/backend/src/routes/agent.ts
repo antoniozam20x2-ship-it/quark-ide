@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getFileTree, getFileContent, searchCodeInRepo } from '../services/github.js';
+import { getFileTree, getFileContent, searchCodeInRepo, createOrUpdateFile } from '../services/github.js';
 import { callAI } from '../lib/aiRouter.js';
 import { generateContent } from '../services/gemini.js';
 import pool from '../services/db.js';
@@ -2070,6 +2070,41 @@ function classifyComplexity(message: string): 'simple' | 'complex' {
 }
 
 const systemPromptSimple = `Responde de forma breve y directa. No inventes contenido de archivos que no tengas — si la pregunta requiere leer código específico, di que necesitas más contexto en vez de adivinar.`;
+
+router.post('/apply-patch', async (req, res) => {
+  const { repo, path: filePath, old_str, new_str } = req.body as {
+    repo?: string; path?: string; old_str?: string; new_str?: string;
+  };
+  if (!repo || !filePath || !old_str || !new_str) {
+    res.status(400).json({ ok: false, error: 'repo, path, old_str y new_str son requeridos' });
+    return;
+  }
+
+  try {
+    const originalContent = await getFileContent(filePath, repo);
+    const idx = originalContent.indexOf(old_str);
+    if (idx === -1) {
+      res.status(400).json({ ok: false, error: 'old_str no encontrado en el archivo — puede haber cambiado desde que se propuso el patch' });
+      return;
+    }
+    if (originalContent.indexOf(old_str, idx + 1) !== -1) {
+      res.status(400).json({ ok: false, error: 'old_str no es único en el archivo — no se puede aplicar de forma segura' });
+      return;
+    }
+    const patchedContent = originalContent.slice(0, idx) + new_str + originalContent.slice(idx + old_str.length);
+
+    await createOrUpdateFile(
+      filePath,
+      patchedContent,
+      `fix: patch aplicado por QUARK Chat en ${filePath}`,
+      repo,
+    );
+
+    res.json({ ok: true, path: filePath });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
 
 async function runChatTurn(
   sessionId: string,
