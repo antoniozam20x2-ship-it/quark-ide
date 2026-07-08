@@ -2074,7 +2074,12 @@ function classifyComplexity(message: string): 'simple' | 'complex' {
   return isComplex ? 'complex' : 'simple';
 }
 
-const systemPromptSimple = `Eres QUARK, un asistente de código. Tienes acceso a herramientas para buscar y leer el repo — úsalas antes de responder cualquier pregunta sobre código específico. Sé directo y conciso.`;
+const systemPromptSimple = `Eres QUARK, un asistente de código. Tienes acceso a herramientas para buscar y leer el repo — úsalas antes de responder cualquier pregunta sobre código específico.
+REGLAS CRÍTICAS:
+- Llamá UNA SOLA herramienta por respuesta. Esperá el resultado antes de decidir si necesitás otra.
+- Nunca encadenes múltiples tool calls en un mismo mensaje.
+- Usá siempre el formato estructurado de tool call, nunca texto plano con sintaxis <function=...>.
+- Sé directo y conciso.`;
 
 router.post('/apply-patch', async (req, res) => {
   const { repo, path: filePath, old_str, new_str } = req.body as {
@@ -2191,6 +2196,17 @@ async function executeChatTool(
   return `Tool desconocida: ${name}`;
 }
 
+// ── Groq fallback sentinel ────────────────────────────────────────────────────
+
+class GroqFallbackError extends Error {
+  constructor(reason: string) { super(reason); this.name = 'GroqFallbackError'; }
+}
+
+function isToolUseFailed(content: string | null): boolean {
+  // Llama sometimes emits text-format function calls instead of structured tool_calls
+  return typeof content === 'string' && content.includes('<function=');
+}
+
 // ── runChatTurn ───────────────────────────────────────────────────────────────
 
 async function runChatTurn(
@@ -2202,80 +2218,116 @@ async function runChatTurn(
 ): Promise<void> {
   const history = await loadChatHistory(sessionId);
   const complexity = classifyComplexity(userMessage);
-  send('action', { text: complexity === 'complex' ? '🧠 Modo profundo — Claude' : '⚡ Modo rápido — Groq' });
 
   // ── Simple path: Groq + CHAT_TOOLS (OpenAI-compatible format) ────────────────
   if (complexity === 'simple') {
-    const groqMessages: any[] = [
-      ...toGroqHistory(history),
-      { role: 'user', content: userMessage },
-    ];
-    const groqTools = toGroqTools(CHAT_TOOLS);
-    const keys = getGroqKeys();
-    if (keys.length === 0) throw new Error('No GROQ_API_KEY configured');
-    const key = keys[0];
-    let finalText = '';
+    send('action', { text: '⚡ Modo rápido — Groq' });
+    let groqFallbackReason: string | null = null;
 
-    for (let step = 0; step < maxToolSteps; step++) {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), PROVIDER_TIMEOUT_MS);
-      const res = await fetch(GROQ_URL, {
-        method: 'POST',
-        signal: ctrl.signal,
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-        body: JSON.stringify({
-          model: GROQ_MODEL,
-          max_tokens: 4096,
-          tools: groqTools,
-          tool_choice: 'auto',
-          messages: [
-            { role: 'system', content: systemPromptSimple },
-            ...groqMessages,
-          ],
-        }),
-      }).finally(() => clearTimeout(timer));
+    try {
+      const groqMessages: any[] = [
+        ...toGroqHistory(history),
+        { role: 'user', content: userMessage },
+      ];
+      const groqTools = toGroqTools(CHAT_TOOLS);
+      const keys = getGroqKeys();
+      if (keys.length === 0) throw new GroqFallbackError('No GROQ_API_KEY configurada');
+      const key = keys[0];
+      let finalText = '';
+      let retried = false;
 
-      if (!res.ok) throw new Error(`Groq error: ${res.status} ${await res.text()}`);
-      const data = await res.json() as {
-        choices: Array<{
-          message: {
-            role: string;
-            content: string | null;
-            tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
-          };
-          finish_reason: string;
-        }>;
-      };
+      for (let step = 0; step < maxToolSteps; step++) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), PROVIDER_TIMEOUT_MS);
+        const res = await fetch(GROQ_URL, {
+          method: 'POST',
+          signal: ctrl.signal,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+          body: JSON.stringify({
+            model: GROQ_MODEL,
+            max_tokens: 4096,
+            tools: groqTools,
+            tool_choice: 'auto',
+            messages: [
+              { role: 'system', content: systemPromptSimple },
+              ...groqMessages,
+            ],
+          }),
+        }).finally(() => clearTimeout(timer));
 
-      const choice = data.choices[0].message;
-      groqMessages.push(choice);
+        if (res.status === 429) throw new GroqFallbackError('límite de TPM (429)');
+        if (!res.ok) throw new Error(`Groq error: ${res.status} ${await res.text()}`);
 
-      if (choice.content) {
-        finalText += choice.content;
-        send('chat_message', { text: choice.content });
+        const data = await res.json() as {
+          error?: { type?: string; message?: string };
+          choices: Array<{
+            message: {
+              role: string;
+              content: string | null;
+              tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
+            };
+            finish_reason: string;
+          }>;
+        };
+
+        if (data.error) throw new GroqFallbackError(`error de API: ${data.error.message ?? data.error.type}`);
+
+        const choice = data.choices[0].message;
+
+        // Detect malformed text-format function call (failed_generation)
+        if (isToolUseFailed(choice.content)) {
+          if (retried) throw new GroqFallbackError('tool_use_failed tras reintento');
+          retried = true;
+          send('action', { text: '⚠️ Groq generó tool call inválido — reintentando con restricciones' });
+          groqMessages.push({
+            role: 'assistant',
+            content: choice.content,
+          });
+          groqMessages.push({
+            role: 'user',
+            content: 'Error: usá el formato estructurado de tool call. Llamá UNA sola herramienta en este turno.',
+          });
+          continue;
+        }
+
+        groqMessages.push(choice);
+
+        if (choice.content) {
+          finalText += choice.content;
+          send('chat_message', { text: choice.content });
+        }
+
+        const toolCalls = choice.tool_calls ?? [];
+        if (toolCalls.length === 0) break;
+
+        for (const tc of toolCalls) {
+          let input: Record<string, any>;
+          try { input = JSON.parse(tc.function.arguments); } catch { input = {}; }
+          const resultText = await executeChatTool(tc.function.name, input, repo, send);
+          groqMessages.push({ role: 'tool', tool_call_id: tc.id, content: resultText });
+        }
       }
 
-      const toolCalls = choice.tool_calls ?? [];
-      if (toolCalls.length === 0) break;
+      // Save history in Anthropic format for consistency across paths
+      await saveChatHistory(sessionId, [
+        ...history,
+        { role: 'user', content: userMessage },
+        { role: 'assistant', content: [{ type: 'text', text: finalText }] },
+      ]);
+      return;
 
-      for (const tc of toolCalls) {
-        let input: Record<string, any>;
-        try { input = JSON.parse(tc.function.arguments); } catch { input = {}; }
-        const resultText = await executeChatTool(tc.function.name, input, repo, send);
-        groqMessages.push({ role: 'tool', tool_call_id: tc.id, content: resultText });
+    } catch (err) {
+      if (err instanceof GroqFallbackError) {
+        groqFallbackReason = err.message;
+      } else {
+        throw err;
       }
     }
 
-    // Save history in Anthropic format for consistency across paths
-    await saveChatHistory(sessionId, [
-      ...history,
-      { role: 'user', content: userMessage },
-      { role: 'assistant', content: [{ type: 'text', text: finalText }] },
-    ]);
-    return;
+    send('action', { text: `⚠️ Groq: ${groqFallbackReason} — Claude como fallback` });
   }
 
-  // ── Complex path: Claude + adaptive thinking + CHAT_TOOLS ────────────────────
+  // ── Complex path (or Groq fallback): Claude + adaptive thinking + CHAT_TOOLS ─
   const messages: any[] = [
     ...history,
     { role: 'user', content: userMessage },
