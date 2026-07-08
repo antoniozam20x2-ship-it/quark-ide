@@ -177,6 +177,15 @@ if (process.env.DATABASE_URL) {
     .catch((err) => console.error('⚠ DB init failed:', err));
 }
 
+process.on('uncaughtException', (err) => {
+  console.error('[QUARK] uncaughtException — proceso continuando:', err.stack ?? err.message);
+});
+
+process.on('unhandledRejection', (reason) => {
+  const msg = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+  console.error('[QUARK] unhandledRejection — proceso continuando:', msg);
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`⚛ QUARK backend running on port ${PORT}`);
 });
