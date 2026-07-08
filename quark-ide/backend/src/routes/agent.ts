@@ -581,6 +581,171 @@ async function searchAndLoadFiles(
   return [];
 }
 
+const AGENT_TOOLS = [
+  {
+    name: "read_file",
+    description: "Lee el contenido completo o un rango de líneas de un archivo del repo",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        start_line: { type: "number" },
+        end_line: { type: "number" }
+      },
+      required: ["path"]
+    }
+  },
+  {
+    name: "grep_code",
+    description: "Busca un patrón/función/variable en todo el repo, devuelve archivo+línea",
+    input_schema: {
+      type: "object",
+      properties: { pattern: { type: "string" } },
+      required: ["pattern"]
+    }
+  },
+  {
+    name: "list_files",
+    description: "Lista archivos del repo, opcionalmente filtrado por carpeta",
+    input_schema: {
+      type: "object",
+      properties: { path: { type: "string" } }
+    }
+  },
+  {
+    name: "apply_patch",
+    description: "Aplica un str_replace sobre un archivo. old_str debe ser único y existir literalmente.",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        old_str: { type: "string" },
+        new_str: { type: "string" }
+      },
+      required: ["path", "old_str", "new_str"]
+    }
+  },
+  {
+    name: "task_complete",
+    description: "Llamar cuando el cambio está terminado y verificado",
+    input_schema: {
+      type: "object",
+      properties: { summary: { type: "string" } },
+      required: ["summary"]
+    }
+  }
+];
+
+async function runAgenticLoop(
+  prompt: string,
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+  maxTurns = 8,
+): Promise<{ files: { path: string; content: string }[]; commitMessage: string }> {
+  const modifiedFiles = new Map<string, string>();
+  const messages: any[] = [
+    { role: 'user', content: `TAREA: ${prompt}\n\nRepo: ${repo}\n\nUsa las tools para explorar el código, entender el problema y aplicar el fix mínimo necesario. Verifica que old_str exista literalmente antes de usar apply_patch. Cuando termines, llama a task_complete.` }
+  ];
+
+  let commitMessage = 'fix: cambio aplicado por QUARK Agent (modo agéntico)';
+
+  for (let turn = 0; turn < maxTurns; turn++) {
+    send('action', { text: `🔄 Turno ${turn + 1}/${maxTurns}` });
+
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY!,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-5',
+        max_tokens: 2048,
+        tools: AGENT_TOOLS,
+        messages,
+      }),
+    });
+
+    const data = await res.json() as { content: any[]; stop_reason: string };
+    messages.push({ role: 'assistant', content: data.content });
+
+    const toolUses = data.content.filter((b) => b.type === 'tool_use');
+
+    if (toolUses.length === 0) {
+      break;
+    }
+
+    const toolResults: any[] = [];
+
+    for (const tool of toolUses) {
+      let resultText = '';
+
+      if (tool.name === 'list_files') {
+        const tree = await getFileTree(repo, 'main');
+        resultText = tree.filter((f: any) => f.type === 'blob').map((f: any) => f.path).join('\n');
+      }
+
+      if (tool.name === 'read_file') {
+        send('action', { text: `📖 Leyendo ${tool.input.path}` });
+        const content = modifiedFiles.get(tool.input.path) ?? await getFileContent(tool.input.path, repo);
+        const lines = content.split('\n');
+        if (tool.input.start_line) {
+          resultText = lines.slice(tool.input.start_line - 1, tool.input.end_line ?? lines.length).join('\n');
+        } else {
+          resultText = lines.length > 500
+            ? lines.slice(0, 500).join('\n') + `\n// ... (${lines.length - 500} líneas más, pide un rango si necesitas más)`
+            : content;
+        }
+        if (!modifiedFiles.has(tool.input.path)) modifiedFiles.set(tool.input.path, content);
+      }
+
+      if (tool.name === 'grep_code') {
+        send('action', { text: `🔎 Buscando "${tool.input.pattern}"` });
+        const results = await searchCodeInRepo(tool.input.pattern, repo);
+        resultText = results.slice(0, 10).map((r: any) => r.path).join('\n') || 'Sin resultados';
+      }
+
+      if (tool.name === 'apply_patch') {
+        const { path, old_str, new_str } = tool.input;
+        const current = modifiedFiles.get(path) ?? await getFileContent(path, repo);
+        const idx = current.indexOf(old_str);
+        if (idx === -1) {
+          resultText = `ERROR: old_str no encontrado literalmente en ${path}. Vuelve a leer el archivo con read_file y copia el texto exacto.`;
+        } else if (current.indexOf(old_str, idx + 1) !== -1) {
+          resultText = `ERROR: old_str no es único en ${path}. Agrega más líneas de contexto.`;
+        } else {
+          const patched = current.slice(0, idx) + new_str + current.slice(idx + old_str.length);
+          modifiedFiles.set(path, patched);
+          resultText = `OK: patch aplicado en ${path}`;
+          send('action', { text: `✅ Patch aplicado en ${path}` });
+        }
+      }
+
+      if (tool.name === 'task_complete') {
+        commitMessage = `fix: ${tool.input.summary}`;
+        send('action', { text: `🎯 ${tool.input.summary}` });
+        toolResults.push({ type: 'tool_result', tool_use_id: tool.id, content: 'OK' });
+        messages.push({ role: 'user', content: toolResults });
+        return {
+          files: Array.from(modifiedFiles.entries()).map(([path, content]) => ({ path, content })),
+          commitMessage,
+        };
+      }
+
+      toolResults.push({ type: 'tool_result', tool_use_id: tool.id, content: resultText });
+    }
+
+    messages.push({ role: 'user', content: toolResults });
+  }
+
+  send('action', { text: `⚠️ Se alcanzó el límite de ${maxTurns} turnos sin task_complete` });
+  return {
+    files: Array.from(modifiedFiles.entries()).map(([path, content]) => ({ path, content })),
+    commitMessage,
+  };
+}
+
 router.post('/generate', async (req, res) => {
   // Auto-detectar deepMode desde prefijos del prompt
   let { prompt: rawPrompt, repo: bodyRepo, branch = 'main', projectName, deepMode } = req.body as {
@@ -1127,72 +1292,36 @@ REGLAS:
       const isComplexChange = isLargeFile || mentionsMultipleFunctions || architecturalChange;
 
       if (isComplexChange) {
-        send('action', { text: `⚠️ CAMBIO COMPLEJO DETECTADO` });
-        if (isLargeFile) send('action', { text: `   📏 Archivo grande: ${mainFileLineCount} líneas` });
-        if (mentionsMultipleFunctions) send('action', { text: `   🔄 Múltiples funciones afectadas` });
-        if (architecturalChange) send('action', { text: `   🏗️ Cambio arquitectural detectado` });
+        send('action', { text: `🤖 Cambio complejo — activando modo agéntico (Claude explora y corrige en loop)` });
+        const agenticResult = await runAgenticLoop(prompt, repo, send);
 
-        send('action', { text: `\n💡 RECOMENDACIÓN: Cambio manual en Replit` });
-        send('action', { text: `\n🔧 FLUJO SUGERIDO:\n` });
-        send('action', { text: `1️⃣ Abre Replit en el repo ${repo}` });
-        send('action', { text: `2️⃣ Navega a: ${mainPreloaded?.path || 'tu archivo'}` });
-        send('action', { text: `3️⃣ Localiza el bloque que necesitas cambiar` });
-        send('action', { text: `4️⃣ Copia EXACTAMENTE 3+ líneas de contexto antes y después` });
-        send('action', { text: `5️⃣ Vuelve aquí y manda este prompt:\n` });
-
-        // Generar prompt detallado para Replit con Claude
-        send('action', { text: `🤖 Generando prompt detallado para Replit...` });
-
-        let replitPrompt = '';
-        try {
-          const replitPromptRes = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-api-key': process.env.ANTHROPIC_API_KEY!,
-              'anthropic-version': '2023-06-01',
-            },
-            body: JSON.stringify({
-              model: 'claude-sonnet-4-6',
-              max_tokens: 1024,
-              messages: [{
-                role: 'user',
-                content: `Eres un experto en TypeScript. Tienes el siguiente archivo y una tarea de modificación.
-
-ARCHIVO: ${mainPreloaded?.path}
-CONTENIDO RELEVANTE:
-${mainPreloaded?.content?.split('\n').slice(0, 200).join('\n')}
-
-TAREA: ${prompt}
-
-Genera un prompt EXPLÍCITO para Replit AI que incluya:
-1. El archivo EXACTO a abrir
-2. La función EXACTA donde hacer el cambio
-3. La línea EXACTA de referencia para ubicarse
-4. El código EXACTO a agregar/modificar (listo para copiar-pegar)
-5. Dónde colocarlo (antes/después de qué línea)
-
-El prompt debe ser tan claro que Replit pueda ejecutarlo sin preguntas.
-Responde SOLO con el prompt para Replit, sin explicaciones.`,
-              }],
-            }),
-          });
-
-          const replitData = await replitPromptRes.json() as {
-            content?: Array<{ type: string; text: string }>
-          };
-          replitPrompt = replitData.content?.[0]?.text ?? '';
-        } catch {
-          replitPrompt = `En el archivo ${mainPreloaded?.path}, realiza este cambio: ${prompt}`;
+        if (agenticResult.files.length === 0) {
+          send('action', { text: `⚠ El agente no logró resolver el cambio en el límite de turnos — revisión manual recomendada` });
+          send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+          res.end();
+          return;
         }
 
-        send('replit_prompt', {
-          text: replitPrompt,
-          file: mainPreloaded?.path,
-          task: prompt,
-        });
+        const filesWithOriginal = await Promise.all(
+          agenticResult.files.map(async (f) => {
+            try {
+              const originalContent = await getFileContent(f.path, repo);
+              return { ...f, originalContent };
+            } catch {
+              return f;
+            }
+          })
+        );
 
-        send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+        send('done', {
+          files: filesWithOriginal,
+          commitMessage: agenticResult.commitMessage,
+          mainComponent: agenticResult.files[0]?.path ?? '',
+          mainContent: agenticResult.files[0]?.content ?? '',
+          repo,
+          branch,
+        });
+        await new Promise((r) => setTimeout(r, 100));
         res.end();
         return;
       }
