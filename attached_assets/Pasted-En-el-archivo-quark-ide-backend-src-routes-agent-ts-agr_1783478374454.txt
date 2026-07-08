@@ -1,0 +1,232 @@
+En el archivo quark-ide/backend/src/routes/agent.ts, agrega un modo chat conversacional nuevo con memoria persistente, tools de exploración, y propuesta de patches con aprobación explícita del usuario. Esto es una ruta NUEVA — no reemplaza nada de lo que ya existe, se agrega al final antes de "export default router". Después reinicia y confirma que compila sin errores de TypeScript.
+
+═══════════════════════════════════════
+PARTE A — Funciones de persistencia del historial de chat
+═══════════════════════════════════════
+Agrega esto cerca de las funciones loadAgentSession/saveAgentSession existentes:
+
+async function loadChatHistory(sessionId: string): Promise<any[]> {
+  try {
+    const r = await pool.query<{ content: string }>(
+      `SELECT content FROM memory_entries WHERE key = $1 AND namespace = $2 LIMIT 1`,
+      [`chat-${sessionId}`, AGENT_SESSION_NS],
+    );
+    return r.rows[0]?.content ? JSON.parse(r.rows[0].content) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveChatHistory(sessionId: string, messages: any[]): Promise<void> {
+  await pool.query(
+    `INSERT INTO memory_entries (key, content, namespace)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
+    [`chat-${sessionId}`, JSON.stringify(messages.slice(-40)), AGENT_SESSION_NS],
+  );
+}
+
+═══════════════════════════════════════
+PARTE B — Tools del chat (reutiliza AGENT_TOOLS si ya existe en el archivo; si no existe, créala también)
+═══════════════════════════════════════
+Si AGENT_TOOLS ya existe en el archivo (de una implementación anterior de runAgenticLoop), agrega esto justo después:
+
+const CHAT_TOOLS = [
+  ...AGENT_TOOLS,
+  {
+    name: "propose_patch",
+    description: "Propone un cambio para revisión del usuario ANTES de aplicarlo. Úsala en vez de apply_patch cuando quieras que el usuario apruebe primero.",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        old_str: { type: "string" },
+        new_str: { type: "string" },
+        reasoning: { type: "string", description: "Por qué este cambio resuelve la causa raíz, no solo el síntoma" }
+      },
+      required: ["path", "old_str", "new_str", "reasoning"]
+    }
+  }
+];
+
+Si AGENT_TOOLS NO existe en el archivo, en su lugar crea CHAT_TOOLS completo:
+
+const CHAT_TOOLS = [
+  {
+    name: "read_file",
+    description: "Lee el contenido completo o un rango de líneas de un archivo del repo",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        start_line: { type: "number" },
+        end_line: { type: "number" }
+      },
+      required: ["path"]
+    }
+  },
+  {
+    name: "grep_code",
+    description: "Busca un patrón/función/variable en todo el repo, devuelve archivo+línea",
+    input_schema: {
+      type: "object",
+      properties: { pattern: { type: "string" } },
+      required: ["pattern"]
+    }
+  },
+  {
+    name: "list_files",
+    description: "Lista archivos del repo",
+    input_schema: {
+      type: "object",
+      properties: { path: { type: "string" } }
+    }
+  },
+  {
+    name: "propose_patch",
+    description: "Propone un cambio para revisión del usuario ANTES de aplicarlo. Úsala en vez de apply_patch cuando quieras que el usuario apruebe primero.",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        old_str: { type: "string" },
+        new_str: { type: "string" },
+        reasoning: { type: "string", description: "Por qué este cambio resuelve la causa raíz, no solo el síntoma" }
+      },
+      required: ["path", "old_str", "new_str", "reasoning"]
+    }
+  }
+];
+
+═══════════════════════════════════════
+PARTE C — La función runChatTurn
+═══════════════════════════════════════
+Agrega esta función completa, antes de "const router = Router();" o después (cualquier lugar a nivel de módulo está bien):
+
+async function runChatTurn(
+  sessionId: string,
+  userMessage: string,
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+  maxToolSteps = 10,
+): Promise<void> {
+  const history = await loadChatHistory(sessionId);
+  const messages: any[] = [
+    ...history,
+    { role: 'user', content: userMessage },
+  ];
+
+  const systemPrompt = `Eres QUARK, un asistente de código que conversa con el usuario igual que un ingeniero senior — no un generador de una sola pasada.
+
+REGLAS:
+- Antes de dar un problema por resuelto, pregúntate: ¿esto arregla la CAUSA raíz, o solo un síntoma relacionado? Si el problema depende de un flujo de control (loops, funciones que se llaman entre sí, condiciones de reinicio), sigue la cadena hasta el final antes de proponer un fix.
+- Usa read_file y grep_code para explorar antes de asumir. No inventes contenido de archivos.
+- Cuando encuentres algo que amerite un cambio de código, usa propose_patch (no apply_patch directo) — el usuario decide si lo aplica.
+- Si el usuario solo está preguntando o pidiendo una explicación, responde en texto normal, sin usar tools de escritura.
+- Sé directo. No expliques de más si no te lo piden.`;
+
+  for (let step = 0; step < maxToolSteps; step++) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY!,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-5',
+        max_tokens: 2048,
+        system: systemPrompt,
+        tools: CHAT_TOOLS,
+        messages,
+      }),
+    });
+
+    const data = await res.json() as { content: any[] };
+    messages.push({ role: 'assistant', content: data.content });
+
+    const textBlocks = data.content.filter((b: any) => b.type === 'text');
+    for (const t of textBlocks) {
+      send('chat_message', { text: t.text });
+    }
+
+    const toolUses = data.content.filter((b: any) => b.type === 'tool_use');
+    if (toolUses.length === 0) {
+      break;
+    }
+
+    const toolResults: any[] = [];
+    for (const tool of toolUses) {
+      let resultText = '';
+
+      if (tool.name === 'list_files') {
+        const tree = await getFileTree(repo, 'main');
+        resultText = tree.filter((f: any) => f.type === 'blob').map((f: any) => f.path).join('\n');
+      }
+      if (tool.name === 'read_file') {
+        send('action', { text: `📖 Leyendo ${tool.input.path}` });
+        const content = await getFileContent(tool.input.path, repo);
+        const lines = content.split('\n');
+        resultText = tool.input.start_line
+          ? lines.slice(tool.input.start_line - 1, tool.input.end_line ?? lines.length).join('\n')
+          : (lines.length > 500 ? lines.slice(0, 500).join('\n') + `\n// ... (${lines.length - 500} más)` : content);
+      }
+      if (tool.name === 'grep_code') {
+        send('action', { text: `🔎 Buscando "${tool.input.pattern}"` });
+        const results = await searchCodeInRepo(tool.input.pattern, repo);
+        resultText = results.slice(0, 10).map((r: any) => r.path).join('\n') || 'Sin resultados';
+      }
+      if (tool.name === 'propose_patch') {
+        send('patch_proposal', {
+          path: tool.input.path,
+          old_str: tool.input.old_str,
+          new_str: tool.input.new_str,
+          reasoning: tool.input.reasoning,
+        });
+        resultText = 'Patch propuesto al usuario — esperando aprobación. No lo des por aplicado.';
+      }
+
+      toolResults.push({ type: 'tool_result', tool_use_id: tool.id, content: resultText });
+    }
+    messages.push({ role: 'user', content: toolResults });
+  }
+
+  await saveChatHistory(sessionId, messages);
+}
+
+═══════════════════════════════════════
+PARTE D — La ruta /chat
+═══════════════════════════════════════
+Agrega esta ruta, en cualquier lugar antes de "export default router;":
+
+router.post('/chat', async (req, res) => {
+  const { message, repo: bodyRepo, sessionId } = req.body as {
+    message?: string; repo?: string; sessionId?: string;
+  };
+  const repo = bodyRepo ?? process.env.GITHUB_REPO;
+  if (!message || !repo || !sessionId) {
+    res.status(400).json({ error: 'message, repo and sessionId are required' });
+    return;
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+  const send = (event: string, data: Record<string, unknown>) => {
+    res.write(`data: ${JSON.stringify({ event, ...data })}\n\n`);
+  };
+
+  try {
+    await runChatTurn(sessionId, message, repo, send);
+    send('done', {});
+  } catch (err) {
+    send('error', { text: err instanceof Error ? err.message : String(err) });
+  }
+  res.end();
+});
+
+═══════════════════════════════════════
+NOTA IMPORTANTE
+═══════════════════════════════════════
+Esta es una ruta completamente nueva (POST /api/agent/chat o la ruta base que corresponda según cómo esté montado este router). No modifica ni elimina las rutas /generate, /fix, /generate-html existentes — todas siguen funcionando igual que antes. Al terminar, dime si detectaste algún conflicto de nombres (por ejemplo si AGENT_TOOLS ya existía con una estructura distinta a la que puse en la Parte B).
