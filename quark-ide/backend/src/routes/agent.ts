@@ -2056,6 +2056,21 @@ router.delete('/context', async (_req, res) => {
   }
 });
 
+function classifyComplexity(message: string): 'simple' | 'complex' {
+  const COMPLEX_SIGNALS = [
+    /\b(por qué|causa raíz|no funciona|bug|error|falla|se rompe|arregla|corrige|resuelve)\b/i,
+    /\b(refactor|arquitectura|diseño|patrón)\b/i,
+    /\b(revisa|audita|analiza en profundidad)\b/i,
+  ];
+  const MULTI_STEP_HINT = message.length > 200 || message.split(/[.?]/).length > 3;
+  const mentionsMultipleFiles = (message.match(/\.(ts|tsx|js|jsx)\b/g) ?? []).length > 1;
+
+  const isComplex = COMPLEX_SIGNALS.some(p => p.test(message)) || MULTI_STEP_HINT || mentionsMultipleFiles;
+  return isComplex ? 'complex' : 'simple';
+}
+
+const systemPromptSimple = `Responde de forma breve y directa. No inventes contenido de archivos que no tengas — si la pregunta requiere leer código específico, di que necesitas más contexto en vez de adivinar.`;
+
 async function runChatTurn(
   sessionId: string,
   userMessage: string,
@@ -2068,6 +2083,17 @@ async function runChatTurn(
     ...history,
     { role: 'user', content: userMessage },
   ];
+
+  const complexity = classifyComplexity(userMessage);
+  send('action', { text: complexity === 'complex' ? '🧠 Pregunta compleja — usando Claude' : '⚡ Pregunta simple — respuesta rápida' });
+
+  if (complexity === 'simple') {
+    const answer = await generateWithFallback(userMessage, systemPromptSimple);
+    send('chat_message', { text: answer });
+    messages.push({ role: 'assistant', content: [{ type: 'text', text: answer }] });
+    await saveChatHistory(sessionId, messages);
+    return;
+  }
 
   const systemPrompt = `Eres QUARK, un asistente de código que conversa con el usuario igual que un ingeniero senior — no un generador de una sola pasada.
 
