@@ -38,6 +38,11 @@ export default function QuarkChat({ repo }: { repo: string }) {
         body: JSON.stringify({ message: userMsg, repo, sessionId }),
       });
 
+      if (!res.ok) {
+        let errText = `HTTP ${res.status}`;
+        try { const d = await res.json() as { error?: string }; if (d.error) errText = d.error; } catch {}
+        throw new Error(errText);
+      }
       if (!res.body) throw new Error('Sin respuesta del servidor');
       const reader = res.body.getReader();
       const decoder = new TextDecoder();

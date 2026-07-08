@@ -2213,7 +2213,9 @@ router.post('/chat', async (req, res) => {
     message?: string; repo?: string; sessionId?: string;
   };
   const repo = bodyRepo ?? process.env.GITHUB_REPO;
+  console.log('[CHAT] incoming →', { message, repo, sessionId });
   if (!message || !repo || !sessionId) {
+    console.log('[CHAT] 400 — campo faltante:', { message: !!message, repo: !!repo, sessionId: !!sessionId });
     res.status(400).json({ error: 'message, repo and sessionId are required' });
     return;
   }
