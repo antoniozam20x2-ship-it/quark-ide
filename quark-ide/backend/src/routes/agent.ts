@@ -514,9 +514,24 @@ Responde SOLO con un JSON array de strings, sin markdown ni explicaciones. Ejemp
   }
 }
 
-async function extractKeywordsForSearch(prompt: string): Promise<string[]> {
+async function extractKeywordsForSearch(prompt: string, repo: string = ''): Promise<string[]> {
   const keys = getGroqKeys();
   if (keys.length === 0) return [];
+
+  // Signal OS non-obvious concept translations — applied only for that repo.
+  // Each row returns ONLY the specific terms for that translation. No shared suffixes.
+  const isSignalOS = /ahorar/i.test(repo);
+  const signalOSLayer = isSignalOS ? `
+TRADUCCIONES ESPECÍFICAS (solo para este repo — aplicalas si el prompt menciona exactamente estos conceptos, ignorá esta sección si no hay match):
+- "RVOL" o "señal S1" → checkS1Bull
+- "señal S2" o "SMC" o "smart money" → checkS2
+- "señal S3" o "alineación" o "EMA" → checkS3Bull
+- "señal S4" → checkS4
+- "señal S5" o "impulso" o "early" → checkS5ImpulsBull
+- "señal S6" o "FVG" o "fair value gap" → checkS6Bull
+- "trailing" o "stop móvil" o "trailing stop" → trailingStop, moving_plan, rangeRate
+- "streak" o "racha" o "pérdidas consecutivas" → circuitBreaker
+` : '';
 
   try {
     const ctrl = new AbortController();
@@ -535,71 +550,14 @@ async function extractKeywordsForSearch(prompt: string): Promise<string[]> {
         messages: [
           {
             role: 'system',
-            content: `Eres un traductor de lenguaje natural a términos técnicos de código 
-para un bot de crypto trading en TypeScript/Node.js.
-
-IMPORTANTE: "Signal OS" es el nombre de una app de trading, 
-NO el sistema operativo Linux. Las señales S1-S6 son estrategias 
-de trading técnico, NO señales Unix (SIGKILL, SIGTERM, etc.).
-Si el prompt menciona "Signal OS" con S1-S6, siempre busca 
-en el contexto de trading crypto.
-
-ARQUITECTURA DEL SISTEMA:
-- El motor principal es la función fEval() en tradingLogic.ts
-- fEval() calcula scores (sa, sb), señales (sig1-sig6), indicadores
-- Las señales se detectan con funciones internas: checkS1Bull/Bear, 
-  checkS3Bull/Bear, checkS5Bull/Bear, checkS6Bull/Bear
-- El scoring usa: EMA10/20/34/55, RSI, ADX, ATR, Supertrend, RVOL
-- botEngine.ts orquesta el loop principal del bot
-- screener.ts filtra pares por score mínimo (minScore/smartScore)
-- biasEngine.ts determina el sesgo del mercado con BTC 1H
-
-MAPEO DE CONCEPTOS:
-- "señal S1" o "RVOL" o "volumen" → checkS1Bull, fEval, tradingLogic
-- "señal S2" o "SMC" o "smart money" → checkS2, fEval, tradingLogic  
-- "señal S3" o "alineación" o "tendencia" o "EMA" → checkS3Bull, fEval, tradingLogic
-- "señal S4" → checkS4, fEval, tradingLogic
-- "señal S5" o "impulso" o "early" o "cruce" → checkS5ImpulsBull, fEval, tradingLogic
-- "señal S6" o "FVG" o "fair value gap" o "gap alcista" o "aceleración" o "momentum" → ["checkS6Bull", "checkS6Bear", "fEval", "tradingLogic"]
-- "score" o "puntuación" o "filtro" o "calidad" → smartScore, minScore, screener
-- "ADX" o "tendencia fuerte" o "dirección" → calcADX, tradingLogic, fEval
-- "RSI" o "sobrecomprado" o "sobrevendido" → calcRSI, tradingLogic
-- "Supertrend" o "ST" o "tendencia principal" → calcSupertrend, tradingLogic
-- "trailing" o "stop móvil" o "proteger ganancia" o "trailing stop" → ["trailingStop", "moving_plan", "rangeRate", "botEngine"]
-- "bias" o "sesgo" o "BTC" o "mercado general" → biasEngine, bias
-- "streak" o "racha" o "pérdidas consecutivas" → circuitBreaker, streak
-- "balance" o "cuenta" o "capital" → getRealBalance, tradingLogic
-- "historial" o "trades" o "resultados" → getRealTradeHistory, tradingLogic
-- "entrada" o "cuándo entra" o "condición de entrada" → fEval, botEngine
-- "screener" o "escaneo" o "filtrado de pares" → screener, minScore
-- "argumentos" o "parámetros" o "condiciones" o "requisitos" o "cuándo se activa" o "qué necesita" → mapear según la señal mencionada en el prompt (S1→checkS1Bull, S2→checkS2, S3→checkS3Bull, S4→checkS4, S5→checkS5ImpulsBull, S6→checkS6Bull); si no hay señal específica → fEval, tradingLogic
-
-MAPEO CORE AI (repo: Code-Coretest):
-- "agente" o "ATLAS" o "presidente" → ATLAS, streamNexusChat, AGENTS
-- "futuros" o "HELIX" o "derivados" → HELIX, runAssetCouncil, streamNexusChat
-- "spot" o "VEGA" o "mercado" → VEGA, useMarketTicker, WatchlistPanel
-- "research" o "CIPHER" o "análisis" → CIPHER, parseOracleVerdict, buildAuditContext
-- "riesgo" o "SIGMA" o "gestión" → SIGMA, runCouncil, agentStatus
-- "veredicto" o "ORACLE" o "decisión" → ORACLE, parseOracleVerdict, DecisionsPanel
-- "consejo" o "council" o "sesión" → runCouncil, runAssetCouncil, AGENTS
-- "historial" o "decisiones" → DecisionsPanel, loadDecisions, persistDecisions
-- "watchlist" o "activos" → WatchlistPanel, useMarketTicker, watchlist
-- "auditoría" o "audit" → buildAuditContext, sessionMode, runCouncil
-
-DISTINCIÓN CRÍTICA — dos sistemas de escaneo:
-- Si el usuario pregunta por señales, condiciones técnicas, cuándo entra 
-  el bot, scores, S1-S6, calidad de setup → es el SCREENER → usar fEval, tradingLogic
-- Si el usuario pregunta por qué pares opera, cuántas monedas escanea, 
-  cómo selecciona los símbolos, CoinMarketCap, top 30 → es el SCANNER → 
-  usar scanner, CoinMarketCap, topPairs
-- NUNCA mezclar los dos sistemas en la misma búsqueda
-
-INSTRUCCIÓN:
-Dado el prompt del usuario, identifica el concepto principal y devuelve 
-un JSON array de máximo 4 strings con los identificadores técnicos más 
-específicos para buscar en GitHub Code Search.
-Prioriza funciones específicas (checkS1Bull) sobre archivos genéricos (tradingLogic).
-Responde SOLO el array JSON, sin explicación, sin backticks.`,
+            content: `Extraé los identificadores técnicos y nombres propios del prompt del usuario para buscar en GitHub Code Search.
+${signalOSLayer}
+REGLAS:
+- Extraé exactamente los términos técnicos, nombres de funciones, clases o variables que aparecen en el prompt.
+- No agregues términos de contexto genérico que no estén mencionados en el prompt.
+- Si el prompt contiene un concepto en lenguaje natural sin nombre técnico claro, usá las palabras más específicas del prompt tal como están.
+- Devolvé un JSON array de máximo 4 strings.
+- Respondé SOLO el array JSON, sin explicación, sin backticks.`,
           },
           { role: 'user', content: prompt },
         ],
@@ -650,7 +608,7 @@ async function searchAndLoadFiles(
   const isCodeFile = (path: string): boolean =>
     !EXCLUDED_PATHS.some((ex) => path.includes(ex));
 
-  const keywords = await extractKeywordsForSearch(prompt);
+  const keywords = await extractKeywordsForSearch(prompt, repo);
 
   const searchTerms = keywords.length > 0
     ? keywords
