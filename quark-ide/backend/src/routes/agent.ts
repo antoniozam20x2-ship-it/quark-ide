@@ -2074,9 +2074,12 @@ function classifyComplexity(message: string): 'simple' | 'complex' {
   return isComplex ? 'complex' : 'simple';
 }
 
-const systemPromptTriage = `Responde de forma breve y directa, usando SOLO tu conocimiento general — no tienes acceso a herramientas ni al código real del repo.
-Si la pregunta requiere leer código específico, archivos, o investigar algo que no podés saber de memoria, responde ÚNICAMENTE con: "NEEDS_TOOLS: " seguido de una razón breve (por ejemplo "NEEDS_TOOLS: necesito leer el archivo de circuit breaker para explicar el flujo real").
-Si podés responder con confianza sin ver código, responde normal, sin ese prefijo.`;
+function buildTriagePrompt(cacheHint: string): string {
+  return `Responde de forma breve y directa, usando SOLO tu conocimiento general — no tienes acceso a herramientas ni al código real del repo.
+${cacheHint}
+IMPORTANTE: si la pregunta es sobre algo ESPECÍFICO de este proyecto (nombres de agentes/componentes propios, funciones particulares, arquitectura específica de este repo) y NO tenés ese dato exacto en la sección "archivos ya investigados" de arriba, NO completes con conocimiento genérico de IA/programación — responde ÚNICAMENTE con "NEEDS_TOOLS: " seguido de una razón breve.
+Si la pregunta es genuinamente genérica (conceptos estándar de programación, definiciones de libro) SÍ podés responder normal, sin ese prefijo.`;
+}
 
 router.post('/apply-patch', async (req, res) => {
   const { repo, path: filePath, old_str, new_str } = req.body as {
@@ -2178,10 +2181,13 @@ async function runChatTurn(
   // Preload cached agent context (populated by QuarkAgent deep analysis runs)
   const cachedCtx = await loadAgentContext().catch(() => null);
   let seedContext = '';
+  let cacheHint = '';
   if (cachedCtx && cachedCtx.repo === repo) {
     const cacheAge = Date.now() - (cachedCtx.savedAt ?? 0);
     if (cacheAge < 30 * 60 * 1000 && cachedCtx.preloadedFiles?.length > 0) {
-      seedContext = `\n\nCONTEXTO YA INVESTIGADO RECIENTEMENTE (por otra herramienta de este mismo sistema, hace menos de 30 min) — revisa si es relevante para esta pregunta antes de buscar de nuevo con grep_code:\n${cachedCtx.preloadedFiles.map((f: any) => f.path).join('\n')}\n\nSi es relevante, usa read_file directamente en esos paths en vez de grep_code desde cero.`;
+      const filePaths = cachedCtx.preloadedFiles.map((f: any) => f.path).join('\n');
+      cacheHint = `\nARCHIVOS YA INVESTIGADOS RECIENTEMENTE para este repo (hace menos de 30 min):\n${filePaths}\nSi la pregunta involucra alguno de estos archivos o sus componentes, podés usar esa información como contexto al responder — pero solo si es relevante y exacto.`;
+      seedContext = `\n\nCONTEXTO YA INVESTIGADO RECIENTEMENTE (por otra herramienta de este mismo sistema, hace menos de 30 min) — revisa si es relevante para esta pregunta antes de buscar de nuevo con grep_code:\n${filePaths}\n\nSi es relevante, usa read_file directamente en esos paths en vez de grep_code desde cero.`;
     }
   }
 
@@ -2194,7 +2200,7 @@ async function runChatTurn(
   // ── Simple path: Groq triage (text-only, no tools) ───────────────────────────
   if (complexity === 'simple') {
     send('action', { text: '⚡ Modo rápido — Groq' });
-    const groqAnswer = await callGroqAgent(userMessage, systemPromptTriage, 512);
+    const groqAnswer = await callGroqAgent(userMessage, buildTriagePrompt(cacheHint), 512);
 
     if (!groqAnswer.trim().startsWith('NEEDS_TOOLS:')) {
       send('chat_message', { text: groqAnswer });

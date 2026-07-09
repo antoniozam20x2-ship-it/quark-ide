@@ -1,0 +1,16 @@
+El path "simple" del chat (triage con Groq) está respondiendo con información genérica en vez de admitir que no conoce los detalles específicos del repo, y en vez de escalar a Claude. Ejemplo real: pregunté "cómo funcionan los agentes de Core AI" (que en este proyecto son ATLAS, HELIX, VEGA, CIPHER, SIGMA, ORACLE — nombres y roles específicos definidos en el código) y Groq respondió con una definición de libro de texto sobre "agentes de IA" en general, sin mencionar ninguno de los nombres reales.
+
+Dos cambios en runChatTurn:
+
+1. Antes de llamar a Groq para el triage, carga el caché existente (loadAgentContext, igual que ya hicimos en el seedContext que se le pasa a Claude) y pásale un resumen de qué archivos ya se investigaron recientemente para ese repo, como parte del system prompt de Groq.
+
+2. Refuerza la regla de escalación en systemPromptTriage: si la pregunta es sobre algo específico de ESTE proyecto (nombres propios, funciones, arquitectura particular — no conocimiento general de programación), Groq debe responder NEEDS_TOOLS en vez de intentar completar con conocimiento genérico. El system prompt actual no distingue esto con suficiente claridad, por eso Groq "alucina" una respuesta plausible en vez de admitir que no sabe.
+
+Código sugerido para el system prompt nuevo:
+
+const systemPromptTriage = \`Responde de forma breve y directa, usando SOLO tu conocimiento general — no tienes acceso a herramientas ni al código real del repo.
+\${cacheHint}
+IMPORTANTE: si la pregunta es sobre algo ESPECÍFICO de este proyecto (nombres de agentes/componentes propios, funciones particulares, arquitectura específica de este repo) y no tenés ese dato exacto arriba en "archivos ya investigados", NO completes con conocimiento genérico de IA/programación — responde ÚNICAMENTE con "NEEDS_TOOLS: " seguido de una razón breve.
+Si la pregunta es genuinamente genérica (conceptos de programación, definiciones estándar) SÍ podés responder normal.\`
+
+Después de aplicar, prueba de nuevo "cómo funcionan los agentes de Core AI" — debería decir NEEDS_TOOLS y escalar a Claude, o si el caché tiene algo reciente sobre Core AI, responder con los nombres reales (ATLAS, HELIX, etc.) en vez de la definición genérica.
