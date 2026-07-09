@@ -1,0 +1,47 @@
+Quiero reemplazar la clasificación de intención lectura-vs-modificación en agent.ts, que hoy usa READ_KEYWORDS/GEN_KEYWORDS/ANALYSIS_KEYWORDS con regex, por una llamada a Groq que razone la intención real del mensaje (sin depender de listas de palabras hardcodeadas que fallan con conjugaciones o sinónimos no previstos).
+
+1. Agrega esta función nueva, cerca de detectReadIntent (no la borres, queda como fallback):
+
+async function classifyIntentWithAI(prompt: string): Promise<'read' | 'modify'> {
+  const keys = getGroqKeys();
+  if (keys.length === 0) {
+    return detectReadIntent(prompt) ? 'read' : 'modify';
+  }
+
+  const systemPrompt = `Clasifica la intención del usuario respecto a un repositorio de código.
+Responde ÚNICAMENTE con una palabra: "read" o "modify".
+
+"read" = el usuario quiere ENTENDER, VER, EXPLICAR o DIAGNOSTICAR código existente, sin cambiarlo.
+Ejemplos: "cómo funciona X", "explícame Y", "por qué falla Z", "muéstrame el archivo", "qué hace esta función".
+
+"modify" = el usuario quiere CREAR, CAMBIAR, CORREGIR o AGREGAR código.
+Ejemplos: "agrega una función", "corrige el bug de X", "cambia el color", "resetea el circuit breaker", "arregla Y".
+
+Si hay ambigüedad, prioriza "read" — es más seguro pedir una explicación de más que modificar código sin que se pidiera.
+Responde solo la palabra, sin explicación, sin puntuación.`;
+
+  try {
+    const raw = await callGroqAgent(prompt, systemPrompt, 10);
+    const cleaned = raw.trim().toLowerCase();
+    return cleaned.includes('modify') ? 'modify' : 'read';
+  } catch {
+    return detectReadIntent(prompt) ? 'read' : 'modify';
+  }
+}
+
+2. En la ruta router.post('/generate', ...), justo después de donde se calcula forceModifyIntent (el que ya agregamos antes), agrega UNA sola llamada:
+
+  const resolvedIntent = forceModifyIntent ? 'modify' : await classifyIntentWithAI(prompt);
+
+3. En el FAST READ PATH, cambia la condición para usar resolvedIntent en vez de READ_KEYWORDS/GEN_KEYWORDS:
+
+    const fastFileMatch = prompt.match(/[\w/\-\.]+\.(tsx|jsx|yaml|json|html|css|yml|env|py|md|ts|js|sh)/);
+    if (fastFileMatch && resolvedIntent === 'read') {
+
+4. En el READ PATH principal, cambia:
+
+    if (resolvedIntent === 'read') {
+
+5. No borres READ_KEYWORDS, GEN_KEYWORDS, ANALYSIS_KEYWORDS ni detectReadIntent — quedan como fallback de emergencia dentro de classifyIntentWithAI si Groq falla o no hay keys.
+
+Después de aplicar, prueba de nuevo "Cómo funcionan los agentes de core IA puedes nombrar los nombres" en modo DEEP — debería clasificarse correctamente como "read" ahora, sin generar ningún patch.

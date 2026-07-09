@@ -335,6 +335,33 @@ function detectReadIntent(prompt: string): boolean {
   return (hasRead || hasAnalysis) && !hasGen;
 }
 
+async function classifyIntentWithAI(prompt: string): Promise<'read' | 'modify'> {
+  const keys = getGroqKeys();
+  if (keys.length === 0) {
+    return detectReadIntent(prompt) ? 'read' : 'modify';
+  }
+
+  const systemPrompt = `Clasifica la intención del usuario respecto a un repositorio de código.
+Responde ÚNICAMENTE con una palabra: "read" o "modify".
+
+"read" = el usuario quiere ENTENDER, VER, EXPLICAR o DIAGNOSTICAR código existente, sin cambiarlo.
+Ejemplos: "cómo funciona X", "explícame Y", "por qué falla Z", "muéstrame el archivo", "qué hace esta función".
+
+"modify" = el usuario quiere CREAR, CAMBIAR, CORREGIR o AGREGAR código.
+Ejemplos: "agrega una función", "corrige el bug de X", "cambia el color", "resetea el circuit breaker", "arregla Y".
+
+Si hay ambigüedad, prioriza "read" — es más seguro pedir una explicación de más que modificar código sin que se pidiera.
+Responde solo la palabra, sin explicación, sin puntuación.`;
+
+  try {
+    const raw = await callGroqAgent(prompt, systemPrompt, 10);
+    const cleaned = raw.trim().toLowerCase();
+    return cleaned.includes('modify') ? 'modify' : 'read';
+  } catch {
+    return detectReadIntent(prompt) ? 'read' : 'modify';
+  }
+}
+
 function extractFunctionBlock(
   content: string,
   functionName: string
@@ -863,6 +890,7 @@ router.post('/generate', async (req, res) => {
 
   // Capturar intención explícita ANTES de borrar los prefijos
   const forceModifyIntent = /\[DEEP\]\[MODIFICAR\]|\[DEEP\]\[CREAR\]/i.test(rawPrompt ?? '');
+  // resolvedIntent se calcula después de parsear prompt (ver más abajo)
 
   // Strip prefixes from prompt
   const prompt = rawPrompt
@@ -906,9 +934,12 @@ router.post('/generate', async (req, res) => {
   };
 
   try {
+    const resolvedIntent = forceModifyIntent ? 'modify' : await classifyIntentWithAI(prompt);
+    console.log(`[Agent/generate] resolvedIntent="${resolvedIntent}" forceModify=${forceModifyIntent}`);
+
     // ── FAST READ PATH — explicit filename in prompt, skip tree + Gemini ──────
     const fastFileMatch = prompt.match(/[\w/\-\.]+\.(tsx|jsx|yaml|json|html|css|yml|env|py|md|ts|js|sh)/);
-    if (!forceModifyIntent && fastFileMatch && READ_KEYWORDS.test(prompt) && !GEN_KEYWORDS.test(prompt)) {
+    if (fastFileMatch && resolvedIntent === 'read') {
       const filePath = fastFileMatch[0];
       send('action', { text: `📖 Modo lectura directa — ${filePath}` });
       let content: string;
@@ -1012,7 +1043,7 @@ router.post('/generate', async (req, res) => {
       .join('\n');
 
     // ── READ PATH — no Gemini generation, just fetch real file content ────────
-    if (!forceModifyIntent && detectReadIntent(prompt)) {
+    if (resolvedIntent === 'read') {
       send('action', { text: '📖 Modo lectura — buscando en GitHub...' });
 
       let readFiles: { path: string; content: string; fullContent?: string; startLine?: number; endLine?: number }[] = [];
