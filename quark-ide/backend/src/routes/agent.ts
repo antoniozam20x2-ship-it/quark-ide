@@ -56,6 +56,23 @@ async function saveChatHistory(sessionId: string, messages: any[]): Promise<void
   );
 }
 
+async function summarizeForCache(preloadedFiles: { path: string; content: string }[]): Promise<string> {
+  const keys = getGroqKeys();
+  if (keys.length === 0 || preloadedFiles.length === 0) return '';
+
+  const combined = preloadedFiles.map(f => `--- ${f.path} ---\n${f.content.slice(0, 800)}`).join('\n\n');
+  try {
+    const summary = await callGroqAgent(
+      combined,
+      'Resume en máximo 5 líneas qué contienen estos archivos: nombres de funciones/clases/variables clave, y su propósito. Sé conciso y concreto — prioriza nombres propios y datos específicos sobre descripciones generales.',
+      200,
+    );
+    return summary;
+  } catch {
+    return '';
+  }
+}
+
 export async function saveAgentContext(ctx: {
   preloadedFiles: { path: string; content: string; fullContent?: string; startLine?: number; endLine?: number }[]
   functionName: string | null
@@ -63,6 +80,7 @@ export async function saveAgentContext(ctx: {
   repo: string
   querySignature?: string
   savedAt?: number
+  summary?: string
 }): Promise<void> {
   const ctxWithSig = {
     ...ctx,
@@ -84,6 +102,7 @@ async function loadAgentContext(): Promise<{
   repo: string
   querySignature?: string
   savedAt?: number
+  summary?: string
 } | null> {
   try {
     console.log(`[CACHE] Attempting to load from memory_entries — repo: ${AGENT_SESSION_NS}`);
@@ -1150,11 +1169,13 @@ REGLAS GENERALES:
 
       // Guardar contexto para que DEEP mode lo reutilice
       const fnNameForCtx = extractFunctionNameFromPrompt(prompt)
+      const ctxSummary = await summarizeForCache(readFiles).catch(() => '');
       await saveAgentContext({
         preloadedFiles: readFiles,
         functionName: fnNameForCtx,
         prompt,
         repo,
+        summary: ctxSummary,
       }).catch(() => {/* no bloquear si falla */})
       cacheNotifications.emit('cache-update', { type: 'cache-update', repo, source: 'agent', timestamp: new Date().toISOString() });
 
@@ -2217,7 +2238,9 @@ async function runChatTurn(
     const cacheAge = Date.now() - (cachedCtx.savedAt ?? 0);
     if (cacheAge < 30 * 60 * 1000 && cachedCtx.preloadedFiles?.length > 0) {
       const filePaths = cachedCtx.preloadedFiles.map((f: any) => f.path).join('\n');
-      cacheHint = `\nARCHIVOS YA INVESTIGADOS RECIENTEMENTE para este repo (hace menos de 30 min):\n${filePaths}\nSi la pregunta involucra alguno de estos archivos o sus componentes, podés usar esa información como contexto al responder — pero solo si es relevante y exacto.`;
+      cacheHint = cachedCtx.summary
+        ? `RESUMEN de lo ya investigado en este repo recientemente:\n${cachedCtx.summary}\n\nSi esto responde la pregunta, úsalo directo. Si necesitás más detalle o el resumen no alcanza, responde NEEDS_TOOLS.`
+        : '';
       seedContext = `\n\nCONTEXTO YA INVESTIGADO RECIENTEMENTE (por otra herramienta de este mismo sistema, hace menos de 30 min) — revisa si es relevante para esta pregunta antes de buscar de nuevo con grep_code:\n${filePaths}\n\nSi es relevante, usa read_file directamente en esos paths en vez de grep_code desde cero.`;
     }
   }
