@@ -1220,7 +1220,8 @@ REGLAS GENERALES:
 
 REGLA ANTI-ALUCINACIÓN — ES LA MÁS IMPORTANTE:
 Si el contenido de los archivos leídos NO menciona específicamente lo que el usuario pregunta (el término, componente, función o concepto exacto que buscaba), decilo con claridad y detenete ahí. Ejemplo: "No encontré referencias a [lo que preguntó] en los archivos revisados ([lista de archivos]). Puede estar en otro módulo o bajo un nombre distinto."
-NUNCA completes la respuesta con una definición genérica de programación o IA disfrazada de respuesta específica del proyecto. Si los archivos leídos no tienen la respuesta, la respuesta correcta es admitirlo — no inventar una explicación plausible.`,
+NUNCA completes la respuesta con una definición genérica de programación o IA disfrazada de respuesta específica del proyecto. Si los archivos leídos no tienen la respuesta, la respuesta correcta es admitirlo — no inventar una explicación plausible.
+RESULTADO PARCIAL vs. CONCLUSIÓN DEFINITIVA: si tu conclusión de "no encontrado" se basa en UN solo archivo revisado o una sola búsqueda, NO la presentes como definitiva. Usá lenguaje parcial: "La búsqueda inicial no encontró esto en [archivo/término buscado] — podría estar bajo otro nombre, decime si querés que busque de otra forma." Reservá el lenguaje definitivo ("no encontré referencias a X en el proyecto") solo cuando ya revisaste más de una fuente relacionada o probaste más de un término sin resultado.`,
           );
 
           // Stream each non-empty line as its own action event
@@ -2203,7 +2204,8 @@ function buildTriagePrompt(cacheHint: string): string {
 ${cacheHint}
 SOBRE EL CONTEXTO ADICIONAL: si aparece una sección "RESUMEN" o "CONTEXTO ADICIONAL" arriba, ese contenido proviene de una inspección real del código fuente de este mismo repo, hecha por este sistema hace menos de 30 minutos — no es una suposición ni una fuente externa incierta. Tratá esos datos como hechos verificados: usá los nombres exactos que aparecen ahí, no los parafrasees, y no agregues disclaimers como "probablemente", "podría ser" o "esto puede variar" sobre información que ya está confirmada.
 IMPORTANTE: si la pregunta es sobre algo ESPECÍFICO de este proyecto (nombres de agentes/componentes propios, funciones particulares, arquitectura específica de este repo) y NO tenés ese dato exacto en el contexto de arriba, NO completes con conocimiento genérico de IA/programación — responde ÚNICAMENTE con "NEEDS_TOOLS: " seguido de una razón breve.
-Si la pregunta es genuinamente genérica (conceptos estándar de programación, definiciones de libro) SÍ podés responder normal, sin ese prefijo.`;
+Si la pregunta es genuinamente genérica (conceptos estándar de programación, definiciones de libro) SÍ podés responder normal, sin ese prefijo.
+RESULTADO PARCIAL vs. CONCLUSIÓN DEFINITIVA: si el contexto disponible solo cubre una fuente o un término, no presentes la ausencia de datos como una conclusión definitiva sobre el proyecto. Usá lenguaje parcial: "El contexto disponible no menciona esto — puede estar bajo otro nombre o en un módulo no revisado aún." Reservá afirmaciones definitivas ("esto no existe en el proyecto") solo cuando el contexto cubre múltiples fuentes relacionadas sin resultado.`;
 }
 
 router.post('/apply-patch', async (req, res) => {
