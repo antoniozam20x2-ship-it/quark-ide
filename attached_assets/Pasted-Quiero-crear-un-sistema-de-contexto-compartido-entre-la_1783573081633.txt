@@ -1,0 +1,107 @@
+Quiero crear un sistema de contexto compartido entre las distintas superficies de Quark IDE (por ahora: Quark Agent FAST/DEEP, y Quark Chat), para que lo que se investiga en una esté disponible como resumen en la otra — no solo dentro de la misma pantalla.
+
+═══════════════════════════════════════
+PARTE A — Funciones compartidas de lectura/escritura
+═══════════════════════════════════════
+Agrega esto en agent.ts, cerca de las funciones loadAgentContext/saveAgentContext existentes (no las reemplaces, son cosas distintas — esto es nuevo, un log compartido entre superficies):
+
+async function saveContextSummary(
+  repo: string,
+  summary: string,
+  origin: 'agent' | 'warroom' | 'chat' | 'test1',
+  sourceFiles: string[] = [],
+): Promise<void> {
+  try {
+    const key = `context-log:${repo}:${Date.now()}`;
+    await pool.query(
+      `INSERT INTO memory_entries (key, content, namespace) VALUES ($1, $2, $3)
+       ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
+      [key, JSON.stringify({ repo, summary, origin, sourceFiles, savedAt: Date.now() }), 'quark-shared-context'],
+    );
+  } catch (err) {
+    console.warn('[shared-context] save failed:', err instanceof Error ? err.message : err);
+  }
+}
+
+async function loadRecentContextSummaries(
+  repo: string,
+  maxAgeMinutes = 30,
+  limit = 5,
+): Promise<Array<{ summary: string; origin: string; sourceFiles: string[]; savedAt: number }>> {
+  try {
+    const r = await pool.query<{ content: string }>(
+      `SELECT content FROM memory_entries WHERE key LIKE $1 AND namespace = $2 ORDER BY timestamp DESC LIMIT $3`,
+      [`context-log:${repo}:%`, 'quark-shared-context', limit],
+    );
+    const cutoff = Date.now() - maxAgeMinutes * 60 * 1000;
+    return r.rows
+      .map(row => JSON.parse(row.content))
+      .filter(entry => entry.savedAt > cutoff);
+  } catch {
+    return [];
+  }
+}
+
+async function summarizeForSharedContext(text: string): Promise<string> {
+  const keys = getGroqKeys();
+  if (keys.length === 0 || !text.trim()) return '';
+  try {
+    return await callGroqAgent(
+      text.slice(0, 3000),
+      'Resume en máximo 4 líneas los datos concretos y específicos de este contenido: nombres propios, funciones, causas raíz de bugs, decisiones tomadas. Sé conciso — prioriza hechos específicos sobre descripciones generales.',
+      180,
+    );
+  } catch {
+    return '';
+  }
+}
+
+═══════════════════════════════════════
+PARTE B — Conectar en Quark Agent (modo READ PATH, después del análisis con IA)
+═══════════════════════════════════════
+Busca el bloque dentro del READ PATH donde ya se hace el análisis con generateWithFallback (el que produce las líneas "💡 ..." que se envían con send('action', ...)). Justo DESPUÉS de que ese análisis se complete exitosamente, agrega:
+
+const sharedSummary = await summarizeForSharedContext(analysis);
+if (sharedSummary) {
+  await saveContextSummary(repo, sharedSummary, 'agent', readFiles.map(f => f.path)).catch(() => {});
+}
+
+(usa el nombre real de la variable que contiene el texto del análisis y la lista de archivos leídos — ajusta a los nombres exactos que ya existen en ese bloque)
+
+═══════════════════════════════════════
+PARTE C — Conectar en runChatTurn (leer antes del triage, escribir después de responder)
+═══════════════════════════════════════
+LEER — antes de llamar a Groq para el triage, además del cacheHint que ya existe (el de loadAgentContext), agrega también los resúmenes compartidos:
+
+const sharedSummaries = await loadRecentContextSummaries(repo);
+const sharedHint = sharedSummaries.length > 0
+  ? `\n\nCONTEXTO ADICIONAL de otras herramientas de este sistema (Quark Agent, War Room) sobre este mismo repo, investigado recientemente:\n${sharedSummaries.map(s => `[${s.origin}] ${s.summary}`).join('\n')}`
+  : '';
+
+Y agrégalo también al cacheHint que se le pasa a buildTriagePrompt (concatenado).
+
+ESCRIBIR — después de que Groq responda sin escalar (el camino barato, cuando NO empieza con "NEEDS_TOOLS:"), agrega:
+
+const sharedSummary = await summarizeForSharedContext(groqAnswer);
+if (sharedSummary) {
+  await saveContextSummary(repo, sharedSummary, 'chat').catch(() => {});
+}
+
+Y también después de que Claude responda con texto (chat_message) tras haber usado tools — en el mismo punto donde ya se hace send('chat_message', { text: t.text }) dentro del loop, después de acumular el texto:
+
+// después del loop, o al final de la función, con el texto completo de las respuestas de Claude:
+const claudeSummary = await summarizeForSharedContext(/* texto acumulado de chat_message de Claude en este turno */);
+if (claudeSummary) {
+  await saveContextSummary(repo, claudeSummary, 'chat').catch(() => {});
+}
+
+Usa el patrón que mejor encaje con cómo está estructurado el loop actualmente — el objetivo es: cada vez que el chat da una respuesta sustancial (no un error, no un "necesito más contexto"), se guarda un resumen corto para que otras superficies lo aprovechen.
+
+═══════════════════════════════════════
+IMPORTANTE
+═══════════════════════════════════════
+Todas las llamadas a saveContextSummary deben ir con .catch(() => {}) o dentro de try/catch — un fallo al guardar el resumen NUNCA debe romper la respuesta al usuario, es una mejora silenciosa, no un paso crítico.
+
+Después de aplicar, prueba así:
+1. En modo FAST/DEEP de Quark Agent, pregunta algo sobre Core AI (por ejemplo los nombres de los agentes)
+2. Sin cerrar ni cambiar de repo, andá al modo CHAT y pregunta lo mismo — debería responder con Groq usando el resumen compartido, sin escalar a Claude, aunque sea la primera vez que le preguntás algo a CHAT en esa sesión

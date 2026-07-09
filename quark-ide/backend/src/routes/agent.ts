@@ -122,6 +122,59 @@ async function loadAgentContext(): Promise<{
   }
 }
 
+// ── Shared context (cross-surface: Agent ↔ Chat ↔ War Room) ───────────────────
+
+async function saveContextSummary(
+  repo: string,
+  summary: string,
+  origin: 'agent' | 'warroom' | 'chat' | 'test1',
+  sourceFiles: string[] = [],
+): Promise<void> {
+  try {
+    const key = `context-log:${repo}:${Date.now()}`;
+    await pool.query(
+      `INSERT INTO memory_entries (key, content, namespace) VALUES ($1, $2, $3)
+       ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
+      [key, JSON.stringify({ repo, summary, origin, sourceFiles, savedAt: Date.now() }), 'quark-shared-context'],
+    );
+  } catch (err) {
+    console.warn('[shared-context] save failed:', err instanceof Error ? err.message : err);
+  }
+}
+
+async function loadRecentContextSummaries(
+  repo: string,
+  maxAgeMinutes = 30,
+  limit = 5,
+): Promise<Array<{ summary: string; origin: string; sourceFiles: string[]; savedAt: number }>> {
+  try {
+    const r = await pool.query<{ content: string }>(
+      `SELECT content FROM memory_entries WHERE key LIKE $1 AND namespace = $2 ORDER BY timestamp DESC LIMIT $3`,
+      [`context-log:${repo}:%`, 'quark-shared-context', limit],
+    );
+    const cutoff = Date.now() - maxAgeMinutes * 60 * 1000;
+    return r.rows
+      .map(row => JSON.parse(row.content))
+      .filter(entry => entry.savedAt > cutoff);
+  } catch {
+    return [];
+  }
+}
+
+async function summarizeForSharedContext(text: string): Promise<string> {
+  const keys = getGroqKeys();
+  if (keys.length === 0 || !text.trim()) return '';
+  try {
+    return await callGroqAgent(
+      text.slice(0, 3000),
+      'Resume en máximo 4 líneas los datos concretos y específicos de este contenido: nombres propios, funciones, causas raíz de bugs, decisiones tomadas. Sé conciso — prioriza hechos específicos sobre descripciones generales.',
+      180,
+    );
+  } catch {
+    return '';
+  }
+}
+
 // ── Agent provider fallback chain ─────────────────────────────────────────────
 
 const GROQ_URL       = 'https://api.groq.com/openai/v1/chat/completions'
@@ -1161,6 +1214,12 @@ REGLAS GENERALES:
           const analysisLines = analysis.split('\n').map((l) => l.trim()).filter(Boolean);
           for (const line of analysisLines) {
             send('action', { text: `💡 ${line}` });
+          }
+
+          // Guardar en contexto compartido para otras superficies
+          const sharedSummary = await summarizeForSharedContext(analysis);
+          if (sharedSummary) {
+            await saveContextSummary(repo, sharedSummary, 'agent', readFiles.map(f => f.path)).catch(() => {});
           }
         } catch {
           send('action', { text: '⚠️ Análisis no disponible — revisa el contenido directamente' });
@@ -2245,6 +2304,13 @@ async function runChatTurn(
     }
   }
 
+  // Cargar resúmenes compartidos (de Agent, War Room, etc.) y concatenar al cacheHint
+  const sharedSummaries = await loadRecentContextSummaries(repo);
+  const sharedHint = sharedSummaries.length > 0
+    ? `\n\nCONTEXTO ADICIONAL de otras herramientas de este sistema (Quark Agent, War Room) sobre este mismo repo, investigado recientemente:\n${sharedSummaries.map(s => `[${s.origin}] ${s.summary}`).join('\n')}`
+    : '';
+  cacheHint = cacheHint + sharedHint;
+
   // messages is initialized here so both paths (simple escalation + complex) share it
   const messages: any[] = [
     ...history,
@@ -2260,6 +2326,11 @@ async function runChatTurn(
       send('chat_message', { text: groqAnswer });
       messages.push({ role: 'assistant', content: [{ type: 'text', text: groqAnswer }] });
       await saveChatHistory(sessionId, messages);
+      // Guardar resumen de la respuesta de Groq en contexto compartido
+      const groqSharedSummary = await summarizeForSharedContext(groqAnswer);
+      if (groqSharedSummary) {
+        await saveContextSummary(repo, groqSharedSummary, 'chat').catch(() => {});
+      }
       return;
     }
 
@@ -2314,7 +2385,17 @@ REGLAS:
     }
 
     const toolUses = data.content.filter((b: any) => b.type === 'tool_use');
-    if (toolUses.length === 0) break;
+    if (toolUses.length === 0) {
+      // Claude terminó sin más tool calls — guardar resumen de su respuesta
+      const claudeText = textBlocks.map((b: any) => b.text).join('\n');
+      if (claudeText.trim()) {
+        const claudeSharedSummary = await summarizeForSharedContext(claudeText);
+        if (claudeSharedSummary) {
+          await saveContextSummary(repo, claudeSharedSummary, 'chat').catch(() => {});
+        }
+      }
+      break;
+    }
 
     const toolResults: any[] = [];
     for (const tool of toolUses) {
