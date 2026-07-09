@@ -99,12 +99,16 @@ interface AgentEvent {
 
 // Local feed items (superset — includes synthetic 'code' events)
 interface FeedItem {
-  event: 'action' | 'file' | 'done' | 'error' | 'code' | 'replit_prompt';
+  event: 'action' | 'file' | 'done' | 'error' | 'code' | 'replit_prompt' | 'user_message' | 'chat_message' | 'patch_proposal';
   text?: string;
   path?: string;
   content?: string;
   file?: string;
   task?: string;
+  patchId?: string;
+  old_str?: string;
+  new_str?: string;
+  reasoning?: string;
 }
 
 interface CommitResult {
@@ -122,6 +126,14 @@ interface FixResult {
   branch: string;
 }
 
+interface ChatPatch {
+  id: string;
+  path: string;
+  old_str: string;
+  new_str: string;
+  reasoning: string;
+}
+
 const FIX_KEYWORDS = /\b(corrige|corrígeme|fix|arregla|repara|soluciona)\b/i;
 
 interface Props {
@@ -132,8 +144,8 @@ interface Props {
   onSendToWarRoom?: (brief: BoardBrief) => void;
 }
 
-const LS_REPO_KEY      = 'quark-agent-repo';
-const LS_DEEPMODE_KEY  = 'quark-agent-deepmode';
+const LS_REPO_KEY  = 'quark-agent-repo';
+const LS_MODE_KEY  = 'quark-agent-mode';
 
 export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPreview, initialPrompt, onSendToWarRoom }: Props) {
   const [prompt, setPrompt]               = useState('');
@@ -148,9 +160,12 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   const [commitResult, setCommitResult]   = useState<CommitResult | null>(null);
   const [isGeneratingHtml, setIsGeneratingHtml] = useState(false);
   const [fixResult, setFixResult]               = useState<FixResult | null>(null);
-  const [deepMode, setDeepMode]                 = useState(
-    () => localStorage.getItem(LS_DEEPMODE_KEY) === 'true',
-  );
+  const [mode, setMode]                         = useState<'fast' | 'deep' | 'chat'>(() => {
+    const m = localStorage.getItem(LS_MODE_KEY);
+    return (m === 'fast' || m === 'deep' || m === 'chat') ? m : 'fast';
+  });
+  const [chatSessionId]                         = useState(() => `chat-${Date.now()}`);
+  const [chatPatches, setChatPatches]           = useState<ChatPatch[]>([]);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [editableCommitMsg, setEditableCommitMsg] = useState('');
   const previewTriggeredRef = useRef(false);
@@ -166,9 +181,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
   // ── Session persistence ────────────────────────────────────────────────────
 
-  // Persist repo + deepMode prefs immediately to localStorage
+  // Persist repo + mode prefs immediately to localStorage
   useEffect(() => { localStorage.setItem(LS_REPO_KEY, selectedRepo); }, [selectedRepo]);
-  useEffect(() => { localStorage.setItem(LS_DEEPMODE_KEY, String(deepMode)); }, [deepMode]);
+  useEffect(() => { localStorage.setItem(LS_MODE_KEY, mode); }, [mode]);
 
   // Load feed + result from DB on mount
   useEffect(() => {
@@ -338,6 +353,67 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     if (!text || running) return;
     currentPromptRef.current = text;
     if (agentTextareaRef.current) agentTextareaRef.current.style.height = '44px';
+
+    // ── CHAT MODE — appends to feed, does not reset session ─────────────────
+    if (mode === 'chat') {
+      setRunning(true);
+      setFeed(prev => [...prev, { event: 'user_message', text }]);
+      try {
+        const res = await fetch(`${API_BASE}/agent/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text, repo: selectedRepo, sessionId: chatSessionId }),
+        });
+        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        const processBlock = (block: string) => {
+          for (const line of block.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const parsed = JSON.parse(line.slice(6)) as {
+                event: string; text?: string; path?: string;
+                old_str?: string; new_str?: string; reasoning?: string;
+              };
+              if (parsed.event === 'chat_message') {
+                setFeed(prev => [...prev, { event: 'chat_message', text: parsed.text }]);
+              } else if (parsed.event === 'patch_proposal') {
+                const patchId = `patch-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+                setFeed(prev => [...prev, {
+                  event: 'patch_proposal', patchId,
+                  path: parsed.path, old_str: parsed.old_str,
+                  new_str: parsed.new_str, reasoning: parsed.reasoning,
+                }]);
+                setChatPatches(prev => [...prev, {
+                  id: patchId, path: parsed.path!,
+                  old_str: parsed.old_str!, new_str: parsed.new_str!,
+                  reasoning: parsed.reasoning ?? '',
+                }]);
+              } else if (parsed.event === 'action') {
+                setFeed(prev => [...prev, { event: 'action', text: parsed.text }]);
+              } else if (parsed.event === 'error') {
+                setFeed(prev => [...prev, { event: 'error', text: parsed.text }]);
+              }
+            } catch (e) { console.warn('[Chat] Parse error:', e); }
+          }
+        };
+        while (true) {
+          const { done, value } = await reader.read();
+          if (value) buffer += decoder.decode(value, { stream: !done });
+          const blocks = buffer.split('\n\n');
+          buffer = done ? '' : (blocks.pop() ?? '');
+          for (const block of blocks) processBlock(block);
+          if (done) { if (buffer.trim()) processBlock(buffer); break; }
+        }
+      } catch (err) {
+        setFeed(prev => [...prev, { event: 'error', text: err instanceof Error ? err.message : String(err) }]);
+      } finally {
+        setRunning(false);
+      }
+      return;
+    }
+
     setRunning(true);
     setFeed([]);
     setResult(null);
@@ -364,7 +440,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           repo:        selectedRepo,
           branch:      activeProject.branch,
           projectName: activeProject.name,
-          deepMode,
+          deepMode:    mode === 'deep',
         }),
       });
 
@@ -533,6 +609,35 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     }
   }
 
+  async function commitChatPatches() {
+    if (!chatPatches.length || committing) return;
+    setCommitting(true);
+    let committed = 0;
+    for (const patch of chatPatches) {
+      try {
+        const res = await fetch(`${API_BASE}/agent/apply-patch`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo: selectedRepo, path: patch.path, old_str: patch.old_str, new_str: patch.new_str }),
+        });
+        const data = await res.json() as { ok: boolean; error?: string };
+        if (data.ok) {
+          committed++;
+          setFeed(prev => [...prev, { event: 'action', text: `✅ Patch commiteado: ${patch.path}` }]);
+        } else {
+          setFeed(prev => [...prev, { event: 'error', text: `❌ ${patch.path}: ${data.error ?? 'Error al aplicar'}` }]);
+        }
+      } catch (err) {
+        setFeed(prev => [...prev, { event: 'error', text: `❌ ${patch.path}: ${err instanceof Error ? err.message : String(err)}` }]);
+      }
+    }
+    setChatPatches([]);
+    if (committed > 0) {
+      setFeed(prev => [...prev, { event: 'action', text: `🎉 ${committed} patch(es) commiteados en ${selectedRepo}` }]);
+    }
+    setCommitting(false);
+  }
+
   const shortSha    = commitResult?.sha.slice(0, 7) ?? '';
   const githubUrl   = commitResult
     ? `https://github.com/${commitResult.owner}/${commitResult.repo}/commit/${commitResult.sha}`
@@ -681,6 +786,124 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               ❌ {ev.text}
             </div>
           );
+
+          if (ev.event === 'user_message') return (
+            <div key={i} style={{
+              alignSelf: 'flex-end', maxWidth: '80%',
+              background: '#3b0764', border: '1px solid #5b21b6',
+              borderRadius: '10px 10px 2px 10px', padding: '8px 12px',
+              color: '#e9d5ff', fontSize: 12, lineHeight: 1.6,
+              fontFamily: 'system-ui, sans-serif', whiteSpace: 'pre-wrap',
+            }}>
+              {ev.text}
+            </div>
+          );
+
+          if (ev.event === 'chat_message') return (
+            <div key={i} style={{
+              background: '#0f1629', border: '1px solid #1e2d5c',
+              borderLeft: '2px solid #38bdf8',
+              borderRadius: '2px 10px 10px 10px', padding: '10px 14px',
+              color: '#e2e8f0', fontSize: 12, lineHeight: 1.75,
+              fontFamily: 'system-ui, sans-serif', whiteSpace: 'pre-wrap',
+              maxWidth: '92%',
+            }}>
+              {ev.text}
+            </div>
+          );
+
+          if (ev.event === 'patch_proposal') {
+            const oldLines = (ev.old_str ?? '').split('\n');
+            const newLines = (ev.new_str ?? '').split('\n');
+            const isRejected = !chatPatches.some(p => p.id === ev.patchId);
+            return (
+              <div key={i} style={{
+                border: `1px solid ${isRejected ? '#2d1515' : '#5b21b6'}`,
+                borderLeft: `2px solid ${isRejected ? '#3a3a5c' : '#a78bfa'}`,
+                borderRadius: 6, overflow: 'hidden', background: '#0c0c1e',
+                opacity: isRejected ? 0.45 : 1, transition: 'opacity 0.2s',
+              }}>
+                {/* header */}
+                <div style={{
+                  padding: '5px 10px', borderBottom: '1px solid #1e1e3f',
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  background: '#0a0a16',
+                }}>
+                  <span style={{ color: '#a78bfa', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+                    📝 {ev.path}
+                  </span>
+                  {!isRejected ? (
+                    <button
+                      onClick={() => setChatPatches(prev => prev.filter(p => p.id !== ev.patchId))}
+                      style={{
+                        background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.35)',
+                        borderRadius: 4, color: '#f87171',
+                        fontSize: 9, fontWeight: 700, padding: '2px 8px',
+                        fontFamily: 'JetBrains Mono, monospace', cursor: 'pointer',
+                        letterSpacing: '0.04em',
+                      }}
+                    >
+                      ✕ Rechazar
+                    </button>
+                  ) : (
+                    <span style={{ color: '#3a3a5c', fontSize: 9, fontFamily: 'JetBrains Mono, monospace' }}>rechazado</span>
+                  )}
+                </div>
+                {/* reasoning */}
+                {ev.reasoning && (
+                  <div style={{
+                    padding: '5px 10px', color: '#6b7280', fontSize: 10,
+                    fontFamily: 'JetBrains Mono, monospace', borderBottom: '1px solid #1a1a2e',
+                  }}>
+                    {ev.reasoning}
+                  </div>
+                )}
+                {/* diff — two columns */}
+                <div style={{ display: 'flex', gap: 0 }}>
+                  <div style={{ flex: 1, minWidth: 0, borderRight: '1px solid #1a1a2e' }}>
+                    <div style={{
+                      padding: '2px 8px', color: '#3a3a5c', fontSize: 9,
+                      fontFamily: 'JetBrains Mono, monospace',
+                      borderBottom: '1px solid #1a1a2e', background: '#080810',
+                    }}>ANTES</div>
+                    <div style={{
+                      fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                      lineHeight: 1.55, padding: '6px 4px',
+                      whiteSpace: 'pre-wrap', overflowX: 'auto',
+                      maxHeight: 220, overflowY: 'auto',
+                    }}>
+                      {oldLines.map((line, li) => (
+                        <div key={li} style={{ display: 'flex', background: 'rgba(239,68,68,0.12)', minHeight: '1.55em' }}>
+                          <span style={{ color: '#2a2a4a', userSelect: 'none', minWidth: 28, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>{li + 1}</span>
+                          <span style={{ color: '#fca5a5' }}>{line || ' '}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{
+                      padding: '2px 8px', color: '#3a3a5c', fontSize: 9,
+                      fontFamily: 'JetBrains Mono, monospace',
+                      borderBottom: '1px solid #1a1a2e', background: '#080810',
+                    }}>DESPUÉS</div>
+                    <div style={{
+                      fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
+                      lineHeight: 1.55, padding: '6px 4px',
+                      whiteSpace: 'pre-wrap', overflowX: 'auto',
+                      maxHeight: 220, overflowY: 'auto',
+                    }}>
+                      {newLines.map((line, li) => (
+                        <div key={li} style={{ display: 'flex', background: 'rgba(34,197,94,0.08)', minHeight: '1.55em' }}>
+                          <span style={{ color: '#2a2a4a', userSelect: 'none', minWidth: 28, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>{li + 1}</span>
+                          <span style={{ color: '#86efac' }}>{line || ' '}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          }
 
           if (ev.event === 'replit_prompt') return (
             <div key={i} style={{
@@ -1118,6 +1341,28 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           </div>
         )}
 
+        {/* ── CHAT MODE commit panel ─────────────────────────────────────────── */}
+        {mode === 'chat' && chatPatches.length > 0 && !running && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+            <button
+              onClick={commitChatPatches}
+              disabled={committing}
+              style={{
+                background: committing ? '#1e1e3f' : 'rgba(124,58,237,0.12)',
+                border: `1px solid ${committing ? '#1e1e3f' : '#4c1d95'}`,
+                borderRadius: 6, color: committing ? '#3a3a5c' : '#a78bfa',
+                fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700,
+                padding: '9px 12px', cursor: committing ? 'not-allowed' : 'pointer',
+                letterSpacing: '0.04em', transition: 'background 0.15s', width: '100%',
+              }}
+              onMouseEnter={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(124,58,237,0.22)'; }}
+              onMouseLeave={(e) => { if (!committing) e.currentTarget.style.background = 'rgba(124,58,237,0.12)'; }}
+            >
+              {committing ? '⟳ Committing patches…' : `✅ Aprobar y commitear ${chatPatches.length} patch(es)`}
+            </button>
+          </div>
+        )}
+
         {/* Enviar a War Room */}
         {result && onSendToWarRoom && (
           <button
@@ -1379,11 +1624,11 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
             MODO
           </span>
           <button
-            onClick={() => setDeepMode(false)}
+            onClick={() => setMode('fast')}
             style={{
-              background: !deepMode ? 'rgba(0,255,136,0.15)' : 'transparent',
-              border: `1px solid ${!deepMode ? '#00ff88' : '#1e1e3f'}`,
-              borderRadius: 4, color: !deepMode ? '#00ff88' : '#3a3a5c',
+              background: mode === 'fast' ? 'rgba(0,255,136,0.15)' : 'transparent',
+              border: `1px solid ${mode === 'fast' ? '#00ff88' : '#1e1e3f'}`,
+              borderRadius: 4, color: mode === 'fast' ? '#00ff88' : '#3a3a5c',
               fontSize: 10, fontWeight: 700, padding: '3px 8px', cursor: 'pointer',
               fontFamily: 'JetBrains Mono, monospace',
             }}
@@ -1391,16 +1636,28 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
             ⚡ FAST
           </button>
           <button
-            onClick={() => setDeepMode(true)}
+            onClick={() => setMode('deep')}
             style={{
-              background: deepMode ? 'rgba(124,58,237,0.15)' : 'transparent',
-              border: `1px solid ${deepMode ? '#7c3aed' : '#1e1e3f'}`,
-              borderRadius: 4, color: deepMode ? '#a78bfa' : '#3a3a5c',
+              background: mode === 'deep' ? 'rgba(124,58,237,0.15)' : 'transparent',
+              border: `1px solid ${mode === 'deep' ? '#7c3aed' : '#1e1e3f'}`,
+              borderRadius: 4, color: mode === 'deep' ? '#a78bfa' : '#3a3a5c',
               fontSize: 10, fontWeight: 700, padding: '3px 8px', cursor: 'pointer',
               fontFamily: 'JetBrains Mono, monospace',
             }}
           >
             🧠 DEEP
+          </button>
+          <button
+            onClick={() => setMode('chat')}
+            style={{
+              background: mode === 'chat' ? 'rgba(56,189,248,0.15)' : 'transparent',
+              border: `1px solid ${mode === 'chat' ? '#38bdf8' : '#1e1e3f'}`,
+              borderRadius: 4, color: mode === 'chat' ? '#38bdf8' : '#3a3a5c',
+              fontSize: 10, fontWeight: 700, padding: '3px 8px', cursor: 'pointer',
+              fontFamily: 'JetBrains Mono, monospace',
+            }}
+          >
+            💬 CHAT
           </button>
         </div>
 
@@ -1460,7 +1717,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           disabled={running || !prompt.trim()}
           style={{ flexShrink: 0, fontSize: 11 }}
         >
-          {running ? '⟳' : '⚡ GEN'}
+          {running ? '⟳' : mode === 'chat' ? '💬 SEND' : '⚡ GEN'}
         </button>
         </div>
       </div>
