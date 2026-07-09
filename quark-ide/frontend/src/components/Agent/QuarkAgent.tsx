@@ -351,6 +351,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   async function generate(promptOverride?: string) {
     const text = (promptOverride ?? prompt).trim();
     if (!text || running) return;
+    setPrompt('');
     currentPromptRef.current = text;
     if (agentTextareaRef.current) agentTextareaRef.current.style.height = '44px';
 
