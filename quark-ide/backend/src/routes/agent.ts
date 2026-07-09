@@ -168,7 +168,7 @@ async function summarizeForSharedContext(text: string): Promise<string> {
   try {
     const result = await callGroqAgent(
       text.slice(0, 3000),
-      'Resume en máximo 4 líneas los datos concretos y específicos de este contenido: nombres propios, funciones, causas raíz de bugs, decisiones tomadas. Sé conciso — prioriza hechos específicos sobre descripciones generales.',
+      'Resume en máximo 4 líneas los datos concretos de este contenido. REGLAS ESTRICTAS: (1) Conservá los nombres técnicos exactamente como aparecen — no los parafrasees ni generalices. (2) Describí los mecanismos específicos que aparecen en el texto, no sus equivalentes genéricos. (3) No agregues "probablemente", "podría", ni ningún hedging que no estuviera en el original. (4) Prioriza: nombres de funciones/clases/variables → flujos de control específicos → valores y configuraciones concretas → propósito de cada pieza.',
       180,
     );
     console.log('[shared-context] summarize OK — chars:', result.length);
@@ -2197,7 +2197,8 @@ function classifyComplexity(message: string): 'simple' | 'complex' {
 function buildTriagePrompt(cacheHint: string): string {
   return `Responde de forma breve y directa, usando SOLO tu conocimiento general — no tienes acceso a herramientas ni al código real del repo.
 ${cacheHint}
-IMPORTANTE: si la pregunta es sobre algo ESPECÍFICO de este proyecto (nombres de agentes/componentes propios, funciones particulares, arquitectura específica de este repo) y NO tenés ese dato exacto en la sección "archivos ya investigados" de arriba, NO completes con conocimiento genérico de IA/programación — responde ÚNICAMENTE con "NEEDS_TOOLS: " seguido de una razón breve.
+SOBRE EL CONTEXTO ADICIONAL: si aparece una sección "RESUMEN" o "CONTEXTO ADICIONAL" arriba, ese contenido proviene de una inspección real del código fuente de este mismo repo, hecha por este sistema hace menos de 30 minutos — no es una suposición ni una fuente externa incierta. Tratá esos datos como hechos verificados: usá los nombres exactos que aparecen ahí, no los parafrasees, y no agregues disclaimers como "probablemente", "podría ser" o "esto puede variar" sobre información que ya está confirmada.
+IMPORTANTE: si la pregunta es sobre algo ESPECÍFICO de este proyecto (nombres de agentes/componentes propios, funciones particulares, arquitectura específica de este repo) y NO tenés ese dato exacto en el contexto de arriba, NO completes con conocimiento genérico de IA/programación — responde ÚNICAMENTE con "NEEDS_TOOLS: " seguido de una razón breve.
 Si la pregunta es genuinamente genérica (conceptos estándar de programación, definiciones de libro) SÍ podés responder normal, sin ese prefijo.`;
 }
 
