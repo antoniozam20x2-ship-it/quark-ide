@@ -163,14 +163,18 @@ async function loadRecentContextSummaries(
 
 async function summarizeForSharedContext(text: string): Promise<string> {
   const keys = getGroqKeys();
-  if (keys.length === 0 || !text.trim()) return '';
+  if (!text.trim()) { console.warn('[shared-context] summarize — text vacío'); return ''; }
+  if (keys.length === 0) { console.warn('[shared-context] summarize — sin Groq keys'); return ''; }
   try {
-    return await callGroqAgent(
+    const result = await callGroqAgent(
       text.slice(0, 3000),
       'Resume en máximo 4 líneas los datos concretos y específicos de este contenido: nombres propios, funciones, causas raíz de bugs, decisiones tomadas. Sé conciso — prioriza hechos específicos sobre descripciones generales.',
       180,
     );
-  } catch {
+    console.log('[shared-context] summarize OK — chars:', result.length);
+    return result;
+  } catch (err) {
+    console.warn('[shared-context] summarize failed:', err instanceof Error ? err.message : err);
     return '';
   }
 }
@@ -1066,6 +1070,11 @@ router.post('/generate', async (req, res) => {
           repo,
           branch,
         });
+        // Guardar en contexto compartido (FAST READ PATH)
+        const fastSharedSummary = await summarizeForSharedContext(finalContent);
+        const fastSummaryText = fastSharedSummary || `Archivo leído: ${filePath}`;
+        await saveContextSummary(repo, fastSummaryText, 'agent', [filePath])
+          .catch(err => console.warn('[shared-context] FAST PATH save failed:', err instanceof Error ? err.message : err));
       } catch (e: any) {
         send('action', { text: `⚠️ No se pudo leer ${filePath}: ${e.message}` });
         send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
@@ -1218,9 +1227,9 @@ REGLAS GENERALES:
 
           // Guardar en contexto compartido para otras superficies
           const sharedSummary = await summarizeForSharedContext(analysis);
-          if (sharedSummary) {
-            await saveContextSummary(repo, sharedSummary, 'agent', readFiles.map(f => f.path)).catch(() => {});
-          }
+          const sharedSummaryText = sharedSummary || `Archivos analizados: ${readFiles.map(f => f.path).join(', ')}`;
+          await saveContextSummary(repo, sharedSummaryText, 'agent', readFiles.map(f => f.path))
+            .catch(err => console.warn('[shared-context] READ PATH save failed:', err instanceof Error ? err.message : err));
         } catch {
           send('action', { text: '⚠️ Análisis no disponible — revisa el contenido directamente' });
         }
