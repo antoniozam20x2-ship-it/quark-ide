@@ -38,6 +38,7 @@ export default function App() {
   const [boardBrief, setBoardBrief]       = useState<BoardBrief | null>(null);
   const [agentPreviewPending, setAgentPreviewPending] = useState(false);
   const [pipelinePrompt, setPipelinePrompt] = useState<string>('');
+  const [initialChatMessage, setInitialChatMessage] = useState<string>('');
   const [studioBrief, setStudioBrief] = useState<string>('');
   const [studioInitialHtml, setStudioInitialHtml] = useState<string | undefined>();
   const [studioInitialProjectId, setStudioInitialProjectId] = useState<number | undefined>();
@@ -83,7 +84,7 @@ export default function App() {
             onSendToBoard={(brief) => { setBoardBrief(brief); setPage('warroom'); }}
             onSendToStudio={(brief) => { setStudioBrief(brief); setPage('studio'); }}
             onSendToStudioWithProject={handleSendToStudioWithProject}
-            onSendToAgent={(prompt) => { setPipelinePrompt(prompt); setPage('agent'); }}
+            onSendToAgent={(prompt) => { setInitialChatMessage(prompt); setPage('chat'); }}
             autoShowPreview={agentPreviewPending}
             onPreviewShown={() => setAgentPreviewPending(false)}
             initialPrompt={pipelinePrompt}
@@ -134,6 +135,7 @@ export default function App() {
               repo={activeProject.repo}
               activeProject={activeProject}
               onProjectChange={setActiveProject}
+              initialMessage={initialChatMessage}
             />
           </div>
         )}

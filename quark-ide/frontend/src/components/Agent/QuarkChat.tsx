@@ -20,15 +20,20 @@ interface QuarkChatProps {
   repo: string;
   activeProject: Project;
   onProjectChange: (p: Project) => void;
+  initialMessage?: string;
 }
 
-export default function QuarkChat({ repo, activeProject, onProjectChange }: QuarkChatProps) {
+export default function QuarkChat({ repo, activeProject, onProjectChange, initialMessage }: QuarkChatProps) {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState('');
   const [pendingPatch, setPendingPatch] = useState<PendingPatch | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [sessionId] = useState(() => `session-${Date.now()}`);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (initialMessage) setInput(initialMessage);
+  }, [initialMessage]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
