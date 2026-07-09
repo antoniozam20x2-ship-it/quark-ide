@@ -1216,7 +1216,11 @@ REGLAS GENERALES:
 - NUNCA muestres archivos completos
 - NUNCA dumpees más de 30 líneas de código
 - Si la respuesta requiere más contexto → pídelo explícitamente
-- Sin markdown, sin headers con #, sin asteriscos`,
+- Sin markdown, sin headers con #, sin asteriscos
+
+REGLA ANTI-ALUCINACIÓN — ES LA MÁS IMPORTANTE:
+Si el contenido de los archivos leídos NO menciona específicamente lo que el usuario pregunta (el término, componente, función o concepto exacto que buscaba), decilo con claridad y detenete ahí. Ejemplo: "No encontré referencias a [lo que preguntó] en los archivos revisados ([lista de archivos]). Puede estar en otro módulo o bajo un nombre distinto."
+NUNCA completes la respuesta con una definición genérica de programación o IA disfrazada de respuesta específica del proyecto. Si los archivos leídos no tienen la respuesta, la respuesta correcta es admitirlo — no inventar una explicación plausible.`,
           );
 
           // Stream each non-empty line as its own action event
