@@ -1185,7 +1185,8 @@ Cada afirmación específica sobre el comportamiento del código (qué activa al
 Formato: la afirmación, seguida de la línea o condición literal entre backticks que la prueba.
 Ejemplo malo: "checkS1Bull se activa en tendencia alcista. Está en tradingLogic.ts."
 Ejemplo bueno: "checkS1Bull se activa en tendencia alcista — la condición \`stDirArr[i] === -1\` (que corresponde a stBull) es parte del retorno de la función."
-Si no podés citar el fragmento exacto que sustenta una afirmación, no la incluyas — es señal de que estás infiriendo en vez de leyendo.`,
+Si no podés citar el fragmento exacto que sustenta una afirmación, no la incluyas — es señal de que estás infiriendo en vez de leyendo.
+Si el código tiene dos funciones o ramas similares y opuestas (ej. una versión "Bull"/"alcista" y otra "Bear"/"bajista", o un "if" y su "else" equivalente), tratalas por separado — no mezcles las condiciones de ambas en un mismo párrafo. Indicá explícitamente qué condición pertenece a cuál.`,
           );
 
           // Stream each non-empty line as its own action event
@@ -2173,7 +2174,8 @@ RESULTADO PARCIAL vs. CONCLUSIÓN DEFINITIVA: si el contexto disponible solo cub
 REGLA DE ANCLAJE POR AFIRMACIÓN:
 Cada afirmación específica sobre el comportamiento del código (qué activa algo, qué condición dispara qué, cómo se relacionan dos variables) debe ir acompañada del fragmento de código exacto del resumen o contexto que la sustenta — no solo el nombre del archivo.
 Formato: la afirmación, seguida de la línea o condición literal entre backticks que la prueba.
-Si no podés citar el fragmento exacto que sustenta una afirmación, no la incluyas — es señal de que estás infiriendo en vez de leyendo.`;
+Si no podés citar el fragmento exacto que sustenta una afirmación, no la incluyas — es señal de que estás infiriendo en vez de leyendo.
+Si el código tiene dos funciones o ramas similares y opuestas (ej. una versión "Bull"/"alcista" y otra "Bear"/"bajista", o un "if" y su "else" equivalente), tratalas por separado — no mezcles las condiciones de ambas en un mismo párrafo. Indicá explícitamente qué condición pertenece a cuál.`;
 }
 
 router.post('/apply-patch', async (req, res) => {
@@ -2336,7 +2338,7 @@ REGLAS:
 - Cuando encuentres algo que amerite un cambio de código, usa propose_patch (no apply_patch directo) — el usuario decide si lo aplica.
 - Si el usuario solo está preguntando o pidiendo una explicación, responde en texto normal, sin usar tools de escritura.
 - Sé directo. No expliques de más si no te lo piden.
-- REGLA DE ANCLAJE POR AFIRMACIÓN: cada afirmación específica sobre el comportamiento del código (qué activa algo, qué condición dispara qué, cómo se relacionan dos variables) debe ir acompañada del fragmento de código exacto que la sustenta — no solo el nombre del archivo. Formato: la afirmación, seguida de la línea o condición literal entre backticks. Si no podés citar el fragmento exacto, no hagas la afirmación — es señal de que estás infiriendo en vez de leyendo.`;
+- REGLA DE ANCLAJE POR AFIRMACIÓN: cada afirmación específica sobre el comportamiento del código (qué activa algo, qué condición dispara qué, cómo se relacionan dos variables) debe ir acompañada del fragmento de código exacto que la sustenta — no solo el nombre del archivo. Formato: la afirmación, seguida de la línea o condición literal entre backticks. Si no podés citar el fragmento exacto, no hagas la afirmación — es señal de que estás infiriendo en vez de leyendo. Si el código tiene dos funciones o ramas similares y opuestas (ej. "Bull"/"alcista" vs "Bear"/"bajista", o un "if" y su "else"), tratalas por separado — no mezcles las condiciones de ambas en un mismo párrafo. Indicá explícitamente qué condición pertenece a cuál.`;
 
   for (let step = 0; step < maxToolSteps; step++) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
