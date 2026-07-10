@@ -722,10 +722,10 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               t.startsWith('⚠️')          ? '#FFD93D' :
               t.startsWith('🎯')          ? '#00D4FF' :
               (t.startsWith('🔍') || t.startsWith('📖') || t.startsWith('📂') || t.startsWith('⚡')) ? '#6b7280' :
-              '#00ff88';
+              '#4ade80';
             if (isAnalysis) {
               return (
-                <div key={i} style={{ fontSize: 12, lineHeight: 1.6, color: '#00ff88', paddingLeft: 2 }}>
+                <div key={i} style={{ fontSize: 12, lineHeight: 1.6, color: '#d4d4dc', paddingLeft: 2 }}>
                   <ReactMarkdown
                     components={{
                       p: ({ children }) => <span style={{ display: 'block' }}>{children}</span>,
@@ -736,7 +736,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                         <code style={{
                           background: '#0a0a16',
                           border: '1px solid #1e1e3f',
-                          color: '#7c3aed',
+                          color: '#a78bfa',
                           borderRadius: 3,
                           padding: '1px 5px',
                           fontSize: 11,
