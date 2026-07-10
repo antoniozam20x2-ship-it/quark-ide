@@ -85,7 +85,7 @@ function toPairedRows(diff: DiffLine[]): PairedRow[] {
 
 // Server-sent event shape
 interface AgentEvent {
-  event: 'action' | 'file' | 'done' | 'error' | 'replit_prompt';
+  event: 'action' | 'file' | 'done' | 'error' | 'replit_prompt' | 'confidence';
   text?: string;
   path?: string;
   file?: string;
@@ -96,6 +96,11 @@ interface AgentEvent {
   mainContent?: string;
   repo?: string;
   branch?: string;
+  // confidence event fields
+  level?: 'high' | 'medium' | 'low';
+  reason?: string;
+  suggestedAction?: 'deep' | 'chat';
+  diagnosis?: string;
 }
 
 // Local feed items (superset — includes synthetic 'code' events)
