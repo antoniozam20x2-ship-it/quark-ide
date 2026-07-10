@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
 import type { Project, BoardBrief } from '../../App';
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
@@ -711,16 +712,44 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         {feed.map((ev, i) => {
           if (ev.event === 'action') {
             const t = ev.text ?? '';
+            const isAnalysis = t.startsWith('💡');
             const actionColor =
               t.startsWith('CAUSA:')    ? '#FF6B6B' :
               t.startsWith('DÓNDE:')    ? '#00D4FF' :
               t.startsWith('POR QUÉ:') ? '#FFD93D' :
               t.startsWith('SOLUCIÓN:') ? '#6BCB77' :
-              t.startsWith('💡')          ? '#00ff88' :
+              isAnalysis                 ? '#00ff88' :
               t.startsWith('⚠️')          ? '#FFD93D' :
               t.startsWith('🎯')          ? '#00D4FF' :
               (t.startsWith('🔍') || t.startsWith('📖') || t.startsWith('📂') || t.startsWith('⚡')) ? '#6b7280' :
               '#00ff88';
+            if (isAnalysis) {
+              return (
+                <div key={i} style={{ fontSize: 12, lineHeight: 1.6, color: '#00ff88', paddingLeft: 2 }}>
+                  <ReactMarkdown
+                    components={{
+                      p: ({ children }) => <span style={{ display: 'block' }}>{children}</span>,
+                      strong: ({ children }) => (
+                        <strong style={{ fontWeight: 700, color: '#ffffff' }}>{children}</strong>
+                      ),
+                      code: ({ children }) => (
+                        <code style={{
+                          background: '#0a0a16',
+                          border: '1px solid #1e1e3f',
+                          color: '#7c3aed',
+                          borderRadius: 3,
+                          padding: '1px 5px',
+                          fontSize: 11,
+                          fontFamily: 'JetBrains Mono, monospace',
+                        }}>{children}</code>
+                      ),
+                    }}
+                  >
+                    {t}
+                  </ReactMarkdown>
+                </div>
+              );
+            }
             return (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ color: actionColor, fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
