@@ -1,0 +1,75 @@
+Archivo: src/routes/agent.ts (o donde esté el router de Quark Agent)
+
+Contexto: Estoy en el READ PATH de POST /generate (resolvedIntent === 'read'), 
+específicamente en el bloque "// ── AI analysis of read content ──" donde se 
+llama a generateWithFallback() para analizar los archivos leídos en modo FAST.
+
+CAMBIO 1 — Backend, autoevaluación de confianza:
+
+Al system prompt que ya existe ahí (el que empieza con "Eres un experto analista 
+de código senior..."), agrega esta sección nueva al final, antes de la 
+"REGLA ANTI-ALUCINACIÓN":
+
+REGLA DE AUTOEVALUACIÓN — SIEMPRE al final de tu respuesta, agrega esta línea exacta:
+CONFIDENCE: [high|medium|low] | REASON: [una razón breve]
+
+Usa estos criterios:
+- "high": el problema está contenido en un solo archivo, sin dependencias de 
+  otras funciones/timers/loops externos a lo ya leído.
+- "medium": el problema probablemente involucra otras funciones o archivos no 
+  leídos todavía.
+- "low": la búsqueda solo tocó 1 término o 1 archivo, o el diagnóstico es 
+  parcial/no concluyente.
+
+Si detectás que el código depende de un flujo de control (setInterval, funciones 
+que se llaman entre sí, banderas de estado compartidas entre múltiples archivos), 
+NUNCA marques "high" aunque el fragmento que viste parezca suficiente.
+
+Después de recibir la variable `analysis` (resultado de generateWithFallback), 
+agrega este parsing ANTES de hacer el split por líneas para el send('action', ...):
+
+const confMatch = analysis.match(/CONFIDENCE:\s*(high|medium|low)\s*\|\s*REASON:\s*(.+)/i);
+const confidence = confMatch?.[1]?.toLowerCase() ?? 'medium';
+const confidenceReason = confMatch?.[2]?.trim() ?? '';
+const cleanAnalysis = analysis.replace(/CONFIDENCE:.*$/im, '').trim();
+
+Usa cleanAnalysis en vez de analysis para las líneas que se mandan con 
+send('action', { text: `💡 ${line}` }).
+
+Justo antes del send('done', {...}) de esa misma rama read, agrega:
+
+const suggestedAction = confidence === 'high' ? 'deep' : 'chat';
+send('confidence', {
+  level: confidence,
+  reason: confidenceReason,
+  suggestedAction,
+  files: readFiles.map(f => f.path),
+  diagnosis: cleanAnalysis,
+});
+
+CAMBIO 2 — Frontend, botones de hand-off:
+
+En el componente de FAST mode del frontend (busca dónde se escuchan los eventos 
+SSE tipo 'action', 'file', 'done' del stream de /generate), agrega un listener 
+para el evento 'confidence' y guarda ese payload en el estado del componente.
+
+Cuando llegue ese evento, renderiza tres botones debajo de la respuesta de FAST 
+(mismo estilo visual que los botones "Enviar al Board / Studio / Agent" que ya 
+existen en QUARK CHAT):
+
+[ ⚡ Enviar a DEEP ]   — resaltado si suggestedAction === 'deep'
+[ 💬 Enviar a CHAT ]   — resaltado si suggestedAction === 'chat'  
+[ 🤖 Claude Code ]     — deshabilitado (disabled), placeholder para integración futura
+
+Al hacer click en "Enviar a DEEP": cambiar al tab/modo DEEP y pre-llenar el input con:
+`[DEEP][MODIFICAR] En ${files[0]}, corrige: ${diagnosis}`
+
+Al hacer click en "Enviar a CHAT": cambiar al tab CHAT y enviar automáticamente 
+como primer mensaje:
+`Continuemos el diagnóstico de FAST mode. Archivos ya revisados: ${files.join(', ')}. 
+Diagnóstico parcial: ${diagnosis}. Verifica si hay dependencias externas (timers, 
+funciones que llaman a esto, loops que podrían apagar la condición) antes de 
+proponer un fix.`
+
+No toques ninguna otra lógica del READ PATH ni del resto del archivo — solo estos 
+dos bloques (system prompt + evento confidence en backend, botones + handlers en frontend).

@@ -135,6 +135,14 @@ interface ChatPatch {
   reasoning: string;
 }
 
+interface ConfidencePayload {
+  level: 'high' | 'medium' | 'low';
+  reason: string;
+  suggestedAction: 'deep' | 'chat';
+  files: string[];
+  diagnosis: string;
+}
+
 const FIX_KEYWORDS = /\b(corrige|corrígeme|fix|arregla|repara|soluciona)\b/i;
 
 interface Props {
@@ -169,10 +177,12 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   const [chatPatches, setChatPatches]           = useState<ChatPatch[]>([]);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [editableCommitMsg, setEditableCommitMsg] = useState('');
+  const [confidencePayload, setConfidencePayload] = useState<ConfidencePayload | null>(null);
   const previewTriggeredRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const agentTextareaRef = useRef<HTMLTextAreaElement>(null);
   const currentPromptRef = useRef('');
+  const pendingAutoSendRef = useRef<string | null>(null);
 
   // Keep a live ref so closures in useEffect always read the current value
   const isBackend = isBackendProject(activeProject.name);
@@ -349,6 +359,15 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     }
   }
 
+  // Auto-send to CHAT after mode switch triggered by confidence hand-off button
+  useEffect(() => {
+    if (mode === 'chat' && pendingAutoSendRef.current) {
+      const msg = pendingAutoSendRef.current;
+      pendingAutoSendRef.current = null;
+      generate(msg);
+    }
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function generate(promptOverride?: string) {
     const text = (promptOverride ?? prompt).trim();
     if (!text || running) return;
@@ -422,6 +441,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     setHasReadResult(false);
     setFixResult(null);
     setCommitResult(null);
+    setConfidencePayload(null);
     previewTriggeredRef.current = false;
     readFilesRef.current = [];
 
@@ -506,6 +526,14 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                 task: parsed.task,
               }]);
 
+            } else if (parsed.event === 'confidence') {
+              setConfidencePayload({
+                level: parsed.level as 'high' | 'medium' | 'low',
+                reason: parsed.reason ?? '',
+                suggestedAction: parsed.suggestedAction as 'deep' | 'chat',
+                files: parsed.files ?? [],
+                diagnosis: parsed.diagnosis ?? '',
+              });
             } else {
               setFeed((prev) => [...prev, { event: parsed.event, text: parsed.text }]);
               if (parsed.text?.startsWith('💡')) {
@@ -1390,6 +1418,97 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
             >
               {committing ? '⟳ Committing patches…' : `✅ Aprobar y commitear ${chatPatches.length} patch(es)`}
             </button>
+          </div>
+        )}
+
+        {/* ── Confidence hand-off buttons (FAST/DEEP analysis result) ─────── */}
+        {confidencePayload && !running && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2,
+            }}>
+              <span style={{
+                fontSize: 10, fontFamily: 'JetBrains Mono, monospace',
+                color: confidencePayload.level === 'high' ? '#4ade80' : confidencePayload.level === 'medium' ? '#FFD93D' : '#FF6B6B',
+                letterSpacing: '0.06em', textTransform: 'uppercase',
+              }}>
+                {confidencePayload.level === 'high' ? '● HIGH' : confidencePayload.level === 'medium' ? '◐ MEDIUM' : '○ LOW'} CONFIDENCE
+              </span>
+              <span style={{ color: '#4b5563', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+                — {confidencePayload.reason}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {/* DEEP button */}
+              <button
+                onClick={() => {
+                  const deepText = `[DEEP][MODIFICAR] En ${confidencePayload.files[0] ?? 'el archivo'}, corrige: ${confidencePayload.diagnosis}`;
+                  setMode('deep');
+                  setPrompt(deepText);
+                }}
+                style={{
+                  flex: 1, padding: '8px 10px',
+                  background: confidencePayload.suggestedAction === 'deep'
+                    ? 'rgba(124,58,237,0.18)' : 'rgba(124,58,237,0.07)',
+                  border: confidencePayload.suggestedAction === 'deep'
+                    ? '1px solid #7c3aed' : '1px solid #3b2a5a',
+                  borderRadius: 7, color: '#a78bfa',
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontSize: 11, fontWeight: confidencePayload.suggestedAction === 'deep' ? 700 : 500,
+                  cursor: 'pointer', letterSpacing: '0.04em', transition: 'background 0.15s',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(124,58,237,0.26)'; }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = confidencePayload.suggestedAction === 'deep'
+                    ? 'rgba(124,58,237,0.18)' : 'rgba(124,58,237,0.07)';
+                }}
+              >
+                ⚡ Enviar a DEEP
+              </button>
+              {/* CHAT button */}
+              <button
+                onClick={() => {
+                  const chatText = `Continuemos el diagnóstico de FAST mode. Archivos ya revisados: ${confidencePayload.files.join(', ')}. Diagnóstico parcial: ${confidencePayload.diagnosis}. Verifica si hay dependencias externas (timers, funciones que llaman a esto, loops que podrían apagar la condición) antes de proponer un fix.`;
+                  pendingAutoSendRef.current = chatText;
+                  setMode('chat');
+                  setPrompt(chatText);
+                }}
+                style={{
+                  flex: 1, padding: '8px 10px',
+                  background: confidencePayload.suggestedAction === 'chat'
+                    ? 'rgba(0,255,136,0.12)' : 'rgba(0,255,136,0.05)',
+                  border: confidencePayload.suggestedAction === 'chat'
+                    ? '1px solid #1e3f2a' : '1px solid #0f2a1a',
+                  borderRadius: 7, color: '#4ade80',
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontSize: 11, fontWeight: confidencePayload.suggestedAction === 'chat' ? 700 : 500,
+                  cursor: 'pointer', letterSpacing: '0.04em', transition: 'background 0.15s',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(0,255,136,0.2)'; }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = confidencePayload.suggestedAction === 'chat'
+                    ? 'rgba(0,255,136,0.12)' : 'rgba(0,255,136,0.05)';
+                }}
+              >
+                💬 Enviar a CHAT
+              </button>
+              {/* Claude Code — placeholder */}
+              <button
+                disabled
+                style={{
+                  flex: 1, padding: '8px 10px',
+                  background: 'rgba(75,85,99,0.07)',
+                  border: '1px solid #1f2937',
+                  borderRadius: 7, color: '#4b5563',
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontSize: 11, fontWeight: 500,
+                  cursor: 'not-allowed', letterSpacing: '0.04em',
+                  opacity: 0.6,
+                }}
+              >
+                🤖 Claude Code
+              </button>
+            </div>
           </div>
         )}
 

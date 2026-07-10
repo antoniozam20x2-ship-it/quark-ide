@@ -1177,6 +1177,16 @@ REGLAS GENERALES:
 - Sin headers con # ni listas con guiones — solo prosa continua y fragmentos de código
 - USA MARKDOWN DE FORMA SISTEMÁTICA: pon en **negrita** todo nombre de función, variable, archivo o conclusión principal. Pon entre backticks (comillas invertidas) cualquier fragmento de código, condición, valor literal o nombre técnico citado del código real. Esto es obligatorio, no opcional.
 
+REGLA DE AUTOEVALUACIÓN — SIEMPRE al final de tu respuesta, agrega esta línea exacta:
+CONFIDENCE: [high|medium|low] | REASON: [una razón breve]
+
+Usa estos criterios:
+- "high": el problema está contenido en un solo archivo, sin dependencias de otras funciones/timers/loops externos a lo ya leído.
+- "medium": el problema probablemente involucra otras funciones o archivos no leídos todavía.
+- "low": la búsqueda solo tocó 1 término o 1 archivo, o el diagnóstico es parcial/no concluyente.
+
+Si detectás que el código depende de un flujo de control (setInterval, funciones que se llaman entre sí, banderas de estado compartidas entre múltiples archivos), NUNCA marques "high" aunque el fragmento que viste parezca suficiente.
+
 REGLA ANTI-ALUCINACIÓN — ES LA MÁS IMPORTANTE:
 Si el contenido de los archivos leídos NO menciona específicamente lo que el usuario pregunta (el término, componente, función o concepto exacto que buscaba), decilo con claridad y detenete ahí. Ejemplo: "No encontré referencias a [lo que preguntó] en los archivos revisados ([lista de archivos]). Puede estar en otro módulo o bajo un nombre distinto."
 NUNCA completes la respuesta con una definición genérica de programación o IA disfrazada de respuesta específica del proyecto. Si los archivos leídos no tienen la respuesta, la respuesta correcta es admitirlo — no inventar una explicación plausible.
@@ -1190,14 +1200,29 @@ Si no podés citar el fragmento exacto que sustenta una afirmación, no la inclu
 Si el código tiene dos funciones o ramas similares y opuestas (ej. una versión "Bull"/"alcista" y otra "Bear"/"bajista", o un "if" y su "else" equivalente), tratalas por separado — no mezcles las condiciones de ambas en un mismo párrafo. Indicá explícitamente qué condición pertenece a cuál.`,
           );
 
+          // Parse confidence metadata from model response
+          const confMatch = analysis.match(/CONFIDENCE:\s*(high|medium|low)\s*\|\s*REASON:\s*(.+)/i);
+          const confidence = confMatch?.[1]?.toLowerCase() ?? 'medium';
+          const confidenceReason = confMatch?.[2]?.trim() ?? '';
+          const cleanAnalysis = analysis.replace(/CONFIDENCE:.*$/im, '').trim();
+
           // Stream each non-empty line as its own action event
-          const analysisLines = analysis.split('\n').map((l) => l.trim()).filter(Boolean);
+          const analysisLines = cleanAnalysis.split('\n').map((l) => l.trim()).filter(Boolean);
           for (const line of analysisLines) {
             send('action', { text: `💡 ${line}` });
           }
 
+          const suggestedAction = confidence === 'high' ? 'deep' : 'chat';
+          send('confidence', {
+            level: confidence,
+            reason: confidenceReason,
+            suggestedAction,
+            files: readFiles.map(f => f.path),
+            diagnosis: cleanAnalysis,
+          });
+
           // Guardar en contexto compartido para otras superficies
-          const sharedSummary = await summarizeForSharedContext(analysis);
+          const sharedSummary = await summarizeForSharedContext(cleanAnalysis);
           const sharedSummaryText = sharedSummary || `Archivos analizados: ${readFiles.map(f => f.path).join(', ')}`;
           await saveContextSummary(repo, sharedSummaryText, 'agent', readFiles.map(f => f.path))
             .catch(err => console.warn('[shared-context] READ PATH save failed:', err instanceof Error ? err.message : err));
