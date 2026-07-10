@@ -90,7 +90,7 @@ interface AgentEvent {
   path?: string;
   file?: string;
   task?: string;
-  files?: { path: string; content: string; originalContent?: string }[];
+  files?: { path: string; content: string; originalContent?: string }[] | string[];
   commitMessage?: string;
   mainComponent?: string;
   mainContent?: string;
@@ -536,11 +536,11 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                 level: parsed.level as 'high' | 'medium' | 'low',
                 reason: parsed.reason ?? '',
                 suggestedAction: parsed.suggestedAction as 'deep' | 'chat',
-                files: parsed.files ?? [],
+                files: (parsed.files ?? []).map(f => typeof f === 'string' ? f : f.path),
                 diagnosis: parsed.diagnosis ?? '',
               });
             } else {
-              setFeed((prev) => [...prev, { event: parsed.event, text: parsed.text }]);
+              setFeed((prev) => [...prev, { event: parsed.event as FeedItem['event'], text: parsed.text }]);
               if (parsed.text?.startsWith('💡')) {
                 setHasReadResult(true);
               }
