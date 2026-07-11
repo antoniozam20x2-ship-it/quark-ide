@@ -96,6 +96,7 @@ interface AgentEvent {
   mainContent?: string;
   repo?: string;
   branch?: string;
+  incomplete?: boolean;
   // confidence event fields
   level?: 'high' | 'medium' | 'low';
   reason?: string;
@@ -1320,6 +1321,21 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                     );
                   })}
 
+                  {/* Incomplete agentic loop warning */}
+                  {result.incomplete && (
+                    <div style={{
+                      background: 'rgba(245,158,11,0.1)',
+                      border: '1px solid rgba(245,158,11,0.4)',
+                      borderLeft: '3px solid #f59e0b',
+                      borderRadius: 6, padding: '8px 12px',
+                      color: '#fbbf24',
+                      fontFamily: 'JetBrains Mono, monospace',
+                      fontSize: 11, lineHeight: 1.5,
+                    }}>
+                      ⚠️ Cambio incompleto — el agente alcanzó el límite de turnos sin confirmar que la tarea terminó. Revisa cuidadosamente antes de aprobar; puede faltar parte del fix.
+                    </div>
+                  )}
+
                   {/* Editable commit message */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                     <span style={{
@@ -1718,6 +1734,21 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                     </div>
                   );
                 })}
+
+                {/* Incomplete agentic loop warning */}
+                {result?.incomplete && (
+                  <div style={{
+                    background: 'rgba(245,158,11,0.1)',
+                    border: '1px solid rgba(245,158,11,0.4)',
+                    borderLeft: '3px solid #f59e0b',
+                    borderRadius: 6, padding: '8px 12px',
+                    color: '#fbbf24',
+                    fontFamily: 'JetBrains Mono, monospace',
+                    fontSize: 11, lineHeight: 1.5,
+                  }}>
+                    ⚠️ Cambio incompleto — el agente alcanzó el límite de turnos sin confirmar que la tarea terminó. Revisa cuidadosamente antes de aprobar; puede faltar parte del fix.
+                  </div>
+                )}
 
                 {/* Commit button */}
                 <div style={{ display: 'flex', gap: 8 }}>

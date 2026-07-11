@@ -751,7 +751,7 @@ async function runAgenticLoop(
   seedFiles: { path: string; content: string }[] = [],
   seedReasoning: string = '',
   maxTurns = 12,
-): Promise<{ files: { path: string; content: string }[]; commitMessage: string }> {
+): Promise<{ files: { path: string; content: string }[]; commitMessage: string; incomplete: boolean }> {
   const modifiedFiles = new Map<string, string>();
   for (const f of seedFiles) {
     modifiedFiles.set(f.path, f.content);
@@ -849,6 +849,7 @@ async function runAgenticLoop(
         return {
           files: Array.from(modifiedFiles.entries()).map(([path, content]) => ({ path, content })),
           commitMessage,
+          incomplete: false,
         };
       }
 
@@ -862,6 +863,7 @@ async function runAgenticLoop(
   return {
     files: Array.from(modifiedFiles.entries()).map(([path, content]) => ({ path, content })),
     commitMessage,
+    incomplete: true,
   };
 }
 
@@ -1564,6 +1566,7 @@ REGLAS:
           commitMessage: agenticResult.commitMessage,
           mainComponent: agenticResult.files[0]?.path ?? '',
           mainContent: agenticResult.files[0]?.content ?? '',
+          incomplete: agenticResult.incomplete,
           repo,
           branch,
         });

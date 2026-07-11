@@ -1,0 +1,67 @@
+Archivo: agent.ts (backend) + el componente que renderiza el diff en frontend 
+(probablemente QuarkAgent.tsx, la misma zona donde están los botones de 
+hand-off que agregamos antes).
+
+CONTEXTO: runAgenticLoop() (el loop de 12 turnos usado por DEEP cuando detecta 
+isComplexChange) puede terminar de dos formas: (a) el modelo llama a 
+task_complete y el loop retorna limpio, o (b) se agota maxTurns sin que el 
+modelo llame a task_complete, y el loop retorna igual con los cambios 
+parciales que haya en el Map — hoy sin ninguna marca visual de que está 
+incompleto.
+
+CAMBIO 1 — Backend, agregar bandera explícita a runAgenticLoop:
+
+En la función runAgenticLoop, cambiar el tipo de retorno para incluir un 
+campo `incomplete: boolean`:
+
+async function runAgenticLoop(...): Promise<{ 
+  files: { path: string; content: string }[]; 
+  commitMessage: string;
+  incomplete: boolean;   // ← nuevo campo
+}> {
+
+En el return dentro del loop cuando SÍ llama task_complete (busca el bloque 
+que hace `if (tool.name === 'task_complete')`), agregar incomplete: false 
+al objeto que retorna.
+
+En el return que ocurre DESPUÉS del for loop (cuando se agota maxTurns sin 
+task_complete — el bloque que tiene el send('action', { text: `⚠️ Se 
+alcanzó el límite de ${maxTurns} turnos...` })), agregar incomplete: true 
+al objeto retornado.
+
+CAMBIO 2 — Backend, propagar la bandera al frontend:
+
+En el caller de runAgenticLoop (dentro del GENERATION PATH de POST /generate, 
+la rama que arma agenticResult y llama a send('done', {...})), agregar el 
+campo al payload del evento done:
+
+send('done', {
+  files: filesWithOriginal,
+  commitMessage: agenticResult.commitMessage,
+  mainComponent: agenticResult.files[0]?.path ?? '',
+  mainContent: agenticResult.files[0]?.content ?? '',
+  incomplete: agenticResult.incomplete,   // ← nuevo campo
+  repo,
+  branch,
+});
+
+CAMBIO 3 — Frontend, mostrar el banner:
+
+En el componente donde se recibe el evento 'done' del SSE (mismo lugar donde 
+ya guardas result, mainComponent, etc.), agregar el campo incomplete al 
+estado/tipo que ya uses para el resultado del diff.
+
+En el componente que renderiza el diff (donde se muestra el botón "Aprobar 
+y commitear"), agregar arriba del diff, condicionalmente cuando 
+result.incomplete === true:
+
+Un banner visualmente distinto (fondo amarillo/naranja de advertencia, no 
+verde) con el texto:
+"⚠️ Cambio incompleto — el agente alcanzó el límite de turnos sin confirmar 
+que la tarea terminó. Revisa cuidadosamente antes de aprobar; puede faltar 
+parte del fix."
+
+El botón "Aprobar y commitear" debe seguir funcionando igual (no lo bloquees, 
+es decisión del usuario) — solo agrega la advertencia visual antes.
+
+No toques ninguna otra lógica de runAgenticLoop ni del resto del archivo.
