@@ -1431,6 +1431,12 @@ Razona brevemente:
 3. ¿Cuál es el cambio mínimo necesario?
 4. ¿Qué riesgos tiene este cambio?
 
+REGLA ANTI-ALUCINACIÓN: Si el contexto de archivos disponible NO contiene evidencia directa de la causa raíz que estás por proponer, decilo explícitamente en vez de inferir una causa plausible. No completes con conocimiento genérico de patrones de bugs si no está confirmado en el código real que tenés delante.
+
+RESULTADO PARCIAL vs. DEFINITIVO: si tu análisis se basa en un archivo truncado o parcial (revisá si el contexto dice "líneas más omitidas" o similar), aclaralo en tu respuesta — no presentes una causa raíz como confirmada si no viste el archivo completo o las funciones relacionadas que podrían afectar el comportamiento.
+
+ANCLAJE: cada afirmación sobre por qué falla el código debe citar la línea o condición literal del contexto que la sustenta. Si no podés citarla, no la incluyas en tu razonamiento.
+
 Responde en máximo 150 palabras. Solo el razonamiento, sin código.`,
             }],
           }),
@@ -1711,6 +1717,10 @@ RESPONDE ÚNICAMENTE CON ESTE JSON (sin markdown, sin backticks, sin texto extra
   ],
   "commitMessage": "fix: descripción del cambio"
 }
+
+REGLA ANTI-ALUCINACIÓN: old_str y new_str deben basarse ÚNICAMENTE en el BLOQUE DEL ARCHIVO mostrado arriba. Si el cambio que te piden requiere información que no está en ese bloque (por ejemplo, otra función que podría estar relacionada pero no fue incluida en el contexto), respondé con operations: [] y explicá en el JSON qué información adicional necesitás — no inventes el contenido de una función que no viste.
+
+RESULTADO PARCIAL: si el BLOQUE DEL ARCHIVO tiene comentarios de "líneas omitidas" (indicando que es una sección truncada, no el archivo completo), y tu cambio podría verse afectado por código fuera de esa sección, marcá esa incertidumbre en el campo commitMessage con un prefijo "[REVISAR: contexto parcial]" en vez de asumir que el bloque mostrado es todo lo relevante.
 
 REGLAS CRÍTICAS PARA old_str:
 - old_str debe ser texto copiado LITERALMENTE del bloque de arriba — sin cambiar ni un carácter
