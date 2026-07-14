@@ -1,0 +1,61 @@
+# Prompt para Replit — Validar Modo AUTO antes de uso real
+
+`git` ya está confirmado disponible en el contenedor de Railway (`git version 2.43.0`). Antes de usar el Modo AUTO en una tarea real, hacer estas dos pruebas de validación en orden.
+
+## Prueba 1 — Confirmar que el corte por presupuesto funciona
+
+En `src/services/agentSdkAuto.ts`, bajar temporalmente el techo:
+
+```typescript
+const MAX_BUDGET_USD = 0.05; // valor temporal solo para esta prueba
+```
+
+Deployar este cambio y disparar el endpoint `/agent/auto` con una tarea que sepamos que va a requerir varios turnos (explorar + editar más de un archivo), por ejemplo:
+
+```json
+{
+  "prompt": "Revisa el archivo server.ts completo y agrega un comentario descriptivo arriba de cada función exportada",
+  "repo": "<repo-de-prueba-chico>",
+  "branch": "main"
+}
+```
+
+**Qué confirmar en los logs/eventos SSE:**
+- Que aparece el log `💰 Costo de la corrida: $X.XXXX` en cada mensaje `result` del loop.
+- Que en cuanto `totalCostUsd` supera `$0.05`, aparece `🛑 Presupuesto excedido...` y el loop se corta (no sigue iterando de más).
+- Que después del corte, igual llega al bloque de `git diff --name-only HEAD` y arma el evento `done` con los archivos que alcanzó a modificar hasta ese punto — no debe tirar excepción ni dejar el proceso colgado.
+- Que `cleanupWorkDir` se ejecuta igual (revisar que no queden directorios `quark-auto-*` acumulados en `/tmp` del contenedor tras la prueba — se puede verificar con `ls /tmp | grep quark-auto` en la consola de Railway).
+
+Si algo de esto falla, reportar el log exacto antes de seguir — no pasar a la prueba 2 hasta que este corte funcione limpio.
+
+## Prueba 2 — Pipeline completo con tarea trivial
+
+Una vez confirmado el corte de presupuesto, volver el techo a un valor de trabajo normal:
+
+```typescript
+const MAX_BUDGET_USD = 2.0;
+```
+
+Deployar y correr una tarea mínima, de bajo riesgo, en un repo chico:
+
+```json
+{
+  "prompt": "Agrega el comentario // revisado por Quark AUTO en la primera línea del archivo src/index.ts (o el archivo más simple del repo)",
+  "repo": "<repo-de-prueba-chico>",
+  "branch": "main"
+}
+```
+
+**Qué confirmar paso a paso:**
+1. `📦 Clonando...` aparece y no tira error de autenticación (confirma que `GITHUB_TOKEN` tiene permiso de clone sobre ese repo).
+2. `🤖 Iniciando modo AUTO...` aparece.
+3. Se ven eventos `🔧 <tool>: ...` mostrando qué tools usó el SDK (Read, Edit, etc.) — confirma que el SDK está explorando/editando de verdad, no solo alucinando una respuesta de texto.
+4. `✅ AUTO terminó — N archivo(s) modificado(s)` con N ≥ 1.
+5. El evento `done` final trae `files` con el contenido ya modificado del archivo (confirmar que el comentario realmente aparece en el `content` devuelto).
+6. Desde el frontend, el flujo de diff/aprobación existente (el mismo que usa DEEP) debe mostrar el cambio correctamente — si no se ve o rompe la UI, es señal de que el shape de `done` necesita un ajuste fino, avisar antes de forzarlo.
+7. Aprobar el commit manualmente y confirmar en GitHub que el commit llegó con el mensaje `feat: cambio autónomo vía Quark AUTO — ...` y el contenido correcto.
+8. Confirmar que el `workDir` temporal se borró después (mismo chequeo de `/tmp` que en la prueba 1).
+
+## Solo después de que ambas pruebas pasen limpio
+
+Recién ahí probar con una tarea real (por ejemplo, algo pendiente de la lista de mejoras de Signal OS/Sniper OS), empezando también con algo acotado — no con el caso más complejo disponible — para seguir generando confianza gradual antes de confiarle tareas grandes al modo AUTO.

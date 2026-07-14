@@ -13,7 +13,7 @@ export interface AutoRunResult {
   error?: string;
 }
 
-const MAX_BUDGET_USD = 2.0;
+const MAX_BUDGET_USD = 0.05; // TEMPORAL — prueba de corte por presupuesto; volver a 2.0 después
 const MAX_TURNS = 40;
 
 export async function runAutoMode(
