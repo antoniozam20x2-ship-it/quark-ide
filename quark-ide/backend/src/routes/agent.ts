@@ -1416,6 +1416,7 @@ Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
           body: JSON.stringify({
             model: 'claude-sonnet-4-6',
             max_tokens: 1024,
+            output_config: { effort: 'high' },
             messages: [{
               role: 'user',
               content: `Eres un arquitecto de software senior. Analiza este problema y decide el mejor enfoque ANTES de escribir código.
@@ -2190,6 +2191,16 @@ router.delete('/context', async (_req, res) => {
   }
 });
 
+function classifyEffort(message: string): 'medium' | 'high' | 'xhigh' {
+  const PATCH_SIGNALS = /\b(corrige|corrección|arregla|arreglar|resuelve|resolver|refactor|implementa|implementar|agrega la función|crea la función|propose_patch)\b/i;
+  const MULTI_FILE_SIGNALS = (message.match(/\.(ts|tsx|js|jsx)\b/g) ?? []).length > 1;
+  const ARCHITECTURAL_SIGNALS = /\b(arquitectura|refactor completo|múltiples archivos|todo el flujo|cadena completa)\b/i;
+
+  if (ARCHITECTURAL_SIGNALS.test(message) || MULTI_FILE_SIGNALS) return 'xhigh';
+  if (PATCH_SIGNALS.test(message)) return 'high';
+  return 'medium';
+}
+
 function classifyComplexity(message: string): 'simple' | 'complex' {
   const COMPLEX_SIGNALS = [
     /\b(por qué|causa raíz|no funciona|bug|error|falla|se rompe|arregla|corrige|resuelve)\b/i,
@@ -2407,6 +2418,7 @@ REGLAS:
         model: 'claude-sonnet-5',
         max_tokens: 16000,
         thinking: { type: 'adaptive', display: 'summarized' },
+        output_config: { effort: classifyEffort(userMessage) },
         system: systemPrompt,
         tools: CHAT_TOOLS,
         messages,
