@@ -1,0 +1,50 @@
+# Prompt para Replit — Agregar Modo AUTO al selector de modos (frontend)
+
+## Contexto
+
+El backend ya tiene el endpoint `POST /agent/auto` funcionando (SSE, mismo patrón que `/agent/generate` y `/agent/chat`). Falta conectarlo a la interfaz — hoy el selector de modos solo tiene ⚡ FAST, 🧠 DEEP y 💬 CHAT. Hay que agregar un cuarto modo: 🤖 AUTO.
+
+## Paso 1 — Ubicar el componente del selector de modos
+
+Buscar el componente que renderiza el selector `MODO: ⚡ FAST | 🧠 DEEP | 💬 CHAT` (probablemente algo como `ModeSelector.tsx` o dentro del componente principal del chat de Quark Agent). Agregar una cuarta opción:
+
+```
+🤖 AUTO
+```
+
+## Paso 2 — Wirear el nuevo modo al endpoint
+
+Buscar la función que arma el request SSE para los modos existentes (la que hace `fetch('/agent/generate', ...)` con `deepMode` true/false, y la que hace `fetch('/agent/chat', ...)`). Agregar una rama nueva: cuando el modo activo es `AUTO`, el request debe ir a:
+
+```typescript
+fetch('/agent/auto', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    prompt: userMessage,
+    repo: currentRepo, // la misma variable que ya usan FAST/DEEP/CHAT para el repo activo
+    branch: 'main',
+  }),
+})
+```
+
+El manejo de la respuesta (parseo de `data: {...}` por SSE, renderizado de eventos `action`, `chat_message`, `done`, `error`) debe reutilizar exactamente la misma lógica de streaming que ya existe para FAST/DEEP — el shape de eventos es idéntico (`action` con `text`, `done` con `files`/`commitMessage`/`mainComponent`/`mainContent`).
+
+## Paso 3 — Reusar el flujo de diff/aprobación existente
+
+Cuando llega el evento `done` de `/agent/auto`, debe disparar exactamente el mismo componente de diff/aprobación que ya se usa cuando `/agent/generate` (modo DEEP) devuelve `files` — mismo shape de datos, mismo flujo de commit al aprobar. No crear un componente nuevo para esto.
+
+## Paso 4 — Indicador visual de advertencia (recomendado)
+
+Como AUTO es el modo más autónomo (edita y explora libremente en un working directory aislado antes de mostrar el diff), agregar un indicador visual sutil cuando está activo — por ejemplo un texto chico debajo del selector: *"AUTO explora y edita de forma autónoma en un entorno aislado. Revisa el diff antes de aprobar."* Esto es solo UX, no bloquea nada, pero ayuda a que quede claro que este modo se comporta distinto a DEEP.
+
+## Paso 5 — Mostrar el costo de la corrida
+
+El evento `done` de `/agent/auto` incluye un campo extra que los otros modos no tienen: `totalCostUsd`. Si hay espacio en el panel de diff/aprobación, mostrarlo (ej. *"Costo de esta corrida: $0.34"*) — es información útil que ya viene del backend y hoy se estaría descartando si el frontend no la lee.
+
+## Validación
+
+1. Seleccionar AUTO en el selector de modos, escribir un prompt de prueba trivial (ej. "agrega un comentario en la primera línea de X archivo"), y confirmar que aparecen los eventos de streaming en pantalla igual que en DEEP (clonando, iniciando, tool calls, costo, terminado).
+2. Confirmar que al terminar aparece el panel de diff con el cambio real.
+3. Aprobar el cambio y confirmar que el commit llega a GitHub correctamente.
+4. Confirmar que si el prompt es ambiguo o vacío, el frontend maneja el error tal como ya lo hace con FAST/DEEP (sin romper la UI).

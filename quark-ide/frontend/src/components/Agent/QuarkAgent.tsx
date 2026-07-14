@@ -175,9 +175,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   const [commitResult, setCommitResult]   = useState<CommitResult | null>(null);
   const [isGeneratingHtml, setIsGeneratingHtml] = useState(false);
   const [fixResult, setFixResult]               = useState<FixResult | null>(null);
-  const [mode, setMode]                         = useState<'fast' | 'deep' | 'chat'>(() => {
+  const [mode, setMode]                         = useState<'fast' | 'deep' | 'chat' | 'auto'>(() => {
     const m = localStorage.getItem(LS_MODE_KEY);
-    return (m === 'fast' || m === 'deep' || m === 'chat') ? m : 'fast';
+    return (m === 'fast' || m === 'deep' || m === 'chat' || m === 'auto') ? m as 'fast' | 'deep' | 'chat' | 'auto' : 'fast';
   });
   const [chatSessionId]                         = useState(() => `chat-${Date.now()}`);
   const [chatPatches, setChatPatches]           = useState<ChatPatch[]>([]);
@@ -185,6 +185,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   const [editableCommitMsg, setEditableCommitMsg] = useState('');
   const [confidencePayload, setConfidencePayload] = useState<ConfidencePayload | null>(null);
   const [activeModel, setActiveModel] = useState<{ model: string; tier: string } | null>(null);
+  const [autoRunCost, setAutoRunCost] = useState<number | null>(null);
   const previewTriggeredRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const agentTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -453,6 +454,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     setCommitResult(null);
     setConfidencePayload(null);
     setActiveModel(null);
+    setAutoRunCost(null);
     previewTriggeredRef.current = false;
     readFilesRef.current = [];
 
@@ -461,6 +463,64 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     if (FIX_KEYWORDS.test(text) && fileInPrompt) {
       setRunning(false); // callFix manages its own running state
       await callFix(text, fileInPrompt[0]);
+      return;
+    }
+
+    // ── AUTO MODE — clone + SDK + diff ────────────────────────────────────────
+    if (mode === 'auto') {
+      try {
+        const res = await fetch(`${API_BASE}/agent/auto`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: text, repo: selectedRepo, branch: activeProject.branch ?? 'main' }),
+        });
+        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        const processBlock = (block: string) => {
+          for (const line of block.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const parsed = JSON.parse(line.slice(6)) as AgentEvent;
+              if (parsed.event === 'done') {
+                if ((parsed as any).totalCostUsd) setAutoRunCost((parsed as any).totalCostUsd as number);
+                setResult(parsed);
+                if (parsed.files?.length) {
+                  readFilesRef.current = parsed.files.map((f) => ({ path: f.path, content: f.content }));
+                  setFeed((prev) => {
+                    const next = [
+                      ...prev,
+                      { event: 'action' as const, text: `📂 ${parsed.files!.length} archivo(s) modificado(s) por AUTO:` },
+                      ...parsed.files!.map((f) => ({ event: 'code' as const, path: f.path, content: f.content })),
+                    ];
+                    saveSession(next, parsed, null, null);
+                    return next;
+                  });
+                }
+                setRunning(false);
+              } else if (parsed.event === 'action') {
+                setFeed(prev => [...prev, { event: 'action', text: parsed.text }]);
+              } else if (parsed.event === 'error') {
+                setFeed(prev => [...prev, { event: 'error', text: parsed.text }]);
+                setRunning(false);
+              }
+            } catch (e) { console.warn('[Auto] Parse error:', e); }
+          }
+        };
+        while (true) {
+          const { done, value } = await reader.read();
+          if (value) buffer += decoder.decode(value, { stream: !done });
+          const blocks = buffer.split('\n\n');
+          buffer = done ? '' : (blocks.pop() ?? '');
+          for (const block of blocks) processBlock(block);
+          if (done) { if (buffer.trim()) processBlock(buffer); break; }
+        }
+      } catch (err) {
+        setFeed(prev => [...prev, { event: 'error', text: err instanceof Error ? err.message : String(err) }]);
+      } finally {
+        setRunning(false);
+      }
       return;
     }
 
@@ -489,6 +549,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
             console.log('[Agent] Event:', parsed.event, '| isBackend:', isBackendRef.current);
 
             if (parsed.event === 'done') {
+              if ((parsed as any).totalCostUsd) setAutoRunCost((parsed as any).totalCostUsd as number);
               setResult(parsed);
 
               // For backend projects: inject code blocks into the feed from done.files
@@ -1346,6 +1407,19 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                     );
                   })}
 
+                  {/* AUTO run cost */}
+                  {autoRunCost !== null && (
+                    <div style={{
+                      fontSize: 10, color: '#fb923c',
+                      fontFamily: 'JetBrains Mono, monospace',
+                      background: 'rgba(251,146,60,0.06)',
+                      border: '1px solid rgba(249,115,22,0.2)',
+                      borderRadius: 4, padding: '4px 8px',
+                    }}>
+                      💰 Costo de esta corrida: ${autoRunCost.toFixed(4)}
+                    </div>
+                  )}
+
                   {/* Incomplete agentic loop warning */}
                   {result.incomplete && (
                     <div style={{
@@ -1869,7 +1943,31 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           >
             💬 CHAT
           </button>
+          <button
+            onClick={() => setMode('auto')}
+            style={{
+              background: mode === 'auto' ? 'rgba(251,146,60,0.15)' : 'transparent',
+              border: `1px solid ${mode === 'auto' ? '#f97316' : '#1e1e3f'}`,
+              borderRadius: 4, color: mode === 'auto' ? '#fb923c' : '#3a3a5c',
+              fontSize: 10, fontWeight: 700, padding: '3px 8px', cursor: 'pointer',
+              fontFamily: 'JetBrains Mono, monospace',
+            }}
+          >
+            🤖 AUTO
+          </button>
         </div>
+
+        {mode === 'auto' && (
+          <div style={{
+            fontSize: 10, color: '#78350f',
+            fontFamily: 'JetBrains Mono, monospace',
+            background: 'rgba(251,146,60,0.06)',
+            border: '1px solid rgba(249,115,22,0.2)',
+            borderRadius: 4, padding: '4px 8px', lineHeight: 1.5,
+          }}>
+            🤖 AUTO explora y edita de forma autónoma en un entorno aislado. Revisa el diff antes de aprobar.
+          </div>
+        )}
 
         {/* Repo selector */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
