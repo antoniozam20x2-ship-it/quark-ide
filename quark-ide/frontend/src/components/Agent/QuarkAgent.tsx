@@ -85,7 +85,7 @@ function toPairedRows(diff: DiffLine[]): PairedRow[] {
 
 // Server-sent event shape
 interface AgentEvent {
-  event: 'action' | 'file' | 'done' | 'error' | 'replit_prompt' | 'confidence';
+  event: 'action' | 'file' | 'done' | 'error' | 'replit_prompt' | 'confidence' | 'model_active';
   text?: string;
   path?: string;
   file?: string;
