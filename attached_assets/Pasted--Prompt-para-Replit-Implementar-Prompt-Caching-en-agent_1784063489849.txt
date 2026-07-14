@@ -1,0 +1,74 @@
+# Prompt para Replit — Implementar Prompt Caching en agent.ts
+
+## Contexto
+
+Ninguno de los tres loops de llamadas a Claude en `agent.ts` (`runAgenticLoop`, `runHaikuTier`, `runChatTurn`) usa `cache_control`. Cada turno reenvía el array completo de `tools` y el `system` prompt sin aprovechar el descuento de prompt caching de Anthropic, a pesar de que ambos son estáticos dentro de cada loop (hasta 20 turnos en `runChatTurn`, 12 en `runAgenticLoop`, 6 en `runHaikuTier`).
+
+## Cambios a implementar
+
+### 1. `AGENT_TOOLS` en `runAgenticLoop`
+
+Al armar el payload de la llamada a `https://api.anthropic.com/v1/messages` dentro de `runAgenticLoop`, agregar `cache_control` al último elemento del array de tools:
+
+```javascript
+tools: AGENT_TOOLS.map((t, i) =>
+  i === AGENT_TOOLS.length - 1
+    ? { ...t, cache_control: { type: "ephemeral" } }
+    : t
+),
+```
+
+### 2. `CHAT_TOOLS` en `runHaikuTier` y en el bloque de `runChatTurn` (Sonnet)
+
+Mismo patrón, aplicado en ambos lugares donde se usa `CHAT_TOOLS`:
+
+```javascript
+tools: CHAT_TOOLS.map((t, i) =>
+  i === CHAT_TOOLS.length - 1
+    ? { ...t, cache_control: { type: "ephemeral" } }
+    : t
+),
+```
+
+Nota: `CHAT_TOOLS` se define como `[...AGENT_TOOLS, propose_patch]`, así que este breakpoint cachea automáticamente ambos arrays porque `propose_patch` es el último elemento.
+
+### 3. System prompt estático en `runChatTurn` (bloque Sonnet, sección "Complex path")
+
+El `systemPrompt` (la constante larga que empieza con `"Eres QUARK, un asistente de código..."`) es 100% estático dentro del loop — no depende de `cacheHint` ni `seedContext`. Cambiar el campo `system` de string plano a array con `cache_control`:
+
+```javascript
+system: [
+  {
+    type: "text",
+    text: systemPrompt,
+    cache_control: { type: "ephemeral" }
+  }
+],
+```
+
+### 4. Primer mensaje de usuario en `runAgenticLoop`
+
+El mensaje inicial (`TAREA + seedContext + reasoningNote`) se arma una sola vez antes del loop y no cambia en los turnos siguientes — es un buen candidato a cachear como prefijo estable. Cambiar `content` de string a array de bloques:
+
+```javascript
+const messages: any[] = [
+  {
+    role: 'user',
+    content: [
+      {
+        type: 'text',
+        text: `TAREA: ${prompt}\n\nRepo: ${repo}${seedContext}${reasoningNote}\n\nUsa las tools para explorar el código, entender el problema y aplicar el fix mínimo necesario. Verifica que old_str exista literalmente antes de usar apply_patch. Cuando termines, llama a task_complete.`,
+        cache_control: { type: "ephemeral" }
+      }
+    ]
+  }
+];
+```
+
+## IMPORTANTE — qué NO cachear
+
+**No** poner `cache_control` en `cacheHint` ni en `seedContext` dentro de `runChatTurn` (el "Simple path" / triage de Groq, y el mensaje de usuario del bloque Sonnet). Estos bloques se arman dinámicamente por sesión (dependen de `cachedCtx.summary`, `sharedSummaries`, timestamp de caché de 30 min, etc.) y **no son idénticos entre requests** — si se cachean, el breakpoint nunca pega hit y se desperdicia el intento de caché sin beneficio real. Prompt caching de Anthropic requiere que el prefijo sea byte-idéntico para que aplique el descuento; solo cachear lo verdaderamente estático (tools, system prompt fijo, mensaje inicial fijo de `runAgenticLoop`).
+
+## Validación post-cambio
+
+Después de aplicar el patch, confirmar en los logs de Railway (o en la respuesta de la API) el campo `usage.cache_read_input_tokens` / `usage.cache_creation_input_tokens` en las respuestas de `/v1/messages` — debe aparecer `cache_creation_input_tokens > 0` en el primer turno de cada loop y `cache_read_input_tokens > 0` en los turnos siguientes del mismo loop. Si ambos quedan en 0 en todos los turnos, el breakpoint no está pegando y hay que revisar que el contenido cacheado sea realmente idéntico turno a turno.

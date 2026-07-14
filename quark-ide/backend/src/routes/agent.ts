@@ -763,7 +763,7 @@ async function runAgenticLoop(
     ? `\n\nANÁLISIS PREVIO DE CAUSA RAÍZ (ya hecho, no lo repitas, úsalo como punto de partida):\n${seedReasoning}`
     : '';
   const messages: any[] = [
-    { role: 'user', content: `TAREA: ${prompt}\n\nRepo: ${repo}${seedContext}${reasoningNote}\n\nUsa las tools para explorar el código, entender el problema y aplicar el fix mínimo necesario. Verifica que old_str exista literalmente antes de usar apply_patch. Cuando termines, llama a task_complete.` }
+    { role: 'user', content: [{ type: 'text', text: `TAREA: ${prompt}\n\nRepo: ${repo}${seedContext}${reasoningNote}\n\nUsa las tools para explorar el código, entender el problema y aplicar el fix mínimo necesario. Verifica que old_str exista literalmente antes de usar apply_patch. Cuando termines, llama a task_complete.`, cache_control: { type: 'ephemeral' } }] }
   ];
 
   let commitMessage = 'fix: cambio aplicado por QUARK Agent (modo agéntico)';
@@ -781,7 +781,9 @@ async function runAgenticLoop(
       body: JSON.stringify({
         model: 'claude-sonnet-5',
         max_tokens: 2048,
-        tools: AGENT_TOOLS,
+        tools: AGENT_TOOLS.map((t, i) =>
+          i === AGENT_TOOLS.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t
+        ),
         messages,
       }),
     });
@@ -2351,7 +2353,9 @@ async function runHaikuTier(
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 4096,
-        tools: CHAT_TOOLS,
+        tools: CHAT_TOOLS.map((t, i) =>
+          i === CHAT_TOOLS.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t
+        ),
         messages,
       }),
     });
@@ -2483,8 +2487,10 @@ REGLAS:
         max_tokens: 16000,
         thinking: { type: 'adaptive', display: 'summarized' },
         output_config: { effort: classifyEffort(userMessage) },
-        system: systemPrompt,
-        tools: CHAT_TOOLS,
+        system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+        tools: CHAT_TOOLS.map((t, i) =>
+          i === CHAT_TOOLS.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t
+        ),
         messages,
       }),
     });
