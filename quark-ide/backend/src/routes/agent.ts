@@ -2331,6 +2331,55 @@ async function executeChatTool(
 
 // ── runChatTurn ───────────────────────────────────────────────────────────────
 
+async function runHaikuTier(
+  messages: any[],
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+  maxSteps = 6,
+): Promise<{ resolved: boolean; messages: any[] }> {
+  send('action', { text: '⚡ Escalando a Haiku 4.5 — investigación ligera' });
+
+  for (let step = 0; step < maxSteps; step++) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY!,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 4096,
+        tools: CHAT_TOOLS,
+        messages,
+      }),
+    });
+
+    const data = await res.json() as { content: any[] };
+    messages.push({ role: 'assistant', content: data.content });
+
+    const textBlocks = data.content.filter((b: any) => b.type === 'text');
+    for (const t of textBlocks) {
+      send('chat_message', { text: t.text });
+    }
+
+    const toolUses = data.content.filter((b: any) => b.type === 'tool_use');
+    if (toolUses.length === 0) {
+      return { resolved: true, messages };
+    }
+
+    const toolResults: any[] = [];
+    for (const tool of toolUses) {
+      const resultText = await executeChatTool(tool.name, tool.input, repo, send);
+      toolResults.push({ type: 'tool_result', tool_use_id: tool.id, content: resultText });
+    }
+    messages.push({ role: 'user', content: toolResults });
+  }
+
+  send('action', { text: '🧠 Haiku no resolvió en el límite — escalando a Sonnet 5' });
+  return { resolved: false, messages };
+}
+
 async function runChatTurn(
   sessionId: string,
   userMessage: string,
@@ -2387,10 +2436,22 @@ async function runChatTurn(
     }
 
     const reason = groqAnswer.replace('NEEDS_TOOLS:', '').trim();
-    send('action', { text: `🧠 Groq necesita más contexto — escalando a Claude (${reason})` });
+    const effort = classifyEffort(userMessage);
+
+    if (effort === 'medium') {
+      send('action', { text: `🧠 Groq necesita más contexto (${reason})` });
+      const haikuResult = await runHaikuTier(messages, repo, send);
+      if (haikuResult.resolved) {
+        await saveChatHistory(sessionId, haikuResult.messages);
+        return;
+      }
+    } else {
+      send('action', { text: `🧠 Groq necesita más contexto — escalando directo a Sonnet 5 (tarea de ${effort} effort)` });
+    }
+
     messages.push({
       role: 'user',
-      content: `[Contexto: Groq intentó responder esto primero y determinó que necesita ver código real. Razón: ${reason}]`,
+      content: `[Contexto: Groq/Haiku intentaron responder esto primero. Razón: ${reason}]`,
     });
   }
 
