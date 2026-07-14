@@ -671,6 +671,54 @@ async function searchAndLoadFiles(
   return [];
 }
 
+const PRIORITY_PATTERNS = [
+  /server\.(ts|js)$/,
+  /lib\//,
+  /routes\//,
+  /services\//,
+  /engine\.(ts|js)$/,
+  /detector\.(ts|js)$/,
+  /tradingLogic/,
+  /botEngine/,
+  /scoring/,
+  /screener/,
+];
+const FRONTEND_PATTERNS = [
+  /components\//,
+  /pages\//,
+  /\.tsx$/,
+  /hooks\//,
+];
+
+const LIST_FILES_EXCLUDED = ['node_modules/', '.lock', 'dist/', '.git/', 'package-lock.json'];
+const LIST_FILES_MAX = 150;
+
+async function listFilesFiltered(repo: string, filterPath?: string): Promise<string> {
+  const tree = await getFileTree(repo, 'main');
+
+  let paths = tree
+    .filter((f: any) => f.type === 'blob')
+    .map((f: any) => f.path as string)
+    .filter((p: string) => !LIST_FILES_EXCLUDED.some(ex => p.includes(ex)));
+
+  if (filterPath) {
+    paths = paths.filter((p: string) => p.startsWith(filterPath));
+  }
+
+  const score = (p: string): number =>
+    PRIORITY_PATTERNS.some(pt => pt.test(p)) ? 0 :
+    FRONTEND_PATTERNS.some(pt => pt.test(p)) ? 1 : 2;
+
+  paths.sort((a: string, b: string) => score(a) - score(b));
+
+  const shown = paths.slice(0, LIST_FILES_MAX);
+  const suffix = paths.length > LIST_FILES_MAX
+    ? `\n// ... (${paths.length - LIST_FILES_MAX} archivos más — usá el parámetro "path" para filtrar por carpeta)`
+    : '';
+
+  return shown.join('\n') + suffix;
+}
+
 const AGENT_TOOLS = [
   {
     name: "read_file",
@@ -803,8 +851,7 @@ async function runAgenticLoop(
       let resultText = '';
 
       if (tool.name === 'list_files') {
-        const tree = await getFileTree(repo, 'main');
-        resultText = tree.filter((f: any) => f.type === 'blob').map((f: any) => f.path).join('\n');
+        resultText = await listFilesFiltered(repo, tool.input.path);
       }
 
       if (tool.name === 'read_file') {
@@ -1049,25 +1096,6 @@ router.post('/generate', async (req, res) => {
     // Step 1: file tree (needed for smart read + generation paths)
     send('action', { text: '🔍 Leyendo estructura del repo...' });
     const tree = await getFileTree(repo, branch);
-    const PRIORITY_PATTERNS = [
-      /server\.(ts|js)$/,
-      /lib\//,
-      /routes\//,
-      /services\//,
-      /engine\.(ts|js)$/,
-      /detector\.(ts|js)$/,
-      /tradingLogic/,
-      /botEngine/,
-      /scoring/,
-      /screener/,
-    ]
-    const FRONTEND_PATTERNS = [
-      /components\//,
-      /pages\//,
-      /\.tsx$/,
-      /hooks\//,
-    ]
-
     const filePaths = tree
       .filter((f) => f.type === 'blob')
       .filter((f) =>
@@ -2274,8 +2302,7 @@ async function executeChatTool(
   send: (event: string, data: Record<string, unknown>) => void,
 ): Promise<string> {
   if (name === 'list_files') {
-    const tree = await getFileTree(repo, 'main');
-    return tree.filter((f: any) => f.type === 'blob').map((f: any) => f.path).join('\n');
+    return await listFilesFiltered(repo, input.path);
   }
   if (name === 'read_file') {
     send('action', { text: `📖 Leyendo ${input.path}` });

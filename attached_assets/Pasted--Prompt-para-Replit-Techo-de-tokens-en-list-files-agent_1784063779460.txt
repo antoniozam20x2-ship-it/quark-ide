@@ -1,0 +1,119 @@
+# Prompt para Replit — Techo de tokens en list_files (agent.ts)
+
+## Contexto
+
+`list_files` se usa en tres lugares de `agent.ts` (`runAgenticLoop`, y dos veces dentro de `executeChatTool` — usado por `runHaikuTier` y por el bloque Sonnet de `runChatTurn`). En los tres, devuelve el árbol completo del repo sin ningún límite:
+
+```javascript
+const tree = await getFileTree(repo, 'main');
+resultText = tree.filter((f: any) => f.type === 'blob').map((f: any) => f.path).join('\n');
+```
+
+En un repo grande esto mete potencialmente miles de líneas de paths como `tool_result` en el array de `messages`, gastando tokens sin necesidad — y sin priorizar código real sobre ruido (`node_modules/`, `dist/`, lockfiles).
+
+## Cambio 1 — Mover PRIORITY_PATTERNS y FRONTEND_PATTERNS a scope de módulo
+
+Actualmente `PRIORITY_PATTERNS` y `FRONTEND_PATTERNS` están definidos como `const` local **dentro** de `router.post('/generate', ...)`. Hay que sacarlos de ahí y declararlos a nivel de módulo (arriba del archivo, junto a `AGENT_TOOLS`/`CHAT_TOOLS`), para poder reusarlos también en `runAgenticLoop` y `executeChatTool` sin duplicar el array.
+
+```javascript
+const PRIORITY_PATTERNS = [
+  /server\.(ts|js)$/,
+  /lib\//,
+  /routes\//,
+  /services\//,
+  /engine\.(ts|js)$/,
+  /detector\.(ts|js)$/,
+  /tradingLogic/,
+  /botEngine/,
+  /scoring/,
+  /screener/,
+];
+const FRONTEND_PATTERNS = [
+  /components\//,
+  /pages\//,
+  /\.tsx$/,
+  /hooks\//,
+];
+```
+
+Dentro de `router.post('/generate', ...)` donde antes estaban declarados, dejar solo el uso (ya no la declaración) — el resto de esa función sigue igual.
+
+## Cambio 2 — Nueva función helper para listar archivos con techo y prioridad
+
+Agregar esta función a nivel de módulo, cerca de `AGENT_TOOLS`:
+
+```javascript
+const LIST_FILES_EXCLUDED = ['node_modules/', '.lock', 'dist/', '.git/', 'package-lock.json'];
+const LIST_FILES_MAX = 150;
+
+async function listFilesFiltered(repo: string, filterPath?: string): Promise<string> {
+  const tree = await getFileTree(repo, 'main');
+
+  let paths = tree
+    .filter((f: any) => f.type === 'blob')
+    .map((f: any) => f.path as string)
+    .filter((p: string) => !LIST_FILES_EXCLUDED.some(ex => p.includes(ex)));
+
+  if (filterPath) {
+    paths = paths.filter((p: string) => p.startsWith(filterPath));
+  }
+
+  const score = (p: string): number =>
+    PRIORITY_PATTERNS.some(pt => pt.test(p)) ? 0 :
+    FRONTEND_PATTERNS.some(pt => pt.test(p)) ? 1 : 2;
+
+  paths.sort((a: string, b: string) => score(a) - score(b));
+
+  const shown = paths.slice(0, LIST_FILES_MAX);
+  const suffix = paths.length > LIST_FILES_MAX
+    ? `\n// ... (${paths.length - LIST_FILES_MAX} archivos más — usá el parámetro "path" para filtrar por carpeta)`
+    : '';
+
+  return shown.join('\n') + suffix;
+}
+```
+
+## Cambio 3 — Reemplazar los tres call sites de list_files
+
+**a) En `runAgenticLoop`**, dentro del `for` de `toolUses`, reemplazar:
+
+```javascript
+if (tool.name === 'list_files') {
+  const tree = await getFileTree(repo, 'main');
+  resultText = tree.filter((f: any) => f.type === 'blob').map((f: any) => f.path).join('\n');
+}
+```
+
+por:
+
+```javascript
+if (tool.name === 'list_files') {
+  resultText = await listFilesFiltered(repo, tool.input.path);
+}
+```
+
+**b) En `executeChatTool`**, reemplazar:
+
+```javascript
+if (name === 'list_files') {
+  const tree = await getFileTree(repo, 'main');
+  return tree.filter((f: any) => f.type === 'blob').map((f: any) => f.path).join('\n');
+}
+```
+
+por:
+
+```javascript
+if (name === 'list_files') {
+  return await listFilesFiltered(repo, input.path);
+}
+```
+
+(Este segundo call site es usado tanto por `runHaikuTier` como por el bloque Sonnet de `runChatTurn`, así que un solo cambio cubre ambos.)
+
+## Validación
+
+Después de aplicar el cambio, probar `list_files` sin `path` en un repo grande (ej. Signal OS) y confirmar:
+- El resultado no supera ~150 líneas.
+- Los primeros paths mostrados son código real (`src/routes/`, `src/services/`, etc.), no archivos de config o assets.
+- Si se pasa `path` (ej. `"src/routes"`), el filtro por carpeta sigue funcionando y no aplica el techo de forma innecesaria si la carpeta tiene pocos archivos.
