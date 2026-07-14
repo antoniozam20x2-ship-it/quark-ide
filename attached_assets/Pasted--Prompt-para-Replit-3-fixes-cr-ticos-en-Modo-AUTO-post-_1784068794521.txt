@@ -1,0 +1,121 @@
+# Prompt para Replit — 3 fixes críticos en Modo AUTO (post primera prueba real)
+
+## Contexto de la prueba
+
+Corrimos la Prueba 1 con `MAX_BUDGET_USD = 0.05` en el repo `quark-ide`. Resultado: costó **$0.76** (15x el techo) y el panel de diff mostró `agent.ts` y `chat.ts` completos como "archivo nuevo" (+2665 y +578 líneas) cuando el SDK solo agregó 2 comentarios JSDoc puntuales. Los tres fixes de abajo atacan estas causas.
+
+---
+
+## Fix 1 — El corte de presupuesto no corta nada (causa raíz del gasto de $0.76)
+
+**Diagnóstico:** `query()` del Agent SDK ejecuta su loop interno completo (todos los turnos de Bash/Glob/Read/Edit) de una sola pasada y solo emite el mensaje `type: 'result'` con `total_cost_usd` **al final de todo el trabajo**, no turno a turno. El chequeo actual en `runAutoMode` llega demasiado tarde — el gasto ya ocurrió antes de que el código tenga oportunidad de leerlo.
+
+**Fix — usar `maxTurns` como techo duro real** (el único control que sí interrumpe a mitad de camino), en vez de confiar en un chequeo de costo post-hoc. Bajar el default y hacerlo más conservador para limitar el daño potencial de una corrida que se va de exploración:
+
+En `src/services/agentSdkAuto.ts`, cambiar:
+
+```typescript
+const MAX_BUDGET_USD = 2.0;
+const MAX_TURNS = 40;
+```
+
+por:
+
+```typescript
+const MAX_BUDGET_USD = 2.0; // se sigue reportando al final, pero YA NO es un corte real — ver nota abajo
+const MAX_TURNS = 15; // techo duro real — el SDK se detiene solo al llegar a este número de turnos
+```
+
+Y en las `options` de `query()`:
+
+```typescript
+options: {
+  cwd: workDir,
+  allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'],
+  permissionMode: 'acceptEdits',
+  maxTurns: MAX_TURNS, // ya estaba, pero ahora es el control real de corte — no MAX_BUDGET_USD
+  model: 'sonnet',
+},
+```
+
+**Eliminar o dejar solo informativo el chequeo de `totalCostUsd > MAX_BUDGET_USD`** — ya no corta nada, así que hay que sacar el `break` de esa condición (o dejarlo como log informativo post-hoc, aclarando en el texto del evento que es solo reporte, no un corte preventivo):
+
+```typescript
+if (message.type === 'result') {
+  totalCostUsd = message.total_cost_usd ?? 0;
+  lastResult = message.result ?? '';
+  send('action', { text: `💰 Costo final de la corrida: $${totalCostUsd.toFixed(4)}` });
+  // Nota: este chequeo es informativo — llega DESPUÉS de que el SDK ya terminó su loop interno completo.
+  // El control real de gasto es maxTurns, no este número.
+}
+```
+
+**Nota para vos (Jefferson):** con `MAX_TURNS = 15` y viendo que la prueba real gastó $0.76 en ~17 pasos, el próximo corte va a ser más barato pero todavía no hay forma de garantizar un tope de dólares exacto con el SDK tal como está — solo un tope de turnos. Si en algún momento necesitás un tope de dólares estricto y verificado en caliente, la alternativa es usar `hooks: { PreToolUse: [...] }` para contar tool calls manualmente y llamar `query.interrupt()` cuando se pase un umbral — pero eso es un cambio más grande, dejarlo para una iteración futura si el límite de turnos no alcanza.
+
+---
+
+## Fix 2 — El diff muestra archivos completos como "nuevos" en vez del cambio real
+
+**Causa:** `readChangedFileContents` devuelve `{ path, content }` sin `originalContent`. El panel de diff del frontend, sin `originalContent` para comparar, renderiza todo el archivo como si fuera nuevo.
+
+**Fix en `src/services/agentSdkAuto.ts`** — modificar `readChangedFileContents` para que también devuelva el contenido original (desde el repo real vía GitHub, igual que hace `findOriginal` en el flujo DEEP de `agent.ts`):
+
+```typescript
+import { getFileContent } from './github.js';
+
+export async function readChangedFileContents(
+  workDir: string,
+  changedFiles: string[],
+  repo: string,
+): Promise<{ path: string; content: string; originalContent?: string }[]> {
+  const fs = require('fs');
+  return Promise.all(
+    changedFiles.map(async (relPath) => {
+      const content = fs.readFileSync(path.join(workDir, relPath), 'utf-8');
+      let originalContent: string | undefined;
+      try {
+        originalContent = await getFileContent(relPath, repo);
+      } catch {
+        // Archivo realmente nuevo (no existía antes) — se omite originalContent
+        // y el diff se muestra correctamente como creación, no como falso "diff completo"
+      }
+      return originalContent !== undefined
+        ? { path: relPath, content, originalContent }
+        : { path: relPath, content };
+    }),
+  );
+}
+```
+
+**En `agent.ts`, actualizar la llamada** dentro de `router.post('/auto', ...)` para pasar el `repo` y esperar el resultado (ya es async, solo falta el `await` con el nuevo argumento):
+
+```typescript
+const filesWithContent = await readChangedFileContents(workDir, result.changedFiles, repo);
+```
+
+---
+
+## Fix 3 — Evitar los turnos perdidos descubriendo la estructura del repo
+
+**Causa:** el SDK gastó los primeros ~6 turnos con `find`/`ls -la`/`Glob` repetidos solo para descubrir que el código real vive en `quark-ide/backend/src/routes/` y no en la raíz del clon.
+
+**Fix en `router.post('/auto', ...)` de `agent.ts`** — detectar automáticamente el subdirectorio real del backend antes de armar el prompt, o al menos instruir al SDK a verificar la estructura primero de forma más eficiente. La opción más simple y efectiva: agregar una sola línea al prompt del usuario indicando que puede haber una carpeta anidada, para que el SDK vaya directo a un solo comando de descubrimiento en vez de varios:
+
+```typescript
+const result = await runAutoMode(
+  `${prompt}\n\n(Nota: el código fuente puede estar anidado dentro de una subcarpeta del repo, ej. backend/src o <nombre-repo>/backend/src — verificá la estructura real con un solo comando find o glob antes de asumir que está en la raíz.)`,
+  repo,
+  branch,
+  send,
+);
+```
+
+Esto no elimina el turno de descubrimiento (sigue siendo necesario), pero evita que repita el mismo descubrimiento con 3-4 comandos distintos como pasó en la prueba real.
+
+---
+
+## Validación después de aplicar los 3 fixes
+
+1. Repetir la Prueba 1 (con `MAX_BUDGET_USD` en su valor real de trabajo, ya que ahora es solo informativo) y confirmar que con `MAX_TURNS = 15` el costo total queda razonablemente acotado — comparar contra el $0.76 de esta corrida.
+2. Repetir la Prueba 2 con la tarea trivial y confirmar que ahora el panel de diff muestra solo las líneas realmente cambiadas (2 líneas de JSDoc), no el archivo completo como "nuevo".
+3. Confirmar en los logs que el descubrimiento de estructura del repo toma menos turnos que antes (idealmente 1-2 en vez de 6).

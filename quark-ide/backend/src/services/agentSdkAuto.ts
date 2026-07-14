@@ -3,6 +3,7 @@ import { execSync } from 'child_process';
 import { mkdtempSync, rmSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
+import { getFileContent } from './github.js';
 
 export interface AutoRunResult {
   success: boolean;
@@ -13,8 +14,8 @@ export interface AutoRunResult {
   error?: string;
 }
 
-const MAX_BUDGET_USD = 0.05; // TEMPORAL — prueba de corte por presupuesto; volver a 2.0 después
-const MAX_TURNS = 40;
+const MAX_BUDGET_USD = 2.0; // solo informativo al final — NO es un corte en caliente (el SDK no expone cost por turno)
+const MAX_TURNS = 15; // techo duro real — el SDK se detiene al llegar a este número de turnos
 
 export async function runAutoMode(
   prompt: string,
@@ -39,7 +40,7 @@ export async function runAutoMode(
     execSync('git config user.name "Quark AUTO"', { cwd: workDir });
     execSync('git add -A && git commit --allow-empty -m "checkpoint: estado inicial antes de AUTO"', { cwd: workDir, stdio: 'pipe' });
 
-    send('action', { text: `🤖 Iniciando modo AUTO — presupuesto máx $${MAX_BUDGET_USD}, ${MAX_TURNS} turnos` });
+    send('action', { text: `🤖 Iniciando modo AUTO — máx ${MAX_TURNS} turnos` });
 
     let totalCostUsd = 0;
     let lastResult = '';
@@ -69,12 +70,8 @@ export async function runAutoMode(
       if (message.type === 'result') {
         totalCostUsd = (message as any).total_cost_usd ?? 0;
         lastResult = (message as any).result ?? '';
-        send('action', { text: `💰 Costo de la corrida: $${totalCostUsd.toFixed(4)}` });
-
-        if (totalCostUsd > MAX_BUDGET_USD) {
-          send('action', { text: `🛑 Presupuesto excedido ($${totalCostUsd.toFixed(2)} > $${MAX_BUDGET_USD}) — deteniendo` });
-          break;
-        }
+        // Informativo post-hoc — el SDK ya terminó su loop cuando este mensaje llega
+        send('action', { text: `💰 Costo final de la corrida: $${totalCostUsd.toFixed(4)}` });
       }
     }
 
@@ -96,11 +93,25 @@ export async function runAutoMode(
   }
 }
 
-export function readChangedFileContents(workDir: string, changedFiles: string[]): { path: string; content: string }[] {
-  return changedFiles.map((relPath) => ({
-    path: relPath,
-    content: readFileSync(path.join(workDir, relPath), 'utf-8'),
-  }));
+export async function readChangedFileContents(
+  workDir: string,
+  changedFiles: string[],
+  repo: string,
+): Promise<{ path: string; content: string; originalContent?: string }[]> {
+  return Promise.all(
+    changedFiles.map(async (relPath) => {
+      const content = readFileSync(path.join(workDir, relPath), 'utf-8');
+      let originalContent: string | undefined;
+      try {
+        originalContent = await getFileContent(relPath, repo);
+      } catch {
+        // Archivo realmente nuevo — se omite originalContent; el diff se muestra como creación
+      }
+      return originalContent !== undefined
+        ? { path: relPath, content, originalContent }
+        : { path: relPath, content };
+    }),
+  );
 }
 
 export function cleanupWorkDir(workDir: string): void {

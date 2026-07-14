@@ -985,7 +985,12 @@ router.post('/auto', async (req, res) => {
 
   let workDir = '';
   try {
-    const result = await runAutoMode(prompt, repo, branch, send);
+    const result = await runAutoMode(
+      `${prompt}\n\n(Nota: el código fuente puede estar anidado dentro de una subcarpeta del repo, ej. backend/src o <nombre-repo>/backend/src — verificá la estructura real con un solo comando find o glob antes de asumir que está en la raíz.)`,
+      repo,
+      branch,
+      send,
+    );
     workDir = result.workDir;
 
     if (!result.success) {
@@ -1002,7 +1007,7 @@ router.post('/auto', async (req, res) => {
       return;
     }
 
-    const filesWithContent = readChangedFileContents(workDir, result.changedFiles);
+    const filesWithContent = await readChangedFileContents(workDir, result.changedFiles, repo);
 
     send('done', {
       files: filesWithContent,
