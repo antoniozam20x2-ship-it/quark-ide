@@ -2390,7 +2390,7 @@ REGLAS:
       body: JSON.stringify({
         model: 'claude-sonnet-5',
         max_tokens: 16000,
-        thinking: { type: 'adaptive' },
+        thinking: { type: 'adaptive', display: 'summarized' },
         system: systemPrompt,
         tools: CHAT_TOOLS,
         messages,
@@ -2401,6 +2401,16 @@ REGLAS:
     if (!res.ok || data.type === 'error') {
       throw new Error(`Anthropic API error ${res.status}: ${data.error?.message ?? JSON.stringify(data)}`);
     }
+    const thinkingBlocks = data.content.filter((b: any) => b.type === 'thinking');
+    if (thinkingBlocks.length > 0) {
+      console.log(`[DEBUG-THINKING] Turno ${step} — ${thinkingBlocks.length} bloque(s) de thinking:`);
+      for (const tb of thinkingBlocks) {
+        console.log(`[DEBUG-THINKING] ${tb.thinking?.slice(0, 500) ?? '(vacío)'}`);
+      }
+    } else {
+      console.log(`[DEBUG-THINKING] Turno ${step} — sin bloques de thinking (el modelo decidió no razonar explícitamente)`);
+    }
+
     // data.content is pushed intact — thinking blocks must not be filtered or
     // reconstructed before being stored, or Anthropic returns 400.
     messages.push({ role: 'assistant', content: data.content });
