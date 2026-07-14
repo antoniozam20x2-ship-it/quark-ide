@@ -2287,8 +2287,24 @@ async function executeChatTool(
   }
   if (name === 'grep_code') {
     send('action', { text: `🔎 Buscando "${input.pattern}"` });
-    const results = await searchCodeInRepo(input.pattern, repo);
-    return results.slice(0, 10).map((r: any) => r.path).join('\n') || 'Sin resultados';
+    const terms = input.pattern.split('|').map((t: string) => t.trim()).filter(Boolean);
+    const seen = new Set<string>();
+    const allResults: string[] = [];
+    for (const term of terms) {
+      try {
+        const results = await searchCodeInRepo(term, repo);
+        for (const r of results.slice(0, 10)) {
+          if (!seen.has(r.path)) {
+            seen.add(r.path);
+            allResults.push(r.path);
+          }
+        }
+      } catch (e: any) {
+        console.warn(`[grep_code] término "${term}" falló:`, e.message);
+      }
+      if (terms.length > 1) await new Promise(r => setTimeout(r, 300));
+    }
+    return allResults.slice(0, 10).join('\n') || 'Sin resultados';
   }
   if (name === 'propose_patch') {
     send('patch_proposal', {
