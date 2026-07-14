@@ -2338,6 +2338,7 @@ async function runHaikuTier(
   maxSteps = 6,
 ): Promise<{ resolved: boolean; messages: any[] }> {
   send('action', { text: '⚡ Escalando a Haiku 4.5 — investigación ligera' });
+  send('model_active', { model: 'Haiku 4.5', tier: 'balanced' });
 
   for (let step = 0; step < maxSteps; step++) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -2421,6 +2422,7 @@ async function runChatTurn(
   // ── Simple path: Groq triage (text-only, no tools) ───────────────────────────
   if (complexity === 'simple') {
     send('action', { text: '⚡ Modo rápido — Groq' });
+    send('model_active', { model: 'Groq (Llama 3.3 70B)', tier: 'fast' });
     const groqAnswer = await callGroqAgent(userMessage, buildTriagePrompt(cacheHint), 512);
 
     if (!groqAnswer.trim().startsWith('NEEDS_TOOLS:')) {
@@ -2467,6 +2469,7 @@ REGLAS:
 - Sé directo. No expliques de más si no te lo piden.
 - REGLA DE ANCLAJE POR AFIRMACIÓN: cada afirmación específica sobre el comportamiento del código (qué activa algo, qué condición dispara qué, cómo se relacionan dos variables) debe ir acompañada del fragmento de código exacto que la sustenta — no solo el nombre del archivo. Formato: la afirmación, seguida de la línea o condición literal entre backticks. Si no podés citar el fragmento exacto, no hagas la afirmación — es señal de que estás infiriendo en vez de leyendo. Si el código tiene dos funciones o ramas similares y opuestas (ej. "Bull"/"alcista" vs "Bear"/"bajista", o un "if" y su "else"), tratalas por separado — no mezcles las condiciones de ambas en un mismo párrafo. Indicá explícitamente qué condición pertenece a cuál.`;
 
+  send('model_active', { model: 'Sonnet 5', tier: 'deep' });
   for (let step = 0; step < maxToolSteps; step++) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',

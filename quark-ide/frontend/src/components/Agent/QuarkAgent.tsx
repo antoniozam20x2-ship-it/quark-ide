@@ -184,6 +184,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   const [sessionLoading, setSessionLoading] = useState(true);
   const [editableCommitMsg, setEditableCommitMsg] = useState('');
   const [confidencePayload, setConfidencePayload] = useState<ConfidencePayload | null>(null);
+  const [activeModel, setActiveModel] = useState<{ model: string; tier: string } | null>(null);
   const previewTriggeredRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const agentTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -402,6 +403,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               const parsed = JSON.parse(line.slice(6)) as {
                 event: string; text?: string; path?: string;
                 old_str?: string; new_str?: string; reasoning?: string;
+                model?: string; tier?: string;
               };
               if (parsed.event === 'chat_message') {
                 setFeed(prev => [...prev, { event: 'chat_message', text: parsed.text }]);
@@ -417,6 +419,8 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                   old_str: parsed.old_str!, new_str: parsed.new_str!,
                   reasoning: parsed.reasoning ?? '',
                 }]);
+              } else if (parsed.event === 'model_active') {
+                setActiveModel({ model: parsed.model!, tier: parsed.tier! });
               } else if (parsed.event === 'action') {
                 setFeed(prev => [...prev, { event: 'action', text: parsed.text }]);
               } else if (parsed.event === 'error') {
@@ -448,6 +452,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     setFixResult(null);
     setCommitResult(null);
     setConfidencePayload(null);
+    setActiveModel(null);
     previewTriggeredRef.current = false;
     readFilesRef.current = [];
 
@@ -540,6 +545,8 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                 files: (parsed.files as unknown as string[]) ?? [],
                 diagnosis: parsed.diagnosis ?? '',
               });
+            } else if (parsed.event === 'model_active') {
+              setActiveModel({ model: (parsed as any).model, tier: (parsed as any).tier });
             } else {
               setFeed((prev) => [...prev, { event: parsed.event as FeedItem['event'], text: parsed.text }]);
               if (parsed.text?.startsWith('💡')) {
@@ -1019,6 +1026,24 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               procesando
               <span className="thinking-dots" />
             </span>
+            {activeModel && (
+              <span style={{
+                fontSize: 11,
+                fontFamily: 'JetBrains Mono, monospace',
+                padding: '2px 7px',
+                borderRadius: 4,
+                fontWeight: 600,
+                color: activeModel.tier === 'fast' ? '#4ade80'
+                  : activeModel.tier === 'balanced' ? '#38bdf8'
+                  : '#a78bfa',
+                background: activeModel.tier === 'fast' ? '#4ade8018'
+                  : activeModel.tier === 'balanced' ? '#38bdf818'
+                  : '#a78bfa18',
+                border: `1px solid ${activeModel.tier === 'fast' ? '#4ade8040' : activeModel.tier === 'balanced' ? '#38bdf840' : '#a78bfa40'}`,
+              }}>
+                ● {activeModel.model}
+              </span>
+            )}
           </div>
         )}
 
