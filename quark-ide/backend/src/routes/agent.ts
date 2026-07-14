@@ -2402,13 +2402,10 @@ REGLAS:
       throw new Error(`Anthropic API error ${res.status}: ${data.error?.message ?? JSON.stringify(data)}`);
     }
     const thinkingBlocks = data.content.filter((b: any) => b.type === 'thinking');
-    if (thinkingBlocks.length > 0) {
-      console.log(`[DEBUG-THINKING] Turno ${step} — ${thinkingBlocks.length} bloque(s) de thinking:`);
-      for (const tb of thinkingBlocks) {
-        console.log(`[DEBUG-THINKING] ${tb.thinking?.slice(0, 500) ?? '(vacío)'}`);
+    for (const tb of thinkingBlocks) {
+      if (tb.thinking?.trim()) {
+        send('action', { text: `🧠 ${tb.thinking.trim()}` });
       }
-    } else {
-      console.log(`[DEBUG-THINKING] Turno ${step} — sin bloques de thinking (el modelo decidió no razonar explícitamente)`);
     }
 
     // data.content is pushed intact — thinking blocks must not be filtered or
