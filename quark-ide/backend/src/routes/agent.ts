@@ -8,6 +8,7 @@ import { execSync } from 'child_process';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
+import { runAutoMode, readChangedFileContents, cleanupWorkDir } from '../services/agentSdkAuto.js';
 
 // ── Agent session persistence (reuses memory_entries table) ───────────────────
 
@@ -962,6 +963,63 @@ async function validateWithTsc(
     rmSync(tmpDir, { recursive: true, force: true });
   }
 }
+
+router.post('/auto', async (req, res) => {
+  const { prompt, repo: bodyRepo, branch = 'main' } = req.body as {
+    prompt?: string; repo?: string; branch?: string;
+  };
+  const repo = bodyRepo ?? process.env.GITHUB_REPO;
+
+  if (!prompt || !repo) {
+    res.status(400).json({ error: 'prompt and repo are required' });
+    return;
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+  const send = (event: string, data: Record<string, unknown>) => {
+    res.write(`data: ${JSON.stringify({ event, ...data })}\n\n`);
+  };
+
+  let workDir = '';
+  try {
+    const result = await runAutoMode(prompt, repo, branch, send);
+    workDir = result.workDir;
+
+    if (!result.success) {
+      send('action', { text: `❌ AUTO falló: ${result.error}` });
+      send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+      res.end();
+      return;
+    }
+
+    if (result.changedFiles.length === 0) {
+      send('action', { text: '⚠️ AUTO no modificó ningún archivo' });
+      send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+      res.end();
+      return;
+    }
+
+    const filesWithContent = readChangedFileContents(workDir, result.changedFiles);
+
+    send('done', {
+      files: filesWithContent,
+      commitMessage: `feat: cambio autónomo vía Quark AUTO — ${result.summary.slice(0, 100)}`,
+      mainComponent: filesWithContent[0]?.path ?? '',
+      mainContent: filesWithContent[0]?.content ?? '',
+      totalCostUsd: result.totalCostUsd,
+      repo,
+      branch,
+    });
+  } catch (err) {
+    send('error', { text: err instanceof Error ? err.message : String(err) });
+  } finally {
+    if (workDir) cleanupWorkDir(workDir);
+    res.end();
+  }
+});
 
 router.post('/generate', async (req, res) => {
   // Auto-detectar deepMode desde prefijos del prompt

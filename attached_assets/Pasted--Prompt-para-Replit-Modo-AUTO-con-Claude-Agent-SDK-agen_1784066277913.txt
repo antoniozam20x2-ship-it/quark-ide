@@ -1,0 +1,233 @@
+# Prompt para Replit — Modo AUTO con Claude Agent SDK (agent.ts)
+
+## Contexto y objetivo
+
+Hoy Quark tiene FAST (análisis, Groq/DeepSeek/Gemini), DEEP (patch de un solo shot o `runAgenticLoop` casero con tools hechas a mano), y CHAT (Groq→Haiku→Sonnet con `propose_patch`). Ninguno de estos corre en el filesystem real — todo opera vía GitHub API (`getFileContent`/`createOrUpdateFile`), leyendo y escribiendo archivo por archivo.
+
+El **Modo AUTO** es distinto: usa el **Claude Agent SDK** (`@anthropic-ai/claude-agent-sdk`), la misma infraestructura que corre Claude Code, con tools nativas (`Read`, `Write`, `Bash`, `Glob`, `Grep`) operando sobre un clon local del repo en un directorio temporal — no sobre la abstracción de GitHub API que usa el resto de `agent.ts`. Esto reemplaza la necesidad de abrir Replit para tareas que Quark puede resolver de forma autónoma.
+
+**Principio de diseño:** AUTO explora y edita libremente en un working directory aislado (nunca toca el repo de GitHub directo), y al terminar presenta el diff para aprobación del usuario — igual que el resto de Quark, no hace push automático sin revisión.
+
+## Paso 1 — Instalar dependencia
+
+```bash
+npm install @anthropic-ai/claude-agent-sdk
+```
+
+Nota: el paquete TypeScript trae empaquetado un binario nativo de Claude Code como dependencia opcional — no hace falta instalar Claude Code por separado. Requiere Node.js (ya lo tenés en Railway).
+
+## Paso 2 — Nuevo servicio: `src/services/agentSdkAuto.ts`
+
+Crear un módulo nuevo que encapsula todo el manejo del SDK, para no mezclarlo con la lógica de `agent.ts`:
+
+```typescript
+import { query } from '@anthropic-ai/claude-agent-sdk';
+import { execSync } from 'child_process';
+import { mkdtempSync, rmSync, readdirSync, statSync } from 'fs';
+import { tmpdir } from 'os';
+import path from 'path';
+
+export interface AutoRunResult {
+  success: boolean;
+  workDir: string;
+  changedFiles: string[];
+  summary: string;
+  totalCostUsd: number;
+  error?: string;
+}
+
+const MAX_BUDGET_USD = 2.0; // techo de gasto por corrida — ajustar según tolerancia real
+const MAX_TURNS = 40;
+
+export async function runAutoMode(
+  prompt: string,
+  repo: string,
+  branch: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+): Promise<AutoRunResult> {
+  const owner = process.env.GITHUB_OWNER ?? 'antoniozam20x2-ship-it';
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) {
+    return { success: false, workDir: '', changedFiles: [], summary: '', totalCostUsd: 0, error: 'GITHUB_TOKEN no configurado' };
+  }
+
+  const workDir = mkdtempSync(path.join(tmpdir(), 'quark-auto-'));
+  const cloneUrl = `https://${token}@github.com/${owner}/${repo}.git`;
+
+  try {
+    send('action', { text: `📦 Clonando ${repo} (${branch}) en working directory aislado...` });
+    execSync(`git clone --depth 1 --branch ${branch} ${cloneUrl} .`, { cwd: workDir, stdio: 'pipe' });
+
+    // Checkpoint local — commit inicial para poder diffear al final
+    execSync('git config user.email "quark-auto@nexus.local"', { cwd: workDir });
+    execSync('git config user.name "Quark AUTO"', { cwd: workDir });
+    execSync('git add -A && git commit --allow-empty -m "checkpoint: estado inicial antes de AUTO"', { cwd: workDir, stdio: 'pipe' });
+
+    send('action', { text: `🤖 Iniciando modo AUTO — presupuesto máx $${MAX_BUDGET_USD}, ${MAX_TURNS} turnos` });
+
+    let totalCostUsd = 0;
+    let lastResult = '';
+
+    for await (const message of query({
+      prompt,
+      options: {
+        cwd: workDir,
+        allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'],
+        permissionMode: 'acceptEdits', // edita directo en el working dir aislado; el usuario aprueba el diff final, no cada edit individual
+        maxTurns: MAX_TURNS,
+        model: 'sonnet',
+      },
+    })) {
+      if (message.type === 'assistant') {
+        const textBlocks = (message.message?.content ?? []).filter((b: any) => b.type === 'text');
+        for (const t of textBlocks) {
+          if (t.text?.trim()) send('action', { text: `💭 ${t.text.trim().slice(0, 300)}` });
+        }
+        const toolBlocks = (message.message?.content ?? []).filter((b: any) => b.type === 'tool_use');
+        for (const tb of toolBlocks) {
+          send('action', { text: `🔧 ${tb.name}: ${JSON.stringify(tb.input).slice(0, 150)}` });
+        }
+      }
+
+      if (message.type === 'result') {
+        totalCostUsd = message.total_cost_usd ?? 0;
+        lastResult = message.result ?? '';
+        send('action', { text: `💰 Costo de la corrida: $${totalCostUsd.toFixed(4)}` });
+
+        if (totalCostUsd > MAX_BUDGET_USD) {
+          send('action', { text: `🛑 Presupuesto excedido ($${totalCostUsd.toFixed(2)} > $${MAX_BUDGET_USD}) — deteniendo` });
+          break;
+        }
+      }
+    }
+
+    // Detectar archivos modificados vs el checkpoint inicial
+    const diffOutput = execSync('git diff --name-only HEAD', { cwd: workDir, encoding: 'utf-8' }).trim();
+    const changedFiles = diffOutput ? diffOutput.split('\n') : [];
+
+    send('action', { text: `✅ AUTO terminó — ${changedFiles.length} archivo(s) modificado(s)` });
+
+    return {
+      success: true,
+      workDir,
+      changedFiles,
+      summary: lastResult,
+      totalCostUsd,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      workDir,
+      changedFiles: [],
+      summary: '',
+      totalCostUsd: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+  // OJO: no borrar workDir acá — se necesita después para leer el contenido final de los archivos.
+  // La limpieza (rmSync) se hace en el router después de leer los diffs, en un finally.
+}
+
+export function readChangedFileContents(workDir: string, changedFiles: string[]): { path: string; content: string }[] {
+  const fs = require('fs');
+  return changedFiles.map((relPath) => ({
+    path: relPath,
+    content: fs.readFileSync(path.join(workDir, relPath), 'utf-8'),
+  }));
+}
+
+export function cleanupWorkDir(workDir: string): void {
+  try {
+    rmSync(workDir, { recursive: true, force: true });
+  } catch {
+    // no bloquear si falla la limpieza
+  }
+}
+```
+
+## Paso 3 — Nuevo endpoint en `agent.ts`: `router.post('/auto')`
+
+Agregar cerca de `router.post('/generate', ...)`, siguiendo el mismo patrón SSE del resto del archivo:
+
+```typescript
+import { runAutoMode, readChangedFileContents, cleanupWorkDir } from '../services/agentSdkAuto.js';
+
+router.post('/auto', async (req, res) => {
+  const { prompt, repo: bodyRepo, branch = 'main' } = req.body as {
+    prompt?: string; repo?: string; branch?: string;
+  };
+  const repo = bodyRepo ?? process.env.GITHUB_REPO;
+
+  if (!prompt || !repo) {
+    res.status(400).json({ error: 'prompt and repo are required' });
+    return;
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+  const send = (event: string, data: Record<string, unknown>) => {
+    res.write(`data: ${JSON.stringify({ event, ...data })}\n\n`);
+  };
+
+  let workDir = '';
+  try {
+    const result = await runAutoMode(prompt, repo, branch, send);
+    workDir = result.workDir;
+
+    if (!result.success) {
+      send('action', { text: `❌ AUTO falló: ${result.error}` });
+      send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+      res.end();
+      return;
+    }
+
+    if (result.changedFiles.length === 0) {
+      send('action', { text: '⚠️ AUTO no modificó ningún archivo' });
+      send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+      res.end();
+      return;
+    }
+
+    const filesWithContent = readChangedFileContents(workDir, result.changedFiles);
+
+    send('done', {
+      files: filesWithContent,
+      commitMessage: `feat: cambio autónomo vía Quark AUTO — ${result.summary.slice(0, 100)}`,
+      mainComponent: filesWithContent[0]?.path ?? '',
+      mainContent: filesWithContent[0]?.content ?? '',
+      totalCostUsd: result.totalCostUsd,
+      repo,
+      branch,
+    });
+  } catch (err) {
+    send('error', { text: err instanceof Error ? err.message : String(err) });
+  } finally {
+    if (workDir) cleanupWorkDir(workDir);
+    res.end();
+  }
+});
+```
+
+## Paso 4 — Reutilizar el flujo de aprobación existente
+
+**Importante:** el evento `done` con `files` que emite `/auto` tiene el mismo shape que el que ya emite `/generate` — así que el frontend puede reusar el mismo componente de diff/aprobación que ya existe para DEEP (el mismo que dispara el commit real vía `createOrUpdateFile`). No hace falta construir una UI nueva, solo apuntar el botón "Modo AUTO" a este endpoint nuevo.
+
+## Variables de entorno necesarias
+
+Confirmar que ya existen en Railway (probablemente sí, dado que `github.ts` ya las usa):
+- `GITHUB_TOKEN` — con permiso de clone sobre los repos de `antoniozam20x2-ship-it`
+- `GITHUB_OWNER` (default ya cubierto en código: `antoniozam20x2-ship-it`)
+- `ANTHROPIC_API_KEY` — ya existe, la usa el SDK automáticamente vía variable de entorno estándar
+
+## Validación antes de dar por terminado
+
+1. Probar con una tarea simple primero (ej. "agrega un comentario a la primera línea de X archivo") para confirmar que el clone, el checkpoint, la ejecución del SDK y el diff final funcionan end-to-end sin tocar el repo real hasta la aprobación manual.
+2. Confirmar que `total_cost_usd` se loguea y que el corte por `MAX_BUDGET_USD` interrumpe la corrida si se dispara (probar bajando el techo a `$0.05` temporalmente para forzar el corte y verificar que no rompe el flujo).
+3. Confirmar que `workDir` se borra siempre (`finally` + `cleanupWorkDir`), incluso si `runAutoMode` tira una excepción — evitar que se acumulen directorios temporales en el contenedor de Railway.
+4. Verificar que Railway tiene `git` instalado en el contenedor (necesario para el `execSync('git clone ...')`) — si no está, hay que agregarlo al `Dockerfile`/build de Railway.
+
+## Nota sobre costos
+
+`MAX_BUDGET_USD = 2.0` es un valor de arranque conservador — ajustalo según lo que observes en los primeros usos reales. El campo `total_cost_usd` que devuelve el SDK en el mensaje `result` es la fuente de verdad — no hay forma de estimarlo antes de correr, solo de cortar la ejecución si se pasa del techo a mitad de camino.
