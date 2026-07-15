@@ -123,6 +123,48 @@ async function loadAgentContext(): Promise<{
   }
 }
 
+// ── Investigation finding cache (FAST → DEEP handoff) ────────────────────────
+
+const FINDING_NS = 'quark-fast-finding';
+const FINDING_TTL_MS = 30 * 60 * 1000;
+
+interface InvestigationFinding {
+  id: string;
+  files: string[];
+  diagnosis: string;
+  confidence: 'high' | 'medium' | 'low';
+  savedAt: number;
+}
+
+async function saveInvestigationFinding(
+  finding: Omit<InvestigationFinding, 'id' | 'savedAt'>,
+): Promise<string> {
+  const id = `finding-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const record: InvestigationFinding = { ...finding, id, savedAt: Date.now() };
+  await pool.query(
+    `INSERT INTO memory_entries (key, content, namespace)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
+    [id, JSON.stringify(record), FINDING_NS],
+  );
+  return id;
+}
+
+async function loadInvestigationFinding(id: string): Promise<InvestigationFinding | null> {
+  try {
+    const r = await pool.query<{ content: string }>(
+      `SELECT content FROM memory_entries WHERE key = $1 AND namespace = $2 LIMIT 1`,
+      [id, FINDING_NS],
+    );
+    if (!r.rows[0]?.content) return null;
+    const finding: InvestigationFinding = JSON.parse(r.rows[0].content);
+    if (Date.now() - finding.savedAt > FINDING_TTL_MS) return null;
+    return finding;
+  } catch {
+    return null;
+  }
+}
+
 // ── Shared context (cross-surface: Agent ↔ Chat ↔ War Room) ───────────────────
 
 async function saveContextSummary(
@@ -1028,8 +1070,8 @@ router.post('/auto', async (req, res) => {
 
 router.post('/generate', async (req, res) => {
   // Auto-detectar deepMode desde prefijos del prompt
-  let { prompt: rawPrompt, repo: bodyRepo, branch = 'main', projectName, deepMode } = req.body as {
-    prompt?: string; repo?: string; branch?: string; projectName?: string; deepMode?: boolean;
+  let { prompt: rawPrompt, repo: bodyRepo, branch = 'main', projectName, deepMode, findingId } = req.body as {
+    prompt?: string; repo?: string; branch?: string; projectName?: string; deepMode?: boolean; findingId?: string;
   };
 
   // Auto-detect mode from prefixes — takes priority over toggle
@@ -1308,12 +1350,21 @@ Si el código tiene dos funciones o ramas similares y opuestas (ej. una versión
           }
 
           const suggestedAction = confidence === 'high' ? 'deep' : 'chat';
+
+          // Persistir hallazgo para que DEEP lo reutilice sin re-exploración
+          const fastFindingId = await saveInvestigationFinding({
+            files: readFiles.map(f => f.path),
+            diagnosis: cleanAnalysis,
+            confidence: confidence as 'high' | 'medium' | 'low',
+          }).catch(() => null);
+
           send('confidence', {
             level: confidence,
             reason: confidenceReason,
             suggestedAction,
             files: readFiles.map(f => f.path),
             diagnosis: cleanAnalysis,
+            findingId: fastFindingId ?? undefined,
           });
 
           // Guardar en contexto compartido para otras superficies
@@ -1434,6 +1485,28 @@ Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
       // Si falla la pre-lectura, continúa sin contexto adicional
     }
     } // cierre del if preloadedFiles.length === 0
+
+    // ── DEEP + FAST finding: inyectar archivos ya investigados ───────────────
+    let findingDiagnosis: string | null = null;
+    if (deepMode && findingId) {
+      const finding = await loadInvestigationFinding(findingId).catch(() => null);
+      if (finding) {
+        findingDiagnosis = finding.diagnosis;
+        send('action', { text: `📎 Hallazgo previo cargado (FAST→DEEP) — archivos priorizados: ${finding.files.map(f => f.split('/').pop()).join(', ')}` });
+        // Agregar archivos del finding que no estén ya en preloadedFiles
+        const alreadyLoaded = new Set(preloadedFiles.map(f => f.path));
+        const missingPaths = finding.files.filter(p => !alreadyLoaded.has(p));
+        if (missingPaths.length > 0) {
+          const fetchResults = await Promise.allSettled(
+            missingPaths.map(async p => ({ path: p, content: await getFileContent(p, repo) }))
+          );
+          const fetched = fetchResults
+            .filter((r): r is PromiseFulfilledResult<{ path: string; content: string }> => r.status === 'fulfilled')
+            .map(r => r.value);
+          preloadedFiles = [...fetched, ...preloadedFiles];
+        }
+      }
+    }
 
     const fileContextStr = preloadedFiles.length > 0
       ? '\n\nCONTENIDO REAL DE ARCHIVOS RELEVANTES:\n' +
@@ -1635,8 +1708,12 @@ REGLAS:
 
       if (isComplexChange) {
         send('action', { text: `🤖 Cambio complejo — activando modo agéntico (Claude explora y corrige en loop)` });
+        // Si hay hallazgo de FAST, usarlo como punto de partida explícito en el prompt agéntico
+        const agenticPrompt = findingDiagnosis
+          ? `INVESTIGACIÓN PREVIA (FAST mode — estos archivos ya fueron identificados como relevantes, prioriza explorarlos antes que el repo completo):\n${findingDiagnosis}\n\nTAREA: ${prompt}`
+          : prompt;
         const agenticResult = await runAgenticLoop(
-          prompt,
+          agenticPrompt,
           repo,
           send,
           preloadedFiles.map(f => ({ path: f.path, content: f.fullContent ?? f.content })),

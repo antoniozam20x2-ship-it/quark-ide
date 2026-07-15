@@ -1,0 +1,88 @@
+# Tarea: Capa de investigación en FAST mode con caché para DEEP/CHAT
+
+## Objetivo
+FAST mode ya investiga código y responde con archivos, funciones y líneas relevantes.
+Falta que esa investigación se guarde estructurada en caché para que DEEP la reutilice
+sin tener que re-explorar el repo desde cero, y que el botón "Enviar a DEEP" pase el
+ID del hallazgo en lugar de texto plano.
+
+## 1. Nuevo tipo en memory_entries
+
+Reutilizar la tabla `memory_entries` existente (caché tripartita con TTL e invalidación
+por repo). Agregar un valor de `type: "investigation_finding"` para este uso específico.
+
+Estructura del `payload` (JSON) para este tipo de entrada:
+
+```typescript
+interface InvestigationFinding {
+  id: string;                    // uuid, generado al crear
+  repo: string;                  // ej. "Signal OS (Ahorar)"
+  query: string;                 // pregunta original del usuario en FAST
+  timestamp: string;             // ISO
+  confidence: "high" | "medium" | "low";
+  scope: "single-file" | "multi-file" | "cross-repo";
+  files: {
+    path: string;                // ej. "tradingLogic.ts"
+    functions: string[];         // ej. ["checkS1Bull", "checkS1Bear"]
+    lines: { start: number; end: number; description: string }[];
+    role: "primary" | "reference"; // primary = archivo a editar
+  }[];
+  summary: string;               // resumen en prosa (lo que ya genera FAST)
+  suggestedAction: "patch" | "explain-only" | "needs-more-context";
+}
+```
+
+## 2. Cambios en el flujo de FAST mode
+
+Al terminar de generar su respuesta (como en el ejemplo de checkS1Bull/checkS1Bear):
+
+1. Extraer/generar el `InvestigationFinding` correspondiente (puede pedirse al modelo
+   que devuelva este JSON además de la respuesta en texto, o parsearlo de la respuesta
+   ya estructurada que se ve en el screenshot: archivos, funciones, líneas, nivel de
+   confianza ya están presentes en el output actual).
+2. Insertar en `memory_entries` con `type: "investigation_finding"`, TTL estándar
+   (usar el mismo TTL que ya existe para el resto de la caché).
+3. Guardar el `id` del finding en el estado de la sesión de FAST para que los botones
+   de acción lo referencien.
+
+## 3. Cambios en los botones de acción (UI ya existe, cambia el payload)
+
+- **"Enviar a DEEP"**: en lugar de mandar el texto de la respuesta, mandar
+  `{ findingId: <id> }`.
+- **"Enviar a CHAT"**: sin cambios, sigue mandando el resumen en texto.
+- **"Enviar a War Room"**: sin cambios.
+
+## 4. Cambios en DEEP mode
+
+Al recibir una invocación con `findingId`:
+
+1. Hacer `SELECT` a `memory_entries` por ese `id`.
+2. Validar que no haya expirado (TTL).
+3. Si es válido:
+   - Saltar el paso de exploración/lectura inicial del repo.
+   - Ir directo a abrir los archivos listados en `files[].path`, enfocándose en los
+     rangos de `lines` indicados.
+   - Si `confidence` es `"low"` o `suggestedAction` es `"needs-more-context"`, hacer
+     una validación rápida de esas líneas antes de generar el parche (no aplicar a
+     ciegas).
+   - Si `confidence` es `"high"` y `suggestedAction` es `"patch"`, ir directo a
+     generar el parche sobre los archivos/líneas indicadas.
+4. Si el finding expiró o el `id` no existe (ej. sesión vieja), caer al comportamiento
+   actual de DEEP: investigar desde cero, sin romper el flujo.
+
+## 5. No tocar
+
+- AUTO mode: queda fuera de esta tarea, no debe recibir ningún cambio.
+- CHAT mode: no consume `InvestigationFinding`, sigue recibiendo texto plano.
+- War Room: sin cambios.
+- No crear tablas nuevas — todo vive en `memory_entries`.
+
+## 6. Criterio de aceptación
+
+- Una consulta en FAST que identifique una función específica (ej. checkS1Bull) debe
+  quedar guardada en `memory_entries` con la estructura de arriba.
+- Al presionar "Enviar a DEEP", DEEP debe poder mostrar en logs que usó el finding
+  cacheado (ej. "Usando hallazgo cacheado: tradingLogic.ts líneas X-Y") en lugar de
+  hacer sus llamadas de exploración iniciales.
+- Si se envía un finding expirado o inexistente, DEEP debe investigar normalmente sin
+  error visible al usuario.

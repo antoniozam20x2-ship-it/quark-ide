@@ -102,6 +102,7 @@ interface AgentEvent {
   reason?: string;
   suggestedAction?: 'deep' | 'chat';
   diagnosis?: string;
+  findingId?: string;
 }
 
 // Local feed items (superset — includes synthetic 'code' events)
@@ -184,6 +185,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   const [sessionLoading, setSessionLoading] = useState(true);
   const [editableCommitMsg, setEditableCommitMsg] = useState('');
   const [confidencePayload, setConfidencePayload] = useState<ConfidencePayload | null>(null);
+  const [findingId, setFindingId] = useState<string | null>(null);
   const [activeModel, setActiveModel] = useState<{ model: string; tier: string } | null>(null);
   const [autoRunCost, setAutoRunCost] = useState<number | null>(null);
   const previewTriggeredRef = useRef(false);
@@ -453,6 +455,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     setFixResult(null);
     setCommitResult(null);
     setConfidencePayload(null);
+    setFindingId(null);
     setActiveModel(null);
     setAutoRunCost(null);
     previewTriggeredRef.current = false;
@@ -534,6 +537,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           branch:      activeProject.branch,
           projectName: activeProject.name,
           deepMode:    mode === 'deep',
+          findingId:   mode === 'deep' ? findingId : undefined,
         }),
       });
 
@@ -606,6 +610,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                 files: (parsed.files as unknown as string[]) ?? [],
                 diagnosis: parsed.diagnosis ?? '',
               });
+              if (parsed.findingId) setFindingId(parsed.findingId as string);
             } else if (parsed.event === 'model_active') {
               setActiveModel({ model: (parsed as any).model, tier: (parsed as any).tier });
             } else {
