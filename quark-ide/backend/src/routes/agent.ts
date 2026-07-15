@@ -1488,10 +1488,12 @@ Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
 
     // ── DEEP + FAST finding: inyectar archivos ya investigados ───────────────
     let findingDiagnosis: string | null = null;
+    let findingConfidence: 'high' | 'medium' | 'low' | null = null;
     if (deepMode && findingId) {
       const finding = await loadInvestigationFinding(findingId).catch(() => null);
       if (finding) {
         findingDiagnosis = finding.diagnosis;
+        findingConfidence = finding.confidence;
         send('action', { text: `📎 Hallazgo previo cargado (FAST→DEEP) — archivos priorizados: ${finding.files.map(f => f.split('/').pop()).join(', ')}` });
         // Agregar archivos del finding que no estén ya en preloadedFiles
         const alreadyLoaded = new Set(preloadedFiles.map(f => f.path));
@@ -1708,10 +1710,27 @@ REGLAS:
 
       if (isComplexChange) {
         send('action', { text: `🤖 Cambio complejo — activando modo agéntico (Claude explora y corrige en loop)` });
-        // Si hay hallazgo de FAST, usarlo como punto de partida explícito en el prompt agéntico
-        const agenticPrompt = findingDiagnosis
-          ? `INVESTIGACIÓN PREVIA (FAST mode — estos archivos ya fueron identificados como relevantes, prioriza explorarlos antes que el repo completo):\n${findingDiagnosis}\n\nTAREA: ${prompt}`
-          : prompt;
+        // Adaptar el prompt agéntico según la confianza del hallazgo de FAST
+        let agenticPrompt = prompt;
+        if (findingDiagnosis) {
+          if (findingConfidence === 'high') {
+            // Alta confianza: diagnóstico completo, saltar exploración y aplicar fix directo
+            agenticPrompt = `DIAGNÓSTICO YA COMPLETO (FAST mode, confianza ALTA — NO repitas exploración):
+${findingDiagnosis}
+
+TAREA: ${prompt}
+
+El diagnóstico de arriba ya identifica la causa raíz y los archivos exactos. Lee esos archivos con read_file, aplica el fix mínimo con apply_patch, y llamá task_complete. No hagas grep_code ni busques más contexto salvo que el patch falle.`;
+          } else {
+            // Media/baja confianza: usar como punto de partida, DEEP decide si necesita más
+            agenticPrompt = `INVESTIGACIÓN PREVIA (FAST mode, confianza ${findingConfidence?.toUpperCase()} — úsala como punto de partida, explorá más si hace falta):
+${findingDiagnosis}
+
+TAREA: ${prompt}
+
+Estos archivos ya fueron identificados como relevantes — prioriza explorarlos antes que el repo completo.`;
+          }
+        }
         const agenticResult = await runAgenticLoop(
           agenticPrompt,
           repo,

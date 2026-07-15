@@ -1,4 +1,4 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '@anthropic-ai/claude-agent-sdk';
 import { execSync } from 'child_process';
 import { mkdtempSync, rmSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -45,6 +45,20 @@ export async function runAutoMode(
     let totalCostUsd = 0;
     let lastResult = '';
 
+    // Prefijo estático (cacheable entre turnos) / sufijo dinámico (sesión-específico)
+    const staticPrefix = `Eres QUARK Agent en modo AUTO — un agente que edita código directamente en el filesystem.
+
+REGLAS DE TRABAJO:
+- Aplica el fix MÍNIMO necesario para resolver la tarea descrita.
+- Antes de modificar un archivo, léelo para entender la estructura actual.
+- Si la tarea incluye un diagnóstico previo de FAST mode, úsalo como punto de partida y evita re-exploración amplia.
+- Cuando hagas un cambio, verifica que sea correcto leyendo el resultado.
+- Cuando termines, resume los cambios en 1-2 oraciones claras.
+- No expliques más de lo necesario — el usuario quiere el fix, no un ensayo.`;
+
+    const dynamicSuffix = `Repo activo: ${repo} (branch: ${branch})
+Working directory: ${workDir}`;
+
     for await (const message of query({
       prompt,
       options: {
@@ -53,6 +67,7 @@ export async function runAutoMode(
         permissionMode: 'acceptEdits',
         maxTurns: MAX_TURNS,
         model: 'sonnet',
+        systemPrompt: [staticPrefix, SYSTEM_PROMPT_DYNAMIC_BOUNDARY, dynamicSuffix],
       },
     })) {
       if (message.type === 'assistant') {

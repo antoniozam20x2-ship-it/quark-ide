@@ -1,0 +1,52 @@
+# Fase 1: Investigación (solo lectura, no tocar código todavía)
+
+Responder con evidencia directa del código, igual que se hizo antes con DEEP (12) y
+AUTO (15):
+
+1. **CHAT**: ¿existe un límite de turnos fijo (`maxTurns` o similar)? ¿Dónde está
+   definido en el código? Si no existe límite duro, confirmar que el ~20 observado es
+   un promedio de comportamiento, no un techo configurado.
+
+2. **Criterio de terminación en los tres modos (CHAT, DEEP, AUTO)**: ¿el loop corta en
+   cuanto el modelo indica que ya resolvió/está seguro, o hay algún paso que fuerza
+   turnos adicionales sin importar el nivel de confianza (ej. una "segunda pasada de
+   verificación" que siempre se ejecuta, o un mínimo de turnos antes de poder salir)?
+   Citar la línea/función exacta donde se decide "terminar" vs "seguir".
+
+3. **AUTO**: confirmar en el código actual (no asumir de análisis previos) si ya tiene
+   algún tipo de prompt caching implementado en `agentSdkAuto.ts`, o si sigue sin él.
+
+No hacer cambios en esta fase. Solo reportar con citas de código.
+
+# Fase 2: Cambios (una vez confirmada la fase 1)
+
+## A. Prompt caching en AUTO
+
+Replicar el mismo patrón de caching que ya funciona en CHAT, aplicado al loop de
+`agentSdkAuto.ts`. Debe cachear el contexto estático que se repite entre turnos
+(system prompt, archivos ya leídos, contexto del repo) para que turnos sucesivos no
+paguen precio completo por reenviar lo mismo.
+
+## B. Salida temprana basada en necesidad real, no en turnos disponibles
+
+En los tres modos (CHAT, DEEP, AUTO): el límite de turnos (20/12/15 respectivamente)
+debe seguir siendo el techo de seguridad — no tocar esos números todavía. Lo que sí
+debe cambiar es que el loop:
+
+- Termine en el turno mínimo en que el modelo tenga confianza suficiente para
+  resolver, sin forzar turnos adicionales "de relleno".
+- Si la tarea es simple (ej. ya llega con un `findingId` de alta confianza desde FAST,
+  o es un cambio de una línea), debe poder resolver en 1-3 turnos sin problema.
+- Si la tarea es genuinamente compleja (multi-archivo, requiere validar con bash,
+  dependencias inciertas), puede usar hasta el máximo disponible sin penalización —
+  eso es uso legítimo, no desperdicio.
+- Si existe alguna lógica actual que fuerza un mínimo de turnos o una verificación
+  obligatoria post-resolución que no aporta valor real, señalarla y proponer quitarla
+  o hacerla condicional a la complejidad detectada.
+
+## Criterio de aceptación
+
+- Reporte de fase 1 con líneas de código citadas para los 3 puntos.
+- Un caso simple (una línea, alta confianza) medido antes/después: debe mostrar menos
+  turnos usados en AUTO/DEEP tras el cambio, sin afectar casos complejos.
+- Caching de AUTO confirmado con hit visible en logs, igual que se validó para CHAT.
