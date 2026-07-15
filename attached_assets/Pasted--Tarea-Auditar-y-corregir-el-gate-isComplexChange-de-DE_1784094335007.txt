@@ -1,0 +1,67 @@
+# Tarea: Auditar y corregir el gate isComplexChange de DEEP
+
+## Contexto (ya confirmado por auditoría previa)
+
+DEEP tiene dos caminos: `runAgenticLoop` (tool-calling real, hasta 12 turnos) y
+single-shot (una sola llamada, JSON de operaciones, sin loop). La decisión entre
+ambos la toma `isComplexChange` (líneas ~1712-1717):
+
+```typescript
+const mainFileLineCount = mainPreloaded?.content?.split('\n').length ?? 0;
+const isLargeFile       = mainFileLineCount > 500;
+const mentionsMultipleFunctions = (prompt.match(/función|function/gi) ?? []).length > 2;
+const architecturalChange = /\b(refactor|arquitectur|diseño|estructura|patrón|pattern)\b/i.test(prompt);
+const isComplexChange = isLargeFile || mentionsMultipleFunctions || architecturalChange;
+```
+
+Problema: un archivo ≤500 líneas con un bug genuinamente complejo (necesita explorar
+causa raíz, múltiples condiciones, dependencias externas) cae en single-shot aunque
+se beneficiaría del loop iterativo. El propio warning existente en el código
+(~líneas 1886-1891) reconoce que el single-shot es poco confiable en archivos
+grandes, pero el gate actual no captura bien "complejidad de diagnóstico", solo
+tamaño de archivo y menciones de refactor.
+
+## Auditar primero, luego corregir en el mismo pase
+
+### 1. Visibilidad del camino tomado
+
+Confirmar si el feed que ve el usuario (eventos enviados al frontend) indica
+explícitamente cuál camino se usó (single-shot vs loop agéntico). Si no lo hace,
+agregarlo — un evento simple tipo `⚡ Cambio directo (single-shot)` o
+`🔄 Exploración iterativa (loop agéntico)` al inicio de cada camino, para que el
+usuario sepa qué se ejecutó sin tener que inferirlo.
+
+### 2. Mejorar el gate isComplexChange
+
+Agregar señales de complejidad de diagnóstico, no solo tamaño/refactor — similar al
+patrón que ya usa `classifyComplexity` en CHAT (regex de señales tipo "por qué",
+"causa raíz", "no funciona", "bug", "error", "falla", "se rompe"). Si el prompt del
+usuario contiene esas señales, debe ir a `runAgenticLoop` sin importar el tamaño del
+archivo, porque implica que se necesita investigar antes de poder editar con
+confianza.
+
+Mantener las condiciones existentes (`isLargeFile`, `mentionsMultipleFunctions`,
+`architecturalChange`) y sumar esta nueva señal con OR, no reemplazar nada.
+
+### 3. Revisar si hay otros huecos del mismo tipo
+
+Durante la auditoría, si se encuentra alguna otra condición donde el single-shot se
+active en casos donde claramente no debería (ej. el propio warning de las líneas
+1886-1891 sugiere que ya se sabe que hay casos problemáticos), corregirlo también en
+el mismo pase — no es necesario reportar y esperar, se puede arreglar directo.
+
+## Lo que NO cambia
+
+- El single-shot sigue existiendo como camino válido para cambios simples y
+  archivos pequeños sin señales de complejidad — no se elimina, solo se afina cuándo
+  se usa.
+- `runAgenticLoop`, sus 12 turnos, sus tools: sin cambios.
+- CHAT, FAST, AUTO: sin tocar.
+
+## Criterio de aceptación
+
+- Un prompt con "no funciona", "causa raíz", "bug" en un archivo de 400 líneas ahora
+  debe ir a `runAgenticLoop`, no a single-shot.
+- El feed muestra claramente qué camino se tomó en cada ejecución.
+- Los casos que antes iban a `runAgenticLoop` (archivo grande, multi-función,
+  refactor) lo siguen haciendo sin cambios.

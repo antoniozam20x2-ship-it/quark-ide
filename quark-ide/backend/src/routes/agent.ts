@@ -1713,11 +1713,14 @@ REGLAS:
       const isLargeFile = mainFileLineCount > 500;
       const mentionsMultipleFunctions = (prompt.match(/función|function/gi) ?? []).length > 2;
       const architecturalChange = /\b(refactor|arquitectur|diseño|estructura|patrón|pattern)\b/i.test(prompt);
+      // Señales de complejidad de diagnóstico: el prompt implica que hay que investigar
+      // la causa raíz antes de poder editar con confianza — igual que classifyComplexity en CHAT.
+      const isDiagnosticComplexity = /\b(por qu[eé]|porqu[eé]|causa ra[ií]z|no funciona|bug|error|falla|se rompe|arregla|corrige|resuelve|investiga|diagn[oó]stico)\b/i.test(prompt);
 
-      const isComplexChange = isLargeFile || mentionsMultipleFunctions || architecturalChange;
+      const isComplexChange = isLargeFile || mentionsMultipleFunctions || architecturalChange || isDiagnosticComplexity;
 
       if (isComplexChange) {
-        send('action', { text: `🤖 Cambio complejo — activando modo agéntico (Claude explora y corrige en loop)` });
+        send('action', { text: `🔄 Exploración iterativa (loop agéntico) — Claude lee, edita y verifica en hasta 12 turnos` });
         // Adaptar el prompt agéntico según la confianza del hallazgo de FAST
         let agenticPrompt = prompt;
         if (findingDiagnosis) {
@@ -1883,13 +1886,7 @@ REGLAS:
       return;
     }
 
-    if (isLargeFile && deepMode) {
-      send('action', { text: `⚠️ ADVERTENCIA: Archivo grande (${mainFileLineCount} líneas) + DEEP mode` });
-      send('action', { text: `🔴 Exact match tiene BAJA probabilidad en archivos grandes` });
-      send('action', { text: `💡 Recomendación: Prueba en Replit primero, trae el old_str exacto al Agent después` });
-      send('action', { text: `✂️ Continuando... si falla, abortará sin corromper` });
-    }
-
+    send('action', { text: '⚡ Cambio directo (single-shot) — generando patch en una sola pasada' });
     send('action', { text: '🔬 Modo cirugía — preparando patch...' });
 
     const systemPrompt = `Eres QUARK Agent en modo CIRUGÍA QUIRÚRGICA.
