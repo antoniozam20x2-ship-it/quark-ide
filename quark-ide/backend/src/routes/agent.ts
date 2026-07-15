@@ -2654,11 +2654,12 @@ async function runChatTurn(
 
   // Cargar hallazgo de FAST si viene con findingId
   let fastFindingContext = '';
+  let fastFinding: any = null; // hoisted para inyectar en cacheHint (Groq triage)
   if (findingId) {
-    const finding = await loadInvestigationFinding(findingId, repo).catch(() => null);
-    if (finding) {
-      send('action', { text: `📎 Hallazgo previo cargado (FAST→CHAT) — archivos priorizados: ${finding.files.map(f => f.split('/').pop()).join(', ')}` });
-      fastFindingContext = `\n\nINVESTIGACIÓN PREVIA (FAST mode, confianza ${finding.confidence.toUpperCase()}) — usa esto como punto de partida, no repitas la exploración desde cero salvo que necesites más detalle:\n${finding.diagnosis}\nArchivos identificados: ${finding.files.join(', ')}`;
+    fastFinding = await loadInvestigationFinding(findingId, repo).catch(() => null);
+    if (fastFinding) {
+      send('action', { text: `📎 Hallazgo previo cargado (FAST→CHAT) — archivos priorizados: ${fastFinding.files.map((f: string) => f.split('/').pop()).join(', ')}` });
+      fastFindingContext = `\n\nINVESTIGACIÓN PREVIA (FAST mode, confianza ${fastFinding.confidence.toUpperCase()}) — usa esto como punto de partida, no repitas la exploración desde cero salvo que necesites más detalle:\n${fastFinding.diagnosis}\nArchivos identificados: ${fastFinding.files.join(', ')}`;
     }
   }
 
@@ -2684,6 +2685,14 @@ async function runChatTurn(
     : '';
   cacheHint = cacheHint + sharedHint;
 
+  // Inyectar hallazgo en cacheHint para que Groq pueda responder basándose en la investigación
+  // previa sin necesitar tools — no altera qué camino toma classifyComplexity, solo mejora
+  // la capacidad de respuesta de Groq cuando ya hay contexto real del repo disponible.
+  if (fastFinding) {
+    const findingHint = `HALLAZGO PREVIO DE FAST MODE (confianza ${fastFinding.confidence.toUpperCase()}, investigación real del repo):\n${fastFinding.diagnosis.slice(0, 500)}\nArchivos identificados: ${fastFinding.files.join(', ')}\nSi este hallazgo responde la pregunta directamente, úsalo sin pedir herramientas.`;
+    cacheHint = findingHint + (cacheHint ? '\n\n' + cacheHint : '');
+  }
+
   // messages is initialized here so both paths (simple escalation + complex) share it
   const messages: any[] = [
     ...history,
@@ -2694,7 +2703,7 @@ async function runChatTurn(
   if (complexity === 'simple') {
     send('action', { text: '⚡ Modo rápido — Groq' });
     send('model_active', { model: 'Groq (Llama 3.3 70B)', tier: 'fast' });
-    const groqAnswer = await callGroqAgent(userMessage, buildTriagePrompt(cacheHint), 512);
+    const groqAnswer = await callGroqAgent(userMessage, buildTriagePrompt(cacheHint), fastFinding ? 768 : 512);
 
     if (!groqAnswer.trim().startsWith('NEEDS_TOOLS:')) {
       send('chat_message', { text: groqAnswer });

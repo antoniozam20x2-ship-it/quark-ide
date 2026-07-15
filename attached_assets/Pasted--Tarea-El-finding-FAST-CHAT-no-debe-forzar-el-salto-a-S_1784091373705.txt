@@ -1,0 +1,54 @@
+# Tarea: El finding (FAST→CHAT) no debe forzar el salto a Sonnet
+
+## Contexto confirmado
+
+Cuando `runChatTurn` recibe un `findingId` válido, el flujo parece saltar directo al
+camino de Sonnet sin pasar por `classifyComplexity` — se confirmó en la práctica con
+una pregunta simple ("cómo funciona la señal S1") que no matchea ningún patrón de
+`COMPLEX_SIGNALS`, y aun así fue directo a Sonnet cuando venía con finding cargado.
+
+## Objetivo
+
+`classifyComplexity(userMessage)` debe seguir siendo la única fuente de verdad para
+decidir el motor (Groq/Haiku/Sonnet), sin importar si hay o no un `findingId`
+adjunto. El finding debe inyectarse como contexto adicional al mensaje/prompt, pero
+no debe alterar qué camino de ejecución se toma.
+
+## Cambios
+
+1. Localizar dónde exactamente la presencia de `findingId` está saltando el
+   clasificador (probablemente un `if (findingId) { ... Sonnet directo ... } else {
+   const complexity = classifyComplexity(...) ... }`, o similar).
+
+2. Reordenar para que `classifyComplexity(userMessage)` se evalúe siempre, primero,
+   sin condicionarlo a si hay finding o no. El finding se inyecta como contexto
+   *dentro* de cualquiera de los tres caminos (Groq, Haiku, Sonnet) que termine
+   resultando — no determina cuál se usa.
+
+3. Caso a validar explícitamente: mensaje simple + finding presente → debe poder
+   llegar a Groq si `classifyComplexity` devuelve `'simple'`. Si Groq no tiene
+   soporte de tools y el finding requiere que se lean archivos, Groq seguirá teniendo
+   la vía de escape existente (`NEEDS_TOOLS:` → escalar a Sonnet) — no hace falta
+   forzarlo de antemano.
+
+4. Opcional (evaluar si aporta valor): si el `finding.confidence` es `'low'` o
+   `suggestedAction` es `'needs-more-context'`, se podría sumar como una señal más
+   dentro de `classifyComplexity` (no como bypass, sino como un factor adicional
+   junto a los regex/longitud/multi-archivo ya existentes) — a discutir si vale la
+   pena o si el mecanismo de `NEEDS_TOOLS:` ya cubre ese caso adecuadamente.
+
+## Lo que NO cambia
+
+- El comportamiento de `classifyComplexity` para mensajes sin finding: sin cambios.
+- El fallback existente de Groq → Sonnet cuando Groq responde `NEEDS_TOOLS:`: sin
+  cambios, sigue siendo la red de seguridad.
+- DEEP, FAST, AUTO: sin tocar.
+
+## Criterio de aceptación
+
+- Pregunta simple + finding cargado → pasa por Groq (o Haiku si Groq escala por
+  effort medium), no directo a Sonnet.
+- Pregunta con señales de COMPLEX_SIGNALS + finding cargado → sigue yendo a Sonnet,
+  igual que antes (comportamiento sin cambios para ese caso).
+- El finding se sigue inyectando como contexto en el prompt sin importar qué motor
+  termine ejecutando la respuesta.
