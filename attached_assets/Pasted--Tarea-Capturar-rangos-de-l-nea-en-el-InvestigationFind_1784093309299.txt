@@ -1,0 +1,58 @@
+# Tarea: Capturar rangos de línea en el InvestigationFinding
+
+## Contexto
+
+FAST ya calcula rangos de línea internamente al hacer la extracción de contexto
+alrededor de cada match (se ve en logs: "extracting lines 875-903 around
+'trailingStop' (hit at line 878)"). Ese dato existe en el proceso, pero no se está
+guardando en el finding que se persiste en `memory_entries` — hoy el finding solo
+guarda paths de archivo + diagnóstico en texto libre, sin líneas.
+
+## Objetivo
+
+Que el `InvestigationFinding` incluya, por archivo, los rangos de línea que ya se
+calcularon durante la extracción — sin agregar ningún paso de búsqueda nuevo, solo
+capturando el dato que ya existe en memoria en ese momento del flujo.
+
+## Cambios
+
+1. Localizar el punto donde se hace la extracción de líneas (el mismo que genera los
+   logs "extracting lines X-Y around 'term' (hit at line Z)").
+
+2. Extender la interfaz `InvestigationFinding` para incluir, por archivo:
+   ```typescript
+   files: {
+     path: string;
+     lineRanges?: { start: number; end: number; matchedTerm: string }[];
+   }[]
+   ```
+
+3. Al guardar el finding (`saveInvestigationFinding`), poblar `lineRanges` con los
+   rangos que ya se calcularon en esa sesión de FAST, uno por cada archivo/término
+   que tuvo match.
+
+4. En el consumo del finding (DEEP y CHAT): cuando se inyecta el finding como
+   contexto o se arma `seedContext`/`cacheHint`, incluir los rangos de línea en el
+   texto (ej. "server.ts, líneas 205-350: <contexto>") para que el modelo consumidor
+   pueda ir directo a esa sección en vez de leer el archivo completo.
+
+5. Si `read_file` soporta `start_line`/`end_line` (ya lo mencionaron para el caché de
+   sesión), aprovechar eso: cuando DEEP/CHAT necesite confirmar el contenido del
+   finding, que pueda pedir solo el rango indicado en vez del archivo completo —
+   reduce aún más los tokens de esa lectura de verificación.
+
+## Lo que NO cambia
+
+- No agregar ninguna búsqueda o pasada adicional en FAST — solo capturar datos que
+  ya se calculan.
+- Si un archivo del finding no tiene rango de línea disponible (por ejemplo, porque
+  la extracción no aplicó ahí), debe seguir funcionando como hasta ahora — el campo
+  es opcional, no rompe el flujo existente.
+
+## Criterio de aceptación
+
+- Un finding generado por FAST para una búsqueda con match (ej. "trailingStop") debe
+  incluir `lineRanges` con el rango real usado en la extracción.
+- Al enviarse a DEEP o CHAT, el rango aparece en el contexto inyectado.
+- Si DEEP/CHAT necesita confirmar el código, puede pedir solo esas líneas en vez del
+  archivo completo cuando `read_file` soporte rango.
