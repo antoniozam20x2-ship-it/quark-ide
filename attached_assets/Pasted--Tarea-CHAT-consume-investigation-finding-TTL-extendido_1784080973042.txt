@@ -1,0 +1,47 @@
+# Tarea: CHAT consume investigation_finding + TTL extendido a 2 horas
+
+## 1. Aumentar TTL de investigation_finding
+
+En `saveInvestigationFinding` / `loadInvestigationFinding` (agent.ts): cambiar el TTL
+de 30 minutos a 2 horas para entradas con `type: "investigation_finding"` en
+`memory_entries`.
+
+- No tocar el TTL de otros tipos de entrada en `memory_entries` (namespace
+  `quark-fast-finding` únicamente).
+- Confirmar que la invalidación por repo (la que ya existe en la caché tripartita)
+  sigue aplicando sobre estas entradas independientemente del TTL — es decir, si hay
+  un cambio real en el repo, el finding se invalida aunque no hayan pasado las 2 horas.
+
+## 2. CHAT consume investigation_finding
+
+Extender el mismo patrón que ya usa DEEP, pero para `runChatTurn`:
+
+- El botón "Enviar a CHAT" (o el flujo que dispara CHAT desde FAST cuando la consulta
+  es muy compleja) debe pasar el `findingId`, igual que ya hace "Enviar a DEEP".
+- En `runChatTurn`, si llega `findingId`:
+  1. `loadInvestigationFinding(findingId)`.
+  2. Si es válido (no expiró, existe): inyectar el `summary` y los `files` del
+     finding como contexto inicial del turno — no como reemplazo de la
+     investigación de CHAT, sino como punto de partida (igual filosofía que en DEEP:
+     "esto ya se investigó, prioriza aquí, pero si necesitas más, sigue indagando
+     por tu cuenta con tus propias tools").
+  3. Emitir un evento visible en el feed de CHAT (mismo estilo que el
+     "📎 Hallazgo previo cargado" de DEEP) para que el usuario vea que se usó
+     contexto previo.
+  4. Si expiró o no existe: caer al comportamiento normal de CHAT sin error visible.
+
+## Lo que NO cambia
+
+- AUTO: sin tocar, queda pausado para esta iteración.
+- War Room: sin tocar.
+- El flujo FAST → DEEP ya implementado: sin cambios.
+- No crear tablas nuevas.
+
+## Criterio de aceptación
+
+- Un finding guardado por FAST hace 90 minutos todavía es válido si se envía a CHAT o
+  DEEP (antes se habría expirado a los 30 min).
+- Al enviar una consulta compleja de FAST a CHAT, el feed de CHAT muestra el aviso de
+  hallazgo previo cargado y CHAT no repite desde cero la exploración que ya hizo FAST.
+- Si el finding expiró (>2h) o no existe, CHAT funciona exactamente igual que hoy, sin
+  errores visibles al usuario.

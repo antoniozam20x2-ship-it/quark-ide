@@ -126,10 +126,11 @@ async function loadAgentContext(): Promise<{
 // ── Investigation finding cache (FAST → DEEP handoff) ────────────────────────
 
 const FINDING_NS = 'quark-fast-finding';
-const FINDING_TTL_MS = 30 * 60 * 1000;
+const FINDING_TTL_MS = 2 * 60 * 60 * 1000; // 2 horas — aplica solo a quark-fast-finding
 
 interface InvestigationFinding {
   id: string;
+  repo: string;
   files: string[];
   diagnosis: string;
   confidence: 'high' | 'medium' | 'low';
@@ -150,7 +151,7 @@ async function saveInvestigationFinding(
   return id;
 }
 
-async function loadInvestigationFinding(id: string): Promise<InvestigationFinding | null> {
+async function loadInvestigationFinding(id: string, repo?: string): Promise<InvestigationFinding | null> {
   try {
     const r = await pool.query<{ content: string }>(
       `SELECT content FROM memory_entries WHERE key = $1 AND namespace = $2 LIMIT 1`,
@@ -159,6 +160,8 @@ async function loadInvestigationFinding(id: string): Promise<InvestigationFindin
     if (!r.rows[0]?.content) return null;
     const finding: InvestigationFinding = JSON.parse(r.rows[0].content);
     if (Date.now() - finding.savedAt > FINDING_TTL_MS) return null;
+    // Invalidación por repo: si el repo actual difiere del que generó el finding, descartar
+    if (repo && finding.repo && finding.repo !== repo) return null;
     return finding;
   } catch {
     return null;
@@ -1351,8 +1354,9 @@ Si el código tiene dos funciones o ramas similares y opuestas (ej. una versión
 
           const suggestedAction = confidence === 'high' ? 'deep' : 'chat';
 
-          // Persistir hallazgo para que DEEP lo reutilice sin re-exploración
+          // Persistir hallazgo para que DEEP/CHAT lo reutilice sin re-exploración
           const fastFindingId = await saveInvestigationFinding({
+            repo,
             files: readFiles.map(f => f.path),
             diagnosis: cleanAnalysis,
             confidence: confidence as 'high' | 'medium' | 'low',
@@ -2577,9 +2581,20 @@ async function runChatTurn(
   repo: string,
   send: (event: string, data: Record<string, unknown>) => void,
   maxToolSteps = 20,
+  findingId?: string,
 ): Promise<void> {
   const history = await loadChatHistory(sessionId);
   const complexity = classifyComplexity(userMessage);
+
+  // Cargar hallazgo de FAST si viene con findingId
+  let fastFindingContext = '';
+  if (findingId) {
+    const finding = await loadInvestigationFinding(findingId, repo).catch(() => null);
+    if (finding) {
+      send('action', { text: `📎 Hallazgo previo cargado (FAST→CHAT) — archivos priorizados: ${finding.files.map(f => f.split('/').pop()).join(', ')}` });
+      fastFindingContext = `\n\nINVESTIGACIÓN PREVIA (FAST mode, confianza ${finding.confidence.toUpperCase()}) — usa esto como punto de partida, no repitas la exploración desde cero salvo que necesites más detalle:\n${finding.diagnosis}\nArchivos identificados: ${finding.files.join(', ')}`;
+    }
+  }
 
   // Preload cached agent context (populated by QuarkAgent deep analysis runs)
   const cachedCtx = await loadAgentContext().catch(() => null);
@@ -2606,7 +2621,7 @@ async function runChatTurn(
   // messages is initialized here so both paths (simple escalation + complex) share it
   const messages: any[] = [
     ...history,
-    { role: 'user', content: userMessage + seedContext },
+    { role: 'user', content: userMessage + fastFindingContext + seedContext },
   ];
 
   // ── Simple path: Groq triage (text-only, no tools) ───────────────────────────
@@ -2727,8 +2742,8 @@ REGLAS:
 }
 
 router.post('/chat', async (req, res) => {
-  const { message, repo: bodyRepo, sessionId } = req.body as {
-    message?: string; repo?: string; sessionId?: string;
+  const { message, repo: bodyRepo, sessionId, findingId } = req.body as {
+    message?: string; repo?: string; sessionId?: string; findingId?: string;
   };
   const repo = bodyRepo ?? process.env.GITHUB_REPO;
   console.log('[CHAT] incoming →', { message, repo, sessionId });
@@ -2747,7 +2762,7 @@ router.post('/chat', async (req, res) => {
   };
 
   try {
-    await runChatTurn(sessionId, message, repo, send);
+    await runChatTurn(sessionId, message, repo, send, 20, findingId);
     send('done', {});
   } catch (err) {
     const stack = err instanceof Error ? (err.stack ?? err.message) : String(err);

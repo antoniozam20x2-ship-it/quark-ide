@@ -390,10 +390,12 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
       setRunning(true);
       setFeed(prev => [...prev, { event: 'user_message', text }]);
       try {
+        const chatFindingId = findingId;
+        setFindingId(null); // consumir el finding — solo aplica al primer mensaje de esta sesión CHAT
         const res = await fetch(`${API_BASE}/agent/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text, repo: selectedRepo, sessionId: chatSessionId }),
+          body: JSON.stringify({ message: text, repo: selectedRepo, sessionId: chatSessionId, findingId: chatFindingId ?? undefined }),
         });
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
         const reader = res.body.getReader();
