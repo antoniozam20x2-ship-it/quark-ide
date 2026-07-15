@@ -2460,18 +2460,59 @@ router.post('/apply-patch', async (req, res) => {
 
 // ── Shared tool executor ──────────────────────────────────────────────────────
 
+// ── Session-level file cache — evita re-fetch de archivos ya leídos en el turno actual ─────────
+const SESSION_FILE_CACHE = new Map<string, { files: Map<string, string>; ts: number }>();
+const SESSION_CACHE_TTL_MS = 30 * 60 * 1000;
+
+function getSessionFiles(sessionId: string): Map<string, string> {
+  const now = Date.now();
+  for (const [id, entry] of SESSION_FILE_CACHE) {
+    if (now - entry.ts > SESSION_CACHE_TTL_MS) SESSION_FILE_CACHE.delete(id);
+  }
+  let entry = SESSION_FILE_CACHE.get(sessionId);
+  if (!entry) { entry = { files: new Map(), ts: now }; SESSION_FILE_CACHE.set(sessionId, entry); }
+  entry.ts = now;
+  return entry.files;
+}
+
+// ── Helpers para limpiar patrones antes de enviarlos a GitHub code search ────────────────────────
+function cleanForGitHubSearch(pattern: string): string {
+  return pattern.replace(/[="(){}[\]<>]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function generateSearchVariants(term: string): string[] {
+  const variants = new Set<string>([term]);
+  const toSnake = term.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+  if (toSnake !== term) variants.add(toSnake);
+  const underscored = term.replace(/-/g, '_');
+  if (underscored !== term) variants.add(underscored);
+  const stripped = term.replace(/[-_]/g, '');
+  if (stripped !== term && stripped.length > 3) variants.add(stripped);
+  return [...variants].filter(Boolean);
+}
+
 async function executeChatTool(
   name: string,
   input: Record<string, any>,
   repo: string,
   send: (event: string, data: Record<string, unknown>) => void,
+  sessionId: string,
 ): Promise<string> {
   if (name === 'list_files') {
     return await listFilesFiltered(repo, input.path);
   }
   if (name === 'read_file') {
-    send('action', { text: `📖 Leyendo ${input.path}` });
-    const content = await getFileContent(input.path, repo);
+    const sessionFiles = getSessionFiles(sessionId);
+    const cacheKey = `${input.path}@${repo}`;
+    let content: string;
+    if (sessionFiles.has(cacheKey)) {
+      content = sessionFiles.get(cacheKey)!;
+      send('action', { text: `📖 Leyendo ${input.path} (caché de sesión)` });
+    } else {
+      send('action', { text: `📖 Leyendo ${input.path}` });
+      content = await getFileContent(input.path, repo);
+      sessionFiles.set(cacheKey, content);
+    }
     const lines = content.split('\n');
     if (input.start_line) {
       return lines.slice(input.start_line - 1, input.end_line ?? lines.length).join('\n');
@@ -2492,24 +2533,45 @@ async function executeChatTool(
   }
   if (name === 'grep_code') {
     send('action', { text: `🔎 Buscando "${input.pattern}"` });
-    const terms = input.pattern.split('|').map((t: string) => t.trim()).filter(Boolean);
+    const rawTerms = input.pattern.split('|').map((t: string) => t.trim()).filter(Boolean);
     const seen = new Set<string>();
     const allResults: string[] = [];
-    for (const term of terms) {
-      try {
-        const results = await searchCodeInRepo(term, repo);
-        for (const r of results.slice(0, 10)) {
-          if (!seen.has(r.path)) {
-            seen.add(r.path);
-            allResults.push(r.path);
+    for (const rawTerm of rawTerms) {
+      if (allResults.length >= 10) break;
+      const cleaned = cleanForGitHubSearch(rawTerm);
+      const termsToTry = generateSearchVariants(cleaned);
+      let foundWithVariant = false;
+      for (const term of termsToTry) {
+        if (allResults.length >= 10) break;
+        try {
+          const results = await searchCodeInRepo(term, repo);
+          for (const r of results.slice(0, 10)) {
+            if (!seen.has(r.path)) {
+              seen.add(r.path);
+              const snippet = r.fragments[0]
+                ? ` — "${r.fragments[0].replace(/\n/g, ' ').slice(0, 120)}"`
+                : '';
+              allResults.push(`${r.path}${snippet}`);
+            }
           }
+          if (results.length > 0) { foundWithVariant = true; break; }
+        } catch (e: any) {
+          if (e.message === 'GITHUB_RATE_LIMIT') {
+            return `Error: GitHub code search rate limit alcanzado (10 req/min). Esperá ~1 min y reintentá, o usá read_file directamente en los archivos sospechosos.`;
+          }
+          console.warn(`[grep_code] término "${term}" falló:`, e.message);
         }
-      } catch (e: any) {
-        console.warn(`[grep_code] término "${term}" falló:`, e.message);
+        if (termsToTry.length > 1) await new Promise(r => setTimeout(r, 300));
       }
-      if (terms.length > 1) await new Promise(r => setTimeout(r, 300));
+      if (!foundWithVariant) {
+        console.log(`[grep_code] sin resultados para "${rawTerm}" (variantes probadas: ${termsToTry.join(', ')})`);
+      }
+      if (rawTerms.length > 1) await new Promise(r => setTimeout(r, 300));
     }
-    return allResults.slice(0, 10).join('\n') || 'Sin resultados';
+    if (allResults.length === 0) {
+      return `Sin resultados vía GitHub code search para "${input.pattern}". Causas posibles: delay de indexación de GitHub, rate limit silencioso, o caracteres especiales en el patrón (${input.pattern}). Si el término existe, usá read_file directamente en los archivos donde lo esperás encontrar, en vez de reintentar grep_code con el mismo término.`;
+    }
+    return allResults.slice(0, 10).join('\n');
   }
   if (name === 'propose_patch') {
     send('patch_proposal', {
@@ -2529,6 +2591,7 @@ async function runHaikuTier(
   messages: any[],
   repo: string,
   send: (event: string, data: Record<string, unknown>) => void,
+  sessionId: string,
   maxSteps = 6,
 ): Promise<{ resolved: boolean; messages: any[] }> {
   send('action', { text: '⚡ Escalando a Haiku 4.5 — investigación ligera' });
@@ -2568,7 +2631,7 @@ async function runHaikuTier(
 
     const toolResults: any[] = [];
     for (const tool of toolUses) {
-      const resultText = await executeChatTool(tool.name, tool.input, repo, send);
+      const resultText = await executeChatTool(tool.name, tool.input, repo, send, sessionId);
       toolResults.push({ type: 'tool_result', tool_use_id: tool.id, content: resultText });
     }
     messages.push({ role: 'user', content: toolResults });
@@ -2650,7 +2713,7 @@ async function runChatTurn(
 
     if (effort === 'medium') {
       send('action', { text: `🧠 Groq necesita más contexto (${reason})` });
-      const haikuResult = await runHaikuTier(messages, repo, send);
+      const haikuResult = await runHaikuTier(messages, repo, send, sessionId);
       if (haikuResult.resolved) {
         await saveChatHistory(sessionId, haikuResult.messages);
         return;
@@ -2735,7 +2798,7 @@ REGLAS:
 
     const toolResults: any[] = [];
     for (const tool of toolUses) {
-      const resultText = await executeChatTool(tool.name, tool.input, repo, send);
+      const resultText = await executeChatTool(tool.name, tool.input, repo, send, sessionId);
       toolResults.push({ type: 'tool_result', tool_use_id: tool.id, content: resultText });
     }
     messages.push({ role: 'user', content: toolResults });

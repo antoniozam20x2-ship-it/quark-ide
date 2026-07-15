@@ -1,0 +1,54 @@
+# Tarea: Auditar fallos intermitentes de grep_code
+
+## Contexto (evidencia de la sesión del circuit breaker)
+
+Durante una sesión larga de CHAT investigando Sniper OS, `grep_code` falló
+repetidamente para términos que sí existían en los archivos ("grep no encontró X
+aunque claramente está ahí" — pasó con `circuitBreaker`, `circuit_breaker`,
+`toast-msg`, entre otros). Cada fallo forzó un `read_file` completo como fallback,
+y en al menos un caso el mismo archivo (`server.ts`) se leyó más de una vez dentro
+de la misma sesión. Esto infla el consumo de tokens sin aportar información nueva.
+
+## 1. Investigar la causa del fallo intermitente
+
+Posibles causas a descartar una por una:
+
+- **Tipo de archivo**: ¿el fallo se concentra en archivos `.html`/`.css`, o también
+  pasa en `.ts`? En la sesión observada, varias búsquedas fallidas fueron sobre
+  `index.html` y `aria.css`. Confirmar si el indexador/búsqueda excluye o maneja mal
+  ciertas extensiones.
+- **Tamaño del archivo**: ¿hay un límite de tamaño en la indexación que excluye
+  archivos grandes (ej. `index.html` con mucho contenido embebido)?
+- **Timing de indexación**: ¿el grep busca sobre un índice que se actualiza con
+  delay, o sobre el contenido en vivo del repo en cada llamada? Si es un índice
+  cacheado, podría estar desactualizado o incompleto para ciertos archivos.
+- **Sensibilidad del patrón**: algunos de los términos fallidos tenían guiones bajos,
+  camelCase o estaban en atributos HTML (`id="bot-status"`). Confirmar si el regex/
+  búsqueda tiene problemas con esos patrones específicos.
+
+## 2. Reportar antes de cambiar nada
+
+Responder con la causa identificada y evidencia (log o código de la función de
+búsqueda), antes de proponer un fix — mismo criterio que en investigaciones previas:
+reporte primero, cambios después de confirmar.
+
+## 3. Fix (una vez identificada la causa)
+
+Dependiendo de qué se encuentre:
+- Si es un problema de indexación de ciertos tipos de archivo: corregir el indexador
+  para que cubra `.html`, `.css` y cualquier extensión relevante del proyecto.
+- Si es un problema de patrón/regex: ajustar el matcher para que maneje camelCase,
+  snake_case y atributos HTML correctamente.
+- Si es simplemente que no hay índice y cada grep es "best effort" sobre resultados
+  parciales: considerar un fallback más barato que releer el archivo completo — por
+  ejemplo, devolver "no encontrado con alta confianza" solo si se confirmó que el
+  archivo fue efectivamente escaneado completo, y evitar releer archivos que ya están
+  en el contexto de la sesión actual (deduplicación por sesión).
+
+## Criterio de aceptación
+
+- Reproducir con los mismos términos que fallaron en la sesión real
+  (`circuitBreaker`, `toast-msg`, `id="bot-status"`) y confirmar que ahora los
+  encuentra sin fallback a read_file completo.
+- Confirmar que un archivo ya leído en un turno anterior de la misma sesión no se
+  vuelve a leer completo salvo que haya sido modificado.

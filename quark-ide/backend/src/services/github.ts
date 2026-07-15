@@ -55,15 +55,25 @@ export async function getFileContent(path: string, repo?: string, branch?: strin
 export async function searchCodeInRepo(
   query: string,
   repo?: string,
-): Promise<{ path: string }[]> {
+): Promise<{ path: string; fragments: string[] }[]> {
   const r = requireRepo(repo);
   try {
-    const { data } = await octokit.search.code({
+    const { data } = await (octokit.search.code as any)({
       q: `${query}+repo:${OWNER}/${r}`,
+      headers: { accept: 'application/vnd.github.text-match+json' },
     });
-    return data.items.map((item) => ({ path: item.path }));
+    return (data.items as any[]).map((item) => ({
+      path: item.path as string,
+      fragments: ((item.text_matches ?? []) as any[])
+        .map((m: any) => (m.fragment ?? '') as string)
+        .filter(Boolean),
+    }));
   } catch (err) {
-    console.warn(`[github] searchCodeInRepo failed for "${query}":`, err instanceof Error ? err.message : err);
+    const msg = err instanceof Error ? err.message : String(err);
+    const status = (err as any)?.status;
+    const isRateLimit = msg.includes('rate limit') || msg.includes('secondary rate') || status === 403 || status === 429;
+    console.warn(`[github] searchCodeInRepo failed for "${query}":`, msg);
+    if (isRateLimit) throw new Error('GITHUB_RATE_LIMIT');
     return [];
   }
 }
