@@ -131,7 +131,7 @@ const FINDING_TTL_MS = 2 * 60 * 60 * 1000; // 2 horas — aplica solo a quark-fa
 interface InvestigationFinding {
   id: string;
   repo: string;
-  files: string[];
+  files: { path: string; lineRanges?: { start: number; end: number; matchedTerm: string }[] }[];
   diagnosis: string;
   confidence: 'high' | 'medium' | 'low';
   savedAt: number;
@@ -629,7 +629,7 @@ async function searchAndLoadFiles(
   prompt: string,
   repo: string,
   send: (event: string, data: Record<string, unknown>) => void,
-): Promise<{ path: string; content: string; fullContent?: string }[]> {
+): Promise<{ path: string; content: string; fullContent?: string; lineRanges?: { start: number; end: number; matchedTerm: string }[] }[]> {
   const EXCLUDED_PATHS = [
     'attached_assets/',
     'replit.md',
@@ -676,7 +676,7 @@ async function searchAndLoadFiles(
           const lines = fullContent.split('\n');
           
           if (lines.length <= 300) {
-            return { path: r.path, content: fullContent, fullContent };
+            return { path: r.path, content: fullContent, fullContent, lineRanges: undefined };
           }
 
           const hitTerm = searchTerms.find(t => 
@@ -701,6 +701,7 @@ async function searchAndLoadFiles(
             path: r.path, 
             content: `// ... (líneas 1-${start} omitidas)\n\n${section}\n\n// ... (líneas ${end}-${lines.length} omitidas)`,
             fullContent,
+            lineRanges: [{ start: start + 1, end, matchedTerm: hitTerm }],
           };
         })
       );
@@ -1226,7 +1227,7 @@ router.post('/generate', async (req, res) => {
     if (resolvedIntent === 'read') {
       send('action', { text: '📖 Modo lectura — buscando en GitHub...' });
 
-      let readFiles: { path: string; content: string; fullContent?: string; startLine?: number; endLine?: number }[] = [];
+      let readFiles: { path: string; content: string; fullContent?: string; startLine?: number; endLine?: number; lineRanges?: { start: number; end: number; matchedTerm: string }[] }[] = [];
 
       // Buscar con GitHub Code Search primero
       const searchedFiles = await searchAndLoadFiles(prompt, repo, send);
@@ -1358,7 +1359,7 @@ Si el código tiene dos funciones o ramas similares y opuestas (ej. una versión
           // Persistir hallazgo para que DEEP/CHAT lo reutilice sin re-exploración
           const fastFindingId = await saveInvestigationFinding({
             repo,
-            files: readFiles.map(f => f.path),
+            files: readFiles.map(f => ({ path: f.path, lineRanges: f.lineRanges })),
             diagnosis: cleanAnalysis,
             confidence: confidence as 'high' | 'medium' | 'low',
           }).catch(() => null);
@@ -1499,10 +1500,11 @@ Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
       if (finding) {
         findingDiagnosis = finding.diagnosis;
         findingConfidence = finding.confidence;
-        send('action', { text: `📎 Hallazgo previo cargado (FAST→DEEP) — archivos priorizados: ${finding.files.map(f => f.split('/').pop()).join(', ')}` });
+        const findingFilePaths = finding.files.map(f => f.path);
+        send('action', { text: `📎 Hallazgo previo cargado (FAST→DEEP) — archivos priorizados: ${findingFilePaths.map(p => p.split('/').pop()).join(', ')}` });
         // Agregar archivos del finding que no estén ya en preloadedFiles
         const alreadyLoaded = new Set(preloadedFiles.map(f => f.path));
-        const missingPaths = finding.files.filter(p => !alreadyLoaded.has(p));
+        const missingPaths = findingFilePaths.filter(p => !alreadyLoaded.has(p));
         if (missingPaths.length > 0) {
           const fetchResults = await Promise.allSettled(
             missingPaths.map(async p => ({ path: p, content: await getFileContent(p, repo) }))
@@ -2658,8 +2660,15 @@ async function runChatTurn(
   if (findingId) {
     fastFinding = await loadInvestigationFinding(findingId, repo).catch(() => null);
     if (fastFinding) {
-      send('action', { text: `📎 Hallazgo previo cargado (FAST→CHAT) — archivos priorizados: ${fastFinding.files.map((f: string) => f.split('/').pop()).join(', ')}` });
-      fastFindingContext = `\n\nINVESTIGACIÓN PREVIA (FAST mode, confianza ${fastFinding.confidence.toUpperCase()}) — usa esto como punto de partida, no repitas la exploración desde cero salvo que necesites más detalle:\n${fastFinding.diagnosis}\nArchivos identificados: ${fastFinding.files.join(', ')}`;
+      const findingFilesSummary = fastFinding.files.map((f: any) => f.path.split('/').pop()).join(', ');
+      const findingFilesWithRanges = fastFinding.files.map((f: any) => {
+        const rangeStr = f.lineRanges?.length
+          ? ` (líneas ${f.lineRanges.map((r: any) => `${r.start}-${r.end}`).join(', ')})`
+          : '';
+        return `${f.path}${rangeStr}`;
+      }).join(', ');
+      send('action', { text: `📎 Hallazgo previo cargado (FAST→CHAT) — archivos priorizados: ${findingFilesSummary}` });
+      fastFindingContext = `\n\nINVESTIGACIÓN PREVIA (FAST mode, confianza ${fastFinding.confidence.toUpperCase()}) — usa esto como punto de partida, no repitas la exploración desde cero salvo que necesites más detalle:\n${fastFinding.diagnosis}\nArchivos identificados: ${findingFilesWithRanges}`;
     }
   }
 
@@ -2689,7 +2698,13 @@ async function runChatTurn(
   // previa sin necesitar tools — no altera qué camino toma classifyComplexity, solo mejora
   // la capacidad de respuesta de Groq cuando ya hay contexto real del repo disponible.
   if (fastFinding) {
-    const findingHint = `HALLAZGO PREVIO DE FAST MODE (confianza ${fastFinding.confidence.toUpperCase()}, investigación real del repo):\n${fastFinding.diagnosis.slice(0, 500)}\nArchivos identificados: ${fastFinding.files.join(', ')}\nSi este hallazgo responde la pregunta directamente, úsalo sin pedir herramientas.`;
+    const findingFilesWithRangesHint = fastFinding.files.map((f: any) => {
+      const rangeStr = f.lineRanges?.length
+        ? ` (líneas ${f.lineRanges.map((r: any) => `${r.start}-${r.end}`).join(', ')})`
+        : '';
+      return `${f.path}${rangeStr}`;
+    }).join(', ');
+    const findingHint = `HALLAZGO PREVIO DE FAST MODE (confianza ${fastFinding.confidence.toUpperCase()}, investigación real del repo):\n${fastFinding.diagnosis.slice(0, 500)}\nArchivos identificados: ${findingFilesWithRangesHint}\nSi este hallazgo responde la pregunta directamente, úsalo sin pedir herramientas.`;
     cacheHint = findingHint + (cacheHint ? '\n\n' + cacheHint : '');
   }
 
