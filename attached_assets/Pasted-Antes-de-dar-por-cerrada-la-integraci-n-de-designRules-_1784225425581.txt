@@ -1,0 +1,44 @@
+Antes de dar por cerrada la integración de designRules.json, necesito 
+validación — no cambies nada todavía, solo repórtame:
+
+1. LIMPIEZA
+   Corre git status en la raíz del proyecto y en quark-ide/. Confirma que 
+   no quedó ninguna carpeta del repo clonado (ui-ux-pro-max-skill/ o 
+   similar) fuera del directorio temporal, y que designRules.json y los 
+   edits a studio.ts son los únicos cambios que se van a commitear.
+
+2. MUESTRA DE DATOS
+   Muéstrame 5 entradas al azar de designRules.json completas (tipo, 
+   keywords, patron, paleta_ejemplo, anti_patrones) — quiero ver el JSON 
+   real, no un resumen. Si alguna entrada tiene paleta_ejemplo vacía o 
+   anti_patrones vacío, dime cuántas entradas del total de 192 están en 
+   ese caso (parseo fallido silencioso).
+
+3. CALIDAD DEL MATCHING
+   Corre matchDesignRule() contra estos 3 briefs de prueba y muéstrame 
+   qué regla devuelve cada uno:
+   a) "Landing page para Trattoria d'Oro, restaurante italiano de lujo"
+   b) "Dashboard SaaS B2B para gestión de inventario"
+   c) "Página para mi negocio" (brief genérico/ambiguo a propósito)
+   
+   Si (c) devuelve un match con solo 1 keyword coincidente y el resultado 
+   es irrelevante, sube el umbral mínimo de hits o agrega un segundo 
+   criterio de desempate (% de keywords del brief cubiertas, no solo 
+   conteo absoluto). Si (a) y (b) matchean bien, el umbral actual puede 
+   quedarse para casos con señal clara.
+
+4. PRUEBA END-TO-END
+   Corre el brief de Trattoria d'Oro (o uno similar) por la etapa Architect 
+   dos veces: una con la inyección de REFERENCIA DE DISEÑO activa y otra 
+   comentándola temporalmente. Pega ambos outputs completos uno al lado 
+   del otro para que yo compare si la referencia realmente cambia la 
+   paleta/patrón que devuelve el Architect, o si el modelo la ignora y 
+   devuelve algo genérico igual. Revierte el comentado al terminar.
+
+5. CRITIC
+   Pega el system prompt final completo de la rama 'qa' en SYSTEM_PROMPTS 
+   tal como quedó, para que yo confirme que el checklist técnico de 
+   ux-guidelines.csv se integró sin romper el formato de respuesta 
+   APROBADO / REVISAR: que usa el resto del pipeline.
+
+No hagas cambios de código en este paso — solo reporta resultados.
