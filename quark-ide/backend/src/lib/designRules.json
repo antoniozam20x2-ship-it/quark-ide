@@ -1,0 +1,4121 @@
+[
+  {
+    "tipo": "SaaS (General)",
+    "keywords": [
+      "app",
+      "b2b",
+      "cloud",
+      "general",
+      "saas",
+      "software",
+      "subscription"
+    ],
+    "patron": "Glassmorphism + Flat Design",
+    "paleta_ejemplo": [
+      "#0066CC"
+    ],
+    "anti_patrones": [
+      "Excessive animation",
+      "Dark mode by default"
+    ]
+  },
+  {
+    "tipo": "Micro SaaS",
+    "keywords": [
+      "indie",
+      "micro-saas",
+      "niche",
+      "solo",
+      "bootstrap",
+      "micro",
+      "side-project",
+      "solopreneur",
+      "small-team",
+      "indie-hacker",
+      "product-hunt"
+    ],
+    "patron": "Flat Design + Vibrant & Block",
+    "paleta_ejemplo": [
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Static design",
+      "No video",
+      "Poor mobile"
+    ]
+  },
+  {
+    "tipo": "E-commerce",
+    "keywords": [
+      "buy",
+      "commerce",
+      "ecommerce",
+      "products",
+      "retail",
+      "sell",
+      "shop",
+      "store"
+    ],
+    "patron": "Vibrant & Block-based",
+    "paleta_ejemplo": [
+      "#10B981"
+    ],
+    "anti_patrones": [
+      "Flat design without depth",
+      "Text-heavy pages"
+    ]
+  },
+  {
+    "tipo": "E-commerce Luxury",
+    "keywords": [
+      "buy",
+      "commerce",
+      "ecommerce",
+      "elegant",
+      "exclusive",
+      "high-end",
+      "luxury",
+      "premium",
+      "products",
+      "retail",
+      "sell",
+      "shop",
+      "store"
+    ],
+    "patron": "Liquid Glass + Glassmorphism",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Vibrant & Block-based",
+      "Playful colors"
+    ]
+  },
+  {
+    "tipo": "B2B Service",
+    "keywords": [
+      "b2b",
+      "enterprise",
+      "consulting",
+      "professional",
+      "solution",
+      "contract",
+      "corporate",
+      "strategy",
+      "advisory",
+      "roi",
+      "deliverable",
+      "whitepaper"
+    ],
+    "patron": "Trust & Authority + Minimal",
+    "paleta_ejemplo": [
+      "#0077B6"
+    ],
+    "anti_patrones": [
+      "Playful design",
+      "Hidden credentials",
+      "AI purple/pink gradients"
+    ]
+  },
+  {
+    "tipo": "Financial Dashboard",
+    "keywords": [
+      "portfolio",
+      "trading",
+      "pnl",
+      "budget",
+      "revenue",
+      "expense",
+      "cashflow",
+      "balance-sheet",
+      "investment",
+      "bank",
+      "accounting",
+      "fintech"
+    ],
+    "patron": "Dark Mode (OLED) + Data-Dense",
+    "paleta_ejemplo": [
+      "#0066CC",
+      "#E53E3E",
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Light mode default",
+      "Slow rendering"
+    ]
+  },
+  {
+    "tipo": "Analytics Dashboard",
+    "keywords": [
+      "kpi",
+      "metric",
+      "funnel",
+      "conversion",
+      "cohort",
+      "retention",
+      "segment",
+      "attribution",
+      "ab-test",
+      "dashboard-data",
+      "business-intelligence"
+    ],
+    "patron": "Data-Dense + Heat Map & Heatmap",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Ornate design",
+      "No filtering"
+    ]
+  },
+  {
+    "tipo": "Healthcare App",
+    "keywords": [
+      "app",
+      "clinic",
+      "health",
+      "healthcare",
+      "medical",
+      "patient"
+    ],
+    "patron": "Neumorphism + Accessible & Ethical",
+    "paleta_ejemplo": [
+      "#5B9BD5",
+      "#2ECC71"
+    ],
+    "anti_patrones": [
+      "Bright neon colors",
+      "Motion-heavy animations",
+      "AI purple/pink gradients"
+    ]
+  },
+  {
+    "tipo": "Educational App",
+    "keywords": [
+      "app",
+      "course",
+      "education",
+      "educational",
+      "learning",
+      "school",
+      "training"
+    ],
+    "patron": "Claymorphism + Micro-interactions",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Dark modes",
+      "Complex jargon"
+    ]
+  },
+  {
+    "tipo": "Creative Agency",
+    "keywords": [
+      "branding",
+      "identity",
+      "portfolio",
+      "logo",
+      "visual",
+      "rebrand",
+      "creative-director",
+      "campaign",
+      "awards",
+      "award-winning",
+      "showreel"
+    ],
+    "patron": "Brutalism + Motion-Driven",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Corporate minimalism",
+      "Hidden portfolio"
+    ]
+  },
+  {
+    "tipo": "Portfolio/Personal",
+    "keywords": [
+      "creative",
+      "personal",
+      "portfolio",
+      "projects",
+      "showcase",
+      "work"
+    ],
+    "patron": "Motion-Driven + Minimalism",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Corporate templates",
+      "Generic layouts"
+    ]
+  },
+  {
+    "tipo": "Gaming",
+    "keywords": [
+      "entertainment",
+      "esports",
+      "game",
+      "gaming",
+      "play"
+    ],
+    "patron": "3D & Hyperrealism + Retro-Futurism",
+    "paleta_ejemplo": [
+      "#00FF00"
+    ],
+    "anti_patrones": [
+      "Minimalist design",
+      "Static assets"
+    ]
+  },
+  {
+    "tipo": "Government/Public Service",
+    "keywords": [
+      "government",
+      "civic",
+      "municipal",
+      "federal",
+      "citizen",
+      "public",
+      "administration",
+      "permit",
+      "tax",
+      "voter",
+      "transparency",
+      "regulation"
+    ],
+    "patron": "Accessible & Ethical + Minimalism",
+    "paleta_ejemplo": [
+      "#0077B6"
+    ],
+    "anti_patrones": [
+      "Ornate design",
+      "Low contrast",
+      "Motion effects",
+      "AI purple/pink gradients"
+    ]
+  },
+  {
+    "tipo": "Fintech/Crypto",
+    "keywords": [
+      "banking",
+      "blockchain",
+      "crypto",
+      "defi",
+      "finance",
+      "fintech",
+      "money",
+      "nft",
+      "payment",
+      "web3"
+    ],
+    "patron": "Glassmorphism + Dark Mode (OLED)",
+    "paleta_ejemplo": [
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Playful design",
+      "Unclear fees",
+      "AI purple/pink gradients"
+    ]
+  },
+  {
+    "tipo": "Social Media App",
+    "keywords": [
+      "app",
+      "community",
+      "content",
+      "entertainment",
+      "media",
+      "network",
+      "sharing",
+      "social",
+      "streaming",
+      "users",
+      "video"
+    ],
+    "patron": "Vibrant & Block-based + Motion-Driven",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Heavy skeuomorphism",
+      "Accessibility ignored"
+    ]
+  },
+  {
+    "tipo": "Productivity Tool",
+    "keywords": [
+      "collaboration",
+      "productivity",
+      "project",
+      "task",
+      "tool",
+      "workflow"
+    ],
+    "patron": "Flat Design + Micro-interactions",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Complex onboarding",
+      "Slow performance"
+    ]
+  },
+  {
+    "tipo": "Design System/Component Library",
+    "keywords": [
+      "component",
+      "design",
+      "library",
+      "system"
+    ],
+    "patron": "Minimalism + Accessible & Ethical",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Poor documentation",
+      "No live preview"
+    ]
+  },
+  {
+    "tipo": "AI/Chatbot Platform",
+    "keywords": [
+      "ai",
+      "artificial-intelligence",
+      "automation",
+      "chatbot",
+      "machine-learning",
+      "ml",
+      "platform"
+    ],
+    "patron": "AI-Native UI + Minimalism",
+    "paleta_ejemplo": [
+      "#6366F1",
+      "#7C3AED"
+    ],
+    "anti_patrones": [
+      "Heavy chrome",
+      "Slow response feedback"
+    ]
+  },
+  {
+    "tipo": "NFT/Web3 Platform",
+    "keywords": [
+      "nft",
+      "platform",
+      "web"
+    ],
+    "patron": "Cyberpunk UI + Glassmorphism",
+    "paleta_ejemplo": [
+      "#FFD700",
+      "#D4AF37",
+      "#00FF00",
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Light mode default",
+      "No transaction status"
+    ]
+  },
+  {
+    "tipo": "Creator Economy Platform",
+    "keywords": [
+      "creator",
+      "economy",
+      "platform"
+    ],
+    "patron": "Vibrant & Block-based + Bento Box Grid",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Generic layout",
+      "Hidden earnings"
+    ]
+  },
+  {
+    "tipo": "Remote Work/Collaboration Tool",
+    "keywords": [
+      "collaboration",
+      "remote",
+      "tool",
+      "work"
+    ],
+    "patron": "Soft UI Evolution + Minimalism",
+    "paleta_ejemplo": [
+      "#5B9BD5"
+    ],
+    "anti_patrones": [
+      "Cluttered interface",
+      "No presence"
+    ]
+  },
+  {
+    "tipo": "Mental Health App",
+    "keywords": [
+      "app",
+      "health",
+      "mental"
+    ],
+    "patron": "Neumorphism + Accessible & Ethical",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Bright neon",
+      "Motion overload"
+    ]
+  },
+  {
+    "tipo": "Pet Tech App",
+    "keywords": [
+      "app",
+      "pet",
+      "tech"
+    ],
+    "patron": "Claymorphism + Vibrant & Block-based",
+    "paleta_ejemplo": [
+      "#C76B4A"
+    ],
+    "anti_patrones": [
+      "Generic design",
+      "No personality"
+    ]
+  },
+  {
+    "tipo": "Smart Home/IoT Dashboard",
+    "keywords": [
+      "admin",
+      "analytics",
+      "dashboard",
+      "data",
+      "home",
+      "iot",
+      "panel",
+      "smart"
+    ],
+    "patron": "Glassmorphism + Dark Mode (OLED)",
+    "paleta_ejemplo": [
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Slow updates",
+      "No automation"
+    ]
+  },
+  {
+    "tipo": "EV/Charging Ecosystem",
+    "keywords": [
+      "charging",
+      "ecosystem",
+      "ev"
+    ],
+    "patron": "Minimalism + Aurora UI",
+    "paleta_ejemplo": [
+      "#009CD1"
+    ],
+    "anti_patrones": [
+      "Poor map UX",
+      "Hidden costs"
+    ]
+  },
+  {
+    "tipo": "Subscription Box Service",
+    "keywords": [
+      "subscription",
+      "box",
+      "recurring",
+      "membership",
+      "unboxing",
+      "curated",
+      "plan",
+      "monthly",
+      "surprise",
+      "product-box"
+    ],
+    "patron": "Vibrant & Block-based + Motion-Driven",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Confusing pricing",
+      "No unboxing preview"
+    ]
+  },
+  {
+    "tipo": "Podcast Platform",
+    "keywords": [
+      "platform",
+      "podcast"
+    ],
+    "patron": "Dark Mode (OLED) + Minimalism",
+    "paleta_ejemplo": [
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Poor audio player",
+      "Cluttered layout"
+    ]
+  },
+  {
+    "tipo": "Dating App",
+    "keywords": [
+      "app",
+      "dating"
+    ],
+    "patron": "Vibrant & Block-based + Motion-Driven",
+    "paleta_ejemplo": [
+      "#E53E3E",
+      "#C76B4A",
+      "#EC4899"
+    ],
+    "anti_patrones": [
+      "Generic profiles",
+      "No safety"
+    ]
+  },
+  {
+    "tipo": "Micro-Credentials/Badges Platform",
+    "keywords": [
+      "badges",
+      "credentials",
+      "micro",
+      "platform"
+    ],
+    "patron": "Minimalism + Flat Design",
+    "paleta_ejemplo": [
+      "#FFD700",
+      "#0066CC",
+      "#D4AF37"
+    ],
+    "anti_patrones": [
+      "No verification",
+      "Hidden progress"
+    ]
+  },
+  {
+    "tipo": "Knowledge Base/Documentation",
+    "keywords": [
+      "base",
+      "documentation",
+      "knowledge"
+    ],
+    "patron": "Minimalism + Accessible & Ethical",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Poor navigation",
+      "No search"
+    ]
+  },
+  {
+    "tipo": "Hyperlocal Services",
+    "keywords": [
+      "hyperlocal",
+      "local",
+      "neighborhood",
+      "nearby",
+      "community",
+      "nearby",
+      "zip",
+      "map",
+      "local-business",
+      "geo-target",
+      "city"
+    ],
+    "patron": "Minimalism + Vibrant & Block-based",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "No map",
+      "Hidden reviews"
+    ]
+  },
+  {
+    "tipo": "Beauty/Spa/Wellness Service",
+    "keywords": [
+      "spa",
+      "beauty",
+      "salon",
+      "wellness",
+      "treatment",
+      "relaxation",
+      "massage",
+      "skincare",
+      "facial",
+      "aesthetic",
+      "self-care",
+      "pamper"
+    ],
+    "patron": "Soft UI Evolution + Neumorphism",
+    "paleta_ejemplo": [
+      "#FFB6C1",
+      "#90EE90"
+    ],
+    "anti_patrones": [
+      "Bright neon colors",
+      "Harsh animations",
+      "Dark mode"
+    ]
+  },
+  {
+    "tipo": "Luxury/Premium Brand",
+    "keywords": [
+      "brand",
+      "elegant",
+      "exclusive",
+      "high-end",
+      "luxury",
+      "premium"
+    ],
+    "patron": "Liquid Glass + Glassmorphism",
+    "paleta_ejemplo": [
+      "#FFD700",
+      "#D4AF37",
+      "#0A0A0A",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Cheap visuals",
+      "Fast animations"
+    ]
+  },
+  {
+    "tipo": "Restaurant/Food Service",
+    "keywords": [
+      "restaurant",
+      "menu",
+      "order",
+      "food",
+      "dining",
+      "reservation",
+      "delivery",
+      "cuisine",
+      "chef",
+      "table",
+      "takeaway",
+      "eatery"
+    ],
+    "patron": "Vibrant & Block-based + Motion-Driven",
+    "paleta_ejemplo": [
+      "#FF6B35",
+      "#E53E3E",
+      "#C76B4A"
+    ],
+    "anti_patrones": [
+      "Low-quality imagery",
+      "Outdated hours"
+    ]
+  },
+  {
+    "tipo": "Fitness/Gym App",
+    "keywords": [
+      "app",
+      "exercise",
+      "fitness",
+      "gym",
+      "health",
+      "workout"
+    ],
+    "patron": "Vibrant & Block-based + Dark Mode (OLED)",
+    "paleta_ejemplo": [
+      "#FF6B35",
+      "#009CD1",
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Static design",
+      "No gamification"
+    ]
+  },
+  {
+    "tipo": "Real Estate/Property",
+    "keywords": [
+      "buy",
+      "estate",
+      "housing",
+      "property",
+      "real",
+      "real-estate",
+      "rent"
+    ],
+    "patron": "Glassmorphism + Minimalism",
+    "paleta_ejemplo": [
+      "#0077B6",
+      "#0066CC",
+      "#D4AF37",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Poor photos",
+      "No virtual tours"
+    ]
+  },
+  {
+    "tipo": "Travel/Tourism Agency",
+    "keywords": [
+      "travel",
+      "tourism",
+      "vacation",
+      "flight",
+      "hotel",
+      "destination",
+      "adventure",
+      "cruise",
+      "safari",
+      "backpacking",
+      "guided-tour",
+      "holiday-package"
+    ],
+    "patron": "Aurora UI + Motion-Driven",
+    "paleta_ejemplo": [
+      "#87CEEB",
+      "#C76B4A"
+    ],
+    "anti_patrones": [
+      "Generic photos",
+      "Complex booking"
+    ]
+  },
+  {
+    "tipo": "Hotel/Hospitality",
+    "keywords": [
+      "hospitality",
+      "hotel"
+    ],
+    "patron": "Liquid Glass + Minimalism",
+    "paleta_ejemplo": [
+      "#D4AF37",
+      "#C76B4A"
+    ],
+    "anti_patrones": [
+      "Poor photos",
+      "Complex booking"
+    ]
+  },
+  {
+    "tipo": "Wedding/Event Planning",
+    "keywords": [
+      "conference",
+      "event",
+      "meetup",
+      "planning",
+      "registration",
+      "ticket",
+      "wedding"
+    ],
+    "patron": "Soft UI Evolution + Aurora UI",
+    "paleta_ejemplo": [
+      "#FFD6E0",
+      "#FFFDD0",
+      "#D4AF37",
+      "#6B7280"
+    ],
+    "anti_patrones": [
+      "Generic templates",
+      "No portfolio"
+    ]
+  },
+  {
+    "tipo": "Legal Services",
+    "keywords": [
+      "law",
+      "attorney",
+      "legal",
+      "case",
+      "compliance",
+      "contract",
+      "court",
+      "firm",
+      "counsel",
+      "litigation",
+      "practice-area",
+      "jurisdiction"
+    ],
+    "patron": "Trust & Authority + Minimalism",
+    "paleta_ejemplo": [
+      "#1E3A5F",
+      "#0A1628",
+      "#D4AF37",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Outdated design",
+      "Hidden credentials",
+      "AI purple/pink gradients"
+    ]
+  },
+  {
+    "tipo": "Insurance Platform",
+    "keywords": [
+      "insurance",
+      "platform"
+    ],
+    "patron": "Trust & Authority + Flat Design",
+    "paleta_ejemplo": [
+      "#0066CC"
+    ],
+    "anti_patrones": [
+      "Confusing pricing",
+      "No trust signals",
+      "AI purple/pink gradients"
+    ]
+  },
+  {
+    "tipo": "Banking/Traditional Finance",
+    "keywords": [
+      "banking",
+      "finance",
+      "traditional"
+    ],
+    "patron": "Minimalism + Accessible & Ethical",
+    "paleta_ejemplo": [
+      "#0A1628",
+      "#0066CC",
+      "#D4AF37"
+    ],
+    "anti_patrones": [
+      "Playful design",
+      "Poor security UX",
+      "AI purple/pink gradients"
+    ]
+  },
+  {
+    "tipo": "Online Course/E-learning",
+    "keywords": [
+      "course",
+      "learning",
+      "online"
+    ],
+    "patron": "Claymorphism + Vibrant & Block-based",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Boring design",
+      "No gamification"
+    ]
+  },
+  {
+    "tipo": "Non-profit/Charity",
+    "keywords": [
+      "charity",
+      "non",
+      "profit"
+    ],
+    "patron": "Accessible & Ethical + Organic Biophilic",
+    "paleta_ejemplo": [
+      "#C76B4A"
+    ],
+    "anti_patrones": [
+      "No impact data",
+      "Hidden financials"
+    ]
+  },
+  {
+    "tipo": "Music Streaming",
+    "keywords": [
+      "music",
+      "streaming"
+    ],
+    "patron": "Dark Mode (OLED) + Vibrant & Block-based",
+    "paleta_ejemplo": [
+      "#121212",
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Cluttered layout",
+      "Poor audio player UX"
+    ]
+  },
+  {
+    "tipo": "Video Streaming/OTT",
+    "keywords": [
+      "ott",
+      "streaming",
+      "video"
+    ],
+    "patron": "Dark Mode (OLED) + Motion-Driven",
+    "paleta_ejemplo": [
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Static layout",
+      "Slow video player"
+    ]
+  },
+  {
+    "tipo": "Job Board/Recruitment",
+    "keywords": [
+      "board",
+      "job",
+      "recruitment"
+    ],
+    "patron": "Flat Design + Minimalism",
+    "paleta_ejemplo": [
+      "#0077B6",
+      "#10B981"
+    ],
+    "anti_patrones": [
+      "Outdated forms",
+      "Hidden filters"
+    ]
+  },
+  {
+    "tipo": "Marketplace (P2P)",
+    "keywords": [
+      "buyers",
+      "listings",
+      "marketplace",
+      "platform",
+      "sellers"
+    ],
+    "patron": "Vibrant & Block-based + Flat Design",
+    "paleta_ejemplo": [
+      "#10B981"
+    ],
+    "anti_patrones": [
+      "Low trust signals",
+      "Confusing layout"
+    ]
+  },
+  {
+    "tipo": "Logistics/Delivery",
+    "keywords": [
+      "delivery",
+      "logistics"
+    ],
+    "patron": "Minimalism + Flat Design",
+    "paleta_ejemplo": [
+      "#2563EB",
+      "#FF6B35",
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Static tracking",
+      "No map integration",
+      "AI purple/pink gradients"
+    ]
+  },
+  {
+    "tipo": "Agriculture/Farm Tech",
+    "keywords": [
+      "agriculture",
+      "farm",
+      "tech"
+    ],
+    "patron": "Organic Biophilic + Flat Design",
+    "paleta_ejemplo": [
+      "#4A7C23",
+      "#87CEEB"
+    ],
+    "anti_patrones": [
+      "Generic design",
+      "Ignored accessibility",
+      "AI purple/pink gradients"
+    ]
+  },
+  {
+    "tipo": "Construction/Architecture",
+    "keywords": [
+      "architecture",
+      "construction"
+    ],
+    "patron": "Minimalism + 3D & Hyperrealism",
+    "paleta_ejemplo": [
+      "#4A4A4A",
+      "#FF6B35"
+    ],
+    "anti_patrones": [
+      "2D-only layouts",
+      "Poor image quality",
+      "AI purple/pink gradients"
+    ]
+  },
+  {
+    "tipo": "Automotive/Car Dealership",
+    "keywords": [
+      "automotive",
+      "car",
+      "dealership"
+    ],
+    "patron": "Motion-Driven + 3D & Hyperrealism",
+    "paleta_ejemplo": [
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Static product pages",
+      "Poor UX"
+    ]
+  },
+  {
+    "tipo": "Photography Studio",
+    "keywords": [
+      "photography",
+      "studio"
+    ],
+    "patron": "Motion-Driven + Minimalism",
+    "paleta_ejemplo": [
+      "#0A0A0A",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Heavy text",
+      "Poor image showcase"
+    ]
+  },
+  {
+    "tipo": "Coworking Space",
+    "keywords": [
+      "coworking",
+      "space"
+    ],
+    "patron": "Vibrant & Block-based + Glassmorphism",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Outdated photos",
+      "Confusing layout"
+    ]
+  },
+  {
+    "tipo": "Home Services (Plumber/Electrician)",
+    "keywords": [
+      "plumber",
+      "electrician",
+      "hvac",
+      "handyman",
+      "repair",
+      "maintenance",
+      "home",
+      "emergency",
+      "leak",
+      "wiring",
+      "inspection",
+      "licensed"
+    ],
+    "patron": "Flat Design + Trust & Authority",
+    "paleta_ejemplo": [
+      "#0066CC",
+      "#FF6B35"
+    ],
+    "anti_patrones": [
+      "Hidden contact info",
+      "No certifications"
+    ]
+  },
+  {
+    "tipo": "Childcare/Daycare",
+    "keywords": [
+      "childcare",
+      "daycare"
+    ],
+    "patron": "Claymorphism + Vibrant & Block-based",
+    "paleta_ejemplo": [
+      "#C76B4A"
+    ],
+    "anti_patrones": [
+      "Generic design",
+      "Hidden safety info"
+    ]
+  },
+  {
+    "tipo": "Senior Care/Elderly",
+    "keywords": [
+      "care",
+      "elderly",
+      "senior"
+    ],
+    "patron": "Accessible & Ethical + Soft UI Evolution",
+    "paleta_ejemplo": [
+      "#5B9BD5",
+      "#C76B4A"
+    ],
+    "anti_patrones": [
+      "Small text",
+      "Complex navigation",
+      "AI purple/pink gradients"
+    ]
+  },
+  {
+    "tipo": "Medical Clinic",
+    "keywords": [
+      "clinic",
+      "medical"
+    ],
+    "patron": "Accessible & Ethical + Minimalism",
+    "paleta_ejemplo": [
+      "#0077B6",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Outdated interface",
+      "Confusing booking",
+      "AI purple/pink gradients"
+    ]
+  },
+  {
+    "tipo": "Pharmacy/Drug Store",
+    "keywords": [
+      "drug",
+      "pharmacy",
+      "store"
+    ],
+    "patron": "Flat Design + Accessible & Ethical",
+    "paleta_ejemplo": [
+      "#0066CC",
+      "#228B22",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Confusing layout",
+      "Privacy concerns",
+      "AI purple/pink gradients"
+    ]
+  },
+  {
+    "tipo": "Dental Practice",
+    "keywords": [
+      "dental",
+      "practice"
+    ],
+    "patron": "Soft UI Evolution + Minimalism",
+    "paleta_ejemplo": [
+      "#4A90D9",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Poor imagery",
+      "No testimonials"
+    ]
+  },
+  {
+    "tipo": "Veterinary Clinic",
+    "keywords": [
+      "clinic",
+      "veterinary"
+    ],
+    "patron": "Claymorphism + Accessible & Ethical",
+    "paleta_ejemplo": [
+      "#5B9BD5",
+      "#C76B4A"
+    ],
+    "anti_patrones": [
+      "Generic design",
+      "Hidden services"
+    ]
+  },
+  {
+    "tipo": "Florist/Plant Shop",
+    "keywords": [
+      "florist",
+      "plant",
+      "shop"
+    ],
+    "patron": "Organic Biophilic + Vibrant & Block-based",
+    "paleta_ejemplo": [
+      "#7C3AED",
+      "#EC4899"
+    ],
+    "anti_patrones": [
+      "Poor imagery",
+      "No seasonal content"
+    ]
+  },
+  {
+    "tipo": "Bakery/Cafe",
+    "keywords": [
+      "bakery",
+      "cafe"
+    ],
+    "patron": "Vibrant & Block-based + Soft UI Evolution",
+    "paleta_ejemplo": [
+      "#8B4513",
+      "#FFFDD0",
+      "#C76B4A"
+    ],
+    "anti_patrones": [
+      "Poor food photos",
+      "Hidden hours"
+    ]
+  },
+  {
+    "tipo": "Brewery/Winery",
+    "keywords": [
+      "brewery",
+      "winery"
+    ],
+    "patron": "Motion-Driven + Storytelling-Driven",
+    "paleta_ejemplo": [
+      "#D4AF37",
+      "#F59E0B",
+      "#800020"
+    ],
+    "anti_patrones": [
+      "Generic product pages",
+      "No story"
+    ]
+  },
+  {
+    "tipo": "Airline",
+    "keywords": [
+      "airline",
+      "aviation",
+      "flight",
+      "travel",
+      "booking",
+      "airport",
+      "flying"
+    ],
+    "patron": "Minimalism + Glassmorphism",
+    "paleta_ejemplo": [
+      "#87CEEB"
+    ],
+    "anti_patrones": [
+      "Complex booking",
+      "Poor mobile"
+    ]
+  },
+  {
+    "tipo": "News/Media Platform",
+    "keywords": [
+      "content",
+      "entertainment",
+      "media",
+      "news",
+      "platform",
+      "streaming",
+      "video"
+    ],
+    "patron": "Minimalism + Flat Design",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Cluttered layout",
+      "Slow loading"
+    ]
+  },
+  {
+    "tipo": "Magazine/Blog",
+    "keywords": [
+      "articles",
+      "blog",
+      "content",
+      "magazine",
+      "posts",
+      "writing"
+    ],
+    "patron": "Swiss Modernism 2.0 + Motion-Driven",
+    "paleta_ejemplo": [
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Poor typography",
+      "Slow loading"
+    ]
+  },
+  {
+    "tipo": "Freelancer Platform",
+    "keywords": [
+      "freelancer",
+      "platform"
+    ],
+    "patron": "Flat Design + Minimalism",
+    "paleta_ejemplo": [
+      "#0077B6",
+      "#10B981"
+    ],
+    "anti_patrones": [
+      "Poor profiles",
+      "No reviews"
+    ]
+  },
+  {
+    "tipo": "Marketing Agency",
+    "keywords": [
+      "campaign",
+      "ads",
+      "growth",
+      "roi",
+      "seo",
+      "sem",
+      "ppc",
+      "social-media",
+      "conversion-funnel",
+      "ab-test",
+      "attribution",
+      "performance-marketing"
+    ],
+    "patron": "Brutalism + Motion-Driven",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Boring design",
+      "Hidden work"
+    ]
+  },
+  {
+    "tipo": "Event Management",
+    "keywords": [
+      "conference",
+      "event",
+      "management",
+      "meetup",
+      "registration",
+      "ticket"
+    ],
+    "patron": "Vibrant & Block-based + Motion-Driven",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Confusing registration",
+      "No countdown"
+    ]
+  },
+  {
+    "tipo": "Membership/Community",
+    "keywords": [
+      "community",
+      "membership"
+    ],
+    "patron": "Vibrant & Block-based + Soft UI Evolution",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Hidden benefits",
+      "No community proof"
+    ]
+  },
+  {
+    "tipo": "Newsletter Platform",
+    "keywords": [
+      "newsletter",
+      "platform"
+    ],
+    "patron": "Minimalism + Flat Design",
+    "paleta_ejemplo": [
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Complex signup",
+      "No preview"
+    ]
+  },
+  {
+    "tipo": "Digital Products/Downloads",
+    "keywords": [
+      "digital",
+      "downloads",
+      "products"
+    ],
+    "patron": "Vibrant & Block-based + Motion-Driven",
+    "paleta_ejemplo": [
+      "#10B981"
+    ],
+    "anti_patrones": [
+      "No preview",
+      "Slow delivery"
+    ]
+  },
+  {
+    "tipo": "Church/Religious Organization",
+    "keywords": [
+      "church",
+      "organization",
+      "religious"
+    ],
+    "patron": "Accessible & Ethical + Soft UI Evolution",
+    "paleta_ejemplo": [
+      "#D4AF37",
+      "#C76B4A",
+      "#7C3AED",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Outdated design",
+      "Hidden info"
+    ]
+  },
+  {
+    "tipo": "Sports Team/Club",
+    "keywords": [
+      "club",
+      "sports",
+      "team"
+    ],
+    "patron": "Vibrant & Block-based + Motion-Driven",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Static content",
+      "Poor fan engagement"
+    ]
+  },
+  {
+    "tipo": "Museum/Gallery",
+    "keywords": [
+      "gallery",
+      "museum"
+    ],
+    "patron": "Minimalism + Motion-Driven",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Cluttered layout",
+      "No online access"
+    ]
+  },
+  {
+    "tipo": "Theater/Cinema",
+    "keywords": [
+      "cinema",
+      "theater"
+    ],
+    "patron": "Dark Mode (OLED) + Motion-Driven",
+    "paleta_ejemplo": [
+      "#D4AF37",
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Poor booking UX",
+      "No trailers"
+    ]
+  },
+  {
+    "tipo": "Language Learning App",
+    "keywords": [
+      "app",
+      "language",
+      "learning"
+    ],
+    "patron": "Claymorphism + Vibrant & Block-based",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Boring design",
+      "No motivation"
+    ]
+  },
+  {
+    "tipo": "Coding Bootcamp",
+    "keywords": [
+      "bootcamp",
+      "coding"
+    ],
+    "patron": "Dark Mode (OLED) + Minimalism",
+    "paleta_ejemplo": [
+      "#10B981"
+    ],
+    "anti_patrones": [
+      "Light mode only",
+      "Hidden results"
+    ]
+  },
+  {
+    "tipo": "Cybersecurity Platform",
+    "keywords": [
+      "cyber",
+      "security",
+      "platform"
+    ],
+    "patron": "Cyberpunk UI + Dark Mode (OLED)",
+    "paleta_ejemplo": [
+      "#0A0A0A"
+    ],
+    "anti_patrones": [
+      "Light mode",
+      "Poor data viz"
+    ]
+  },
+  {
+    "tipo": "Developer Tool / IDE",
+    "keywords": [
+      "dev",
+      "developer",
+      "tool",
+      "ide"
+    ],
+    "patron": "Dark Mode (OLED) + Minimalism",
+    "paleta_ejemplo": [
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Light mode default",
+      "Slow performance"
+    ]
+  },
+  {
+    "tipo": "Biotech / Life Sciences",
+    "keywords": [
+      "biotech",
+      "biology",
+      "science"
+    ],
+    "patron": "Glassmorphism + Clean Science",
+    "paleta_ejemplo": [
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Cluttered data",
+      "Poor credibility"
+    ]
+  },
+  {
+    "tipo": "Space Tech / Aerospace",
+    "keywords": [
+      "aerospace",
+      "space",
+      "tech"
+    ],
+    "patron": "Holographic / HUD + Dark Mode",
+    "paleta_ejemplo": [
+      "#0A0A0A",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Generic design",
+      "No immersion"
+    ]
+  },
+  {
+    "tipo": "Architecture / Interior",
+    "keywords": [
+      "architecture",
+      "design",
+      "interior"
+    ],
+    "patron": "Exaggerated Minimalism + High Imagery",
+    "paleta_ejemplo": [
+      "#D4AF37"
+    ],
+    "anti_patrones": [
+      "Poor imagery",
+      "Cluttered layout"
+    ]
+  },
+  {
+    "tipo": "Quantum Computing Interface",
+    "keywords": [
+      "quantum",
+      "computing",
+      "physics",
+      "qubit",
+      "future",
+      "science"
+    ],
+    "patron": "Holographic / HUD + Dark Mode",
+    "paleta_ejemplo": [
+      "#00FFFF",
+      "#0A0A0A"
+    ],
+    "anti_patrones": [
+      "Generic tech design",
+      "No viz"
+    ]
+  },
+  {
+    "tipo": "Biohacking / Longevity App",
+    "keywords": [
+      "biohacking",
+      "health",
+      "longevity",
+      "tracking",
+      "wellness",
+      "science"
+    ],
+    "patron": "Biomimetic / Organic 2.0",
+    "paleta_ejemplo": [
+      "#E53E3E",
+      "#EC4899",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Generic health app",
+      "No privacy"
+    ]
+  },
+  {
+    "tipo": "Autonomous Drone Fleet Manager",
+    "keywords": [
+      "drone",
+      "autonomous",
+      "fleet",
+      "aerial",
+      "logistics",
+      "robotics"
+    ],
+    "patron": "HUD / Sci-Fi FUI",
+    "paleta_ejemplo": [
+      "#00FF00",
+      "#E53E3E",
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Slow updates",
+      "Poor spatial viz"
+    ]
+  },
+  {
+    "tipo": "Generative Art Platform",
+    "keywords": [
+      "art",
+      "generative",
+      "ai",
+      "creative",
+      "platform",
+      "gallery"
+    ],
+    "patron": "Minimalism (Frame) + Gen Z Chaos",
+    "paleta_ejemplo": [
+      "#F5F5F5"
+    ],
+    "anti_patrones": [
+      "Heavy chrome",
+      "Slow loading"
+    ]
+  },
+  {
+    "tipo": "Spatial Computing OS / App",
+    "keywords": [
+      "spatial",
+      "vr",
+      "ar",
+      "vision",
+      "os",
+      "immersive",
+      "mixed-reality"
+    ],
+    "patron": "Spatial UI (VisionOS)",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "2D design",
+      "No spatial depth"
+    ]
+  },
+  {
+    "tipo": "Sustainable Energy / Climate Tech",
+    "keywords": [
+      "climate",
+      "energy",
+      "sustainable",
+      "green",
+      "tech",
+      "carbon"
+    ],
+    "patron": "Organic Biophilic + E-Ink / Paper",
+    "paleta_ejemplo": [
+      "#87CEEB",
+      "#4A7C23"
+    ],
+    "anti_patrones": [
+      "Greenwashing",
+      "No real data"
+    ]
+  },
+  {
+    "tipo": "Personal Finance Tracker",
+    "keywords": [
+      "budget",
+      "expense",
+      "money",
+      "finance",
+      "spending",
+      "savings",
+      "tracker",
+      "personal",
+      "wallet"
+    ],
+    "patron": "Glassmorphism + Dark Mode (OLED)",
+    "paleta_ejemplo": [
+      "#5B9BD5",
+      "#10B981",
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Pure white backgrounds"
+    ]
+  },
+  {
+    "tipo": "Chat & Messaging App",
+    "keywords": [
+      "chat",
+      "message",
+      "messenger",
+      "im",
+      "realtime",
+      "conversation",
+      "inbox",
+      "dm",
+      "whatsapp",
+      "telegram"
+    ],
+    "patron": "Minimalism + Micro-interactions",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Excessive decoration"
+    ]
+  },
+  {
+    "tipo": "Notes & Writing App",
+    "keywords": [
+      "notes",
+      "memo",
+      "writing",
+      "editor",
+      "notebook",
+      "markdown",
+      "journal",
+      "notion",
+      "obsidian"
+    ],
+    "patron": "Minimalism + Flat Design",
+    "paleta_ejemplo": [
+      "#FFFDD0",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Complex shadows",
+      "3D effects"
+    ]
+  },
+  {
+    "tipo": "Habit Tracker",
+    "keywords": [
+      "habit",
+      "streak",
+      "routine",
+      "daily",
+      "tracker",
+      "goals",
+      "consistency",
+      "discipline"
+    ],
+    "patron": "Claymorphism + Vibrant & Block-based",
+    "paleta_ejemplo": [
+      "#F59E0B",
+      "#FF6B35",
+      "#C76B4A"
+    ],
+    "anti_patrones": [
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "Food Delivery / On-Demand",
+    "keywords": [
+      "delivery",
+      "food",
+      "order",
+      "uber-eats",
+      "doordash",
+      "takeout",
+      "on-demand",
+      "courier"
+    ],
+    "patron": "Vibrant & Block-based + Motion-Driven",
+    "paleta_ejemplo": [
+      "#0066CC",
+      "#FF6B35",
+      "#E53E3E",
+      "#C76B4A"
+    ],
+    "anti_patrones": [
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "Ride Hailing / Transportation",
+    "keywords": [
+      "ride",
+      "taxi",
+      "uber",
+      "lyft",
+      "transport",
+      "carpool",
+      "driver",
+      "trip",
+      "fare"
+    ],
+    "patron": "Minimalism + Glassmorphism",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Excessive decoration"
+    ]
+  },
+  {
+    "tipo": "Recipe & Cooking App",
+    "keywords": [
+      "recipe",
+      "cooking",
+      "food",
+      "kitchen",
+      "cookbook",
+      "meal",
+      "ingredient",
+      "chef"
+    ],
+    "patron": "Claymorphism + Vibrant & Block-based",
+    "paleta_ejemplo": [
+      "#FFFDD0",
+      "#C76B4A",
+      "#6B7280"
+    ],
+    "anti_patrones": [
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "Meditation & Mindfulness",
+    "keywords": [
+      "meditation",
+      "mindfulness",
+      "calm",
+      "breathe",
+      "wellness",
+      "relaxation",
+      "sleep",
+      "headspace"
+    ],
+    "patron": "Neumorphism + Soft UI Evolution",
+    "paleta_ejemplo": [
+      "#8B5CF6",
+      "#6B7280"
+    ],
+    "anti_patrones": [
+      "Inconsistent styling",
+      "Poor contrast ratios"
+    ]
+  },
+  {
+    "tipo": "Weather App",
+    "keywords": [
+      "weather",
+      "forecast",
+      "temperature",
+      "climate",
+      "rain",
+      "sun",
+      "location",
+      "humidity"
+    ],
+    "patron": "Glassmorphism + Aurora UI",
+    "paleta_ejemplo": [
+      "#87CEEB"
+    ],
+    "anti_patrones": [
+      "Inconsistent styling",
+      "Poor contrast ratios"
+    ]
+  },
+  {
+    "tipo": "Diary & Journal App",
+    "keywords": [
+      "diary",
+      "journal",
+      "personal",
+      "daily",
+      "reflection",
+      "mood",
+      "gratitude",
+      "writing"
+    ],
+    "patron": "Soft UI Evolution + Minimalism",
+    "paleta_ejemplo": [
+      "#FFFDD0",
+      "#C76B4A"
+    ],
+    "anti_patrones": [
+      "Excessive decoration"
+    ]
+  },
+  {
+    "tipo": "CRM & Client Management",
+    "keywords": [
+      "crm",
+      "client",
+      "customer",
+      "sales",
+      "pipeline",
+      "contact",
+      "lead",
+      "deal",
+      "hubspot"
+    ],
+    "patron": "Flat Design + Minimalism",
+    "paleta_ejemplo": [
+      "#0077B6"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Complex shadows",
+      "3D effects"
+    ]
+  },
+  {
+    "tipo": "Inventory & Stock Management",
+    "keywords": [
+      "inventory",
+      "stock",
+      "warehouse",
+      "product",
+      "barcode",
+      "supply",
+      "sku",
+      "management"
+    ],
+    "patron": "Flat Design + Minimalism",
+    "paleta_ejemplo": [
+      "#F59E0B",
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Complex shadows",
+      "3D effects"
+    ]
+  },
+  {
+    "tipo": "Flashcard & Study Tool",
+    "keywords": [
+      "flashcard",
+      "quiz",
+      "study",
+      "spaced-repetition",
+      "anki",
+      "learn",
+      "memory",
+      "exam"
+    ],
+    "patron": "Claymorphism + Micro-interactions",
+    "paleta_ejemplo": [
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Inconsistent styling",
+      "Poor contrast ratios"
+    ]
+  },
+  {
+    "tipo": "Booking & Appointment App",
+    "keywords": [
+      "booking",
+      "appointment",
+      "schedule",
+      "calendar",
+      "reservation",
+      "slot",
+      "service"
+    ],
+    "patron": "Soft UI Evolution + Flat Design",
+    "paleta_ejemplo": [
+      "#0066CC"
+    ],
+    "anti_patrones": [
+      "Complex shadows",
+      "3D effects"
+    ]
+  },
+  {
+    "tipo": "Invoice & Billing Tool",
+    "keywords": [
+      "invoice",
+      "billing",
+      "payment",
+      "receipt",
+      "freelance",
+      "estimate",
+      "quote",
+      "accounting"
+    ],
+    "patron": "Minimalism + Flat Design",
+    "paleta_ejemplo": [
+      "#0A1628",
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Complex shadows",
+      "3D effects"
+    ]
+  },
+  {
+    "tipo": "Grocery & Shopping List",
+    "keywords": [
+      "grocery",
+      "shopping",
+      "list",
+      "supermarket",
+      "checklist",
+      "pantry",
+      "meal-plan",
+      "buy"
+    ],
+    "patron": "Flat Design + Vibrant & Block-based",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Complex shadows",
+      "3D effects",
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "Timer & Pomodoro",
+    "keywords": [
+      "timer",
+      "pomodoro",
+      "countdown",
+      "stopwatch",
+      "focus",
+      "clock",
+      "productivity",
+      "interval"
+    ],
+    "patron": "Minimalism + Neumorphism",
+    "paleta_ejemplo": [
+      "#F59E0B",
+      "#E53E3E",
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Excessive decoration"
+    ]
+  },
+  {
+    "tipo": "Parenting & Baby Tracker",
+    "keywords": [
+      "baby",
+      "parenting",
+      "child",
+      "feeding",
+      "sleep",
+      "diaper",
+      "milestone",
+      "family",
+      "newborn"
+    ],
+    "patron": "Claymorphism + Soft UI Evolution",
+    "paleta_ejemplo": [
+      "#87CEEB",
+      "#C76B4A",
+      "#EC4899"
+    ],
+    "anti_patrones": [
+      "Inconsistent styling",
+      "Poor contrast ratios"
+    ]
+  },
+  {
+    "tipo": "Scanner & Document Manager",
+    "keywords": [
+      "scanner",
+      "document",
+      "ocr",
+      "pdf",
+      "scan",
+      "camera",
+      "file",
+      "archive",
+      "digitize"
+    ],
+    "patron": "Minimalism + Flat Design",
+    "paleta_ejemplo": [
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Complex shadows",
+      "3D effects"
+    ]
+  },
+  {
+    "tipo": "Calendar & Scheduling App",
+    "keywords": [
+      "calendar",
+      "scheduling",
+      "planner",
+      "agenda",
+      "events",
+      "reminder",
+      "appointment",
+      "organize",
+      "date",
+      "sync"
+    ],
+    "patron": "Flat Design + Micro-interactions",
+    "paleta_ejemplo": [
+      "#10B981"
+    ],
+    "anti_patrones": [
+      "Complex shadows",
+      "3D effects"
+    ]
+  },
+  {
+    "tipo": "Password Manager",
+    "keywords": [
+      "password",
+      "security",
+      "vault",
+      "credentials",
+      "login",
+      "secure",
+      "encrypt",
+      "keychain",
+      "2fa",
+      "biometric"
+    ],
+    "patron": "Minimalism + Accessible & Ethical",
+    "paleta_ejemplo": [
+      "#0066CC",
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Color-only indicators"
+    ]
+  },
+  {
+    "tipo": "Expense Splitter / Bill Split",
+    "keywords": [
+      "split",
+      "expense",
+      "bill",
+      "aa",
+      "share",
+      "friends",
+      "group",
+      "settle",
+      "debt",
+      "payment",
+      "owe"
+    ],
+    "patron": "Flat Design + Vibrant & Block-based",
+    "paleta_ejemplo": [
+      "#10B981",
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Complex shadows",
+      "3D effects",
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "Voice Recorder & Memo",
+    "keywords": [
+      "voice",
+      "recorder",
+      "memo",
+      "audio",
+      "transcription",
+      "dictate",
+      "recording",
+      "microphone",
+      "note",
+      "otter"
+    ],
+    "patron": "Minimalism + AI-Native UI",
+    "paleta_ejemplo": [
+      "#E53E3E",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Excessive decoration"
+    ]
+  },
+  {
+    "tipo": "Bookmark & Read-Later",
+    "keywords": [
+      "bookmark",
+      "read-later",
+      "save",
+      "article",
+      "pocket",
+      "link",
+      "reading",
+      "archive",
+      "collection",
+      "raindrop"
+    ],
+    "patron": "Minimalism + Flat Design",
+    "paleta_ejemplo": [
+      "#C76B4A",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Complex shadows",
+      "3D effects"
+    ]
+  },
+  {
+    "tipo": "Translator App",
+    "keywords": [
+      "translate",
+      "language",
+      "text",
+      "voice",
+      "ocr",
+      "dictionary",
+      "multilingual",
+      "real-time",
+      "detect",
+      "deepl"
+    ],
+    "patron": "Flat Design + AI-Native UI",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Complex shadows",
+      "3D effects"
+    ]
+  },
+  {
+    "tipo": "Calculator & Unit Converter",
+    "keywords": [
+      "calculator",
+      "converter",
+      "unit",
+      "math",
+      "currency",
+      "measurement",
+      "scientific",
+      "formula",
+      "percentage"
+    ],
+    "patron": "Neumorphism + Minimalism",
+    "paleta_ejemplo": [
+      "#FF6B35",
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Excessive decoration"
+    ]
+  },
+  {
+    "tipo": "Alarm & World Clock",
+    "keywords": [
+      "alarm",
+      "clock",
+      "world",
+      "timezone",
+      "timer",
+      "wake",
+      "sleep",
+      "schedule",
+      "reminder",
+      "bedtime"
+    ],
+    "patron": "Dark Mode (OLED) + Minimalism",
+    "paleta_ejemplo": [
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Pure white backgrounds"
+    ]
+  },
+  {
+    "tipo": "File Manager & Transfer",
+    "keywords": [
+      "file",
+      "manager",
+      "transfer",
+      "folder",
+      "document",
+      "storage",
+      "cloud",
+      "share",
+      "organize",
+      "compress"
+    ],
+    "patron": "Flat Design + Minimalism",
+    "paleta_ejemplo": [
+      "#FF6B35",
+      "#7C3AED"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Complex shadows",
+      "3D effects"
+    ]
+  },
+  {
+    "tipo": "Email Client",
+    "keywords": [
+      "email",
+      "mail",
+      "inbox",
+      "compose",
+      "thread",
+      "newsletter",
+      "filter",
+      "reply",
+      "gmail",
+      "spark",
+      "superhuman"
+    ],
+    "patron": "Flat Design + Minimalism",
+    "paleta_ejemplo": [
+      "#F59E0B",
+      "#E53E3E",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Complex shadows",
+      "3D effects"
+    ]
+  },
+  {
+    "tipo": "Casual Puzzle Game",
+    "keywords": [
+      "puzzle",
+      "casual",
+      "match",
+      "brain",
+      "game",
+      "relaxing",
+      "level",
+      "tiles",
+      "logic",
+      "block",
+      "three"
+    ],
+    "patron": "Claymorphism + Vibrant & Block-based",
+    "paleta_ejemplo": [
+      "#D4AF37"
+    ],
+    "anti_patrones": [
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "Trivia & Quiz Game",
+    "keywords": [
+      "trivia",
+      "quiz",
+      "knowledge",
+      "question",
+      "answer",
+      "challenge",
+      "leaderboard",
+      "fact",
+      "brain",
+      "compete"
+    ],
+    "patron": "Vibrant & Block-based + Micro-interactions",
+    "paleta_ejemplo": [
+      "#D4AF37",
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "Card & Board Game",
+    "keywords": [
+      "card",
+      "board",
+      "chess",
+      "checkers",
+      "poker",
+      "strategy",
+      "turn-based",
+      "multiplayer",
+      "classic",
+      "tabletop"
+    ],
+    "patron": "3D & Hyperrealism + Flat Design",
+    "paleta_ejemplo": [
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Complex shadows",
+      "3D effects"
+    ]
+  },
+  {
+    "tipo": "Idle & Clicker Game",
+    "keywords": [
+      "idle",
+      "clicker",
+      "incremental",
+      "passive",
+      "cookie",
+      "adventure",
+      "progress",
+      "offline",
+      "collect",
+      "prestige"
+    ],
+    "patron": "Vibrant & Block-based + Motion-Driven",
+    "paleta_ejemplo": [
+      "#D4AF37",
+      "#7C3AED"
+    ],
+    "anti_patrones": [
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "Word & Crossword Game",
+    "keywords": [
+      "word",
+      "crossword",
+      "wordle",
+      "spelling",
+      "vocabulary",
+      "letters",
+      "grid",
+      "puzzle",
+      "dictionary",
+      "daily"
+    ],
+    "patron": "Minimalism + Flat Design",
+    "paleta_ejemplo": [
+      "#10B981",
+      "#E53E3E",
+      "#C76B4A",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Complex shadows",
+      "3D effects"
+    ]
+  },
+  {
+    "tipo": "Arcade & Retro Game",
+    "keywords": [
+      "arcade",
+      "retro",
+      "8bit",
+      "action",
+      "shoot",
+      "runner",
+      "tap",
+      "reflex",
+      "endless",
+      "pixel",
+      "classic",
+      "score"
+    ],
+    "patron": "Pixel Art + Retro-Futurism",
+    "paleta_ejemplo": [
+      "#D4AF37",
+      "#E53E3E",
+      "#00FF00",
+      "#0A0A0A"
+    ],
+    "anti_patrones": [
+      "Inconsistent styling",
+      "Poor contrast ratios"
+    ]
+  },
+  {
+    "tipo": "Photo Editor & Filters",
+    "keywords": [
+      "photo",
+      "edit",
+      "filter",
+      "vsco",
+      "snapseed",
+      "enhance",
+      "crop",
+      "retouch",
+      "adjust",
+      "luts",
+      "preset",
+      "adjust"
+    ],
+    "patron": "Minimalism + Dark Mode (OLED)",
+    "paleta_ejemplo": [
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Pure white backgrounds"
+    ]
+  },
+  {
+    "tipo": "Short Video Editor",
+    "keywords": [
+      "video",
+      "edit",
+      "capcut",
+      "inshot",
+      "clip",
+      "reel",
+      "tiktok",
+      "trim",
+      "effects",
+      "transitions",
+      "music",
+      "timeline"
+    ],
+    "patron": "Dark Mode (OLED) + Motion-Driven",
+    "paleta_ejemplo": [
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Pure white backgrounds"
+    ]
+  },
+  {
+    "tipo": "Drawing & Sketching Canvas",
+    "keywords": [
+      "drawing",
+      "sketch",
+      "procreate",
+      "canvas",
+      "paint",
+      "illustration",
+      "digital",
+      "brush",
+      "layers",
+      "art",
+      "stylus"
+    ],
+    "patron": "Minimalism + Dark Mode (OLED)",
+    "paleta_ejemplo": [
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Pure white backgrounds"
+    ]
+  },
+  {
+    "tipo": "Music Creation & Beat Maker",
+    "keywords": [
+      "music",
+      "beat",
+      "daw",
+      "garageband",
+      "create",
+      "loop",
+      "sample",
+      "instrument",
+      "track",
+      "compose",
+      "record",
+      "midi"
+    ],
+    "patron": "Dark Mode (OLED) + Motion-Driven",
+    "paleta_ejemplo": [
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Pure white backgrounds"
+    ]
+  },
+  {
+    "tipo": "Meme & Sticker Maker",
+    "keywords": [
+      "meme",
+      "sticker",
+      "maker",
+      "funny",
+      "caption",
+      "template",
+      "edit",
+      "share",
+      "viral",
+      "emoji",
+      "creator",
+      "reaction"
+    ],
+    "patron": "Vibrant & Block-based + Flat Design",
+    "paleta_ejemplo": [
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Complex shadows",
+      "3D effects",
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "AI Photo & Avatar Generator",
+    "keywords": [
+      "ai",
+      "photo",
+      "avatar",
+      "lensa",
+      "portrait",
+      "generate",
+      "selfie",
+      "style",
+      "filter",
+      "prisma",
+      "art"
+    ],
+    "patron": "AI-Native UI + Aurora UI",
+    "paleta_ejemplo": [
+      "#7C3AED"
+    ],
+    "anti_patrones": [
+      "Inconsistent styling",
+      "Poor contrast ratios"
+    ]
+  },
+  {
+    "tipo": "Link-in-Bio Page Builder",
+    "keywords": [
+      "bio",
+      "link",
+      "linktree",
+      "personal",
+      "page",
+      "creator",
+      "social",
+      "portfolio",
+      "profile",
+      "landing",
+      "custom"
+    ],
+    "patron": "Vibrant & Block-based + Bento Box Grid",
+    "paleta_ejemplo": [
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "Wardrobe & Outfit Planner",
+    "keywords": [
+      "wardrobe",
+      "outfit",
+      "fashion",
+      "clothes",
+      "closet",
+      "style",
+      "wear",
+      "plan",
+      "capsule",
+      "ootd",
+      "lookbook"
+    ],
+    "patron": "Minimalism + Motion-Driven",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Excessive decoration"
+    ]
+  },
+  {
+    "tipo": "Plant Care Tracker",
+    "keywords": [
+      "plant",
+      "care",
+      "water",
+      "garden",
+      "tracker",
+      "reminder",
+      "species",
+      "photo",
+      "grow",
+      "health",
+      "planta"
+    ],
+    "patron": "Organic Biophilic + Soft UI Evolution",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Inconsistent styling",
+      "Poor contrast ratios"
+    ]
+  },
+  {
+    "tipo": "Book & Reading Tracker",
+    "keywords": [
+      "book",
+      "reading",
+      "tracker",
+      "goodreads",
+      "library",
+      "shelf",
+      "progress",
+      "review",
+      "notes",
+      "goal",
+      "literature"
+    ],
+    "patron": "Swiss Modernism 2.0 + Minimalism",
+    "paleta_ejemplo": [
+      "#C76B4A",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Excessive decoration"
+    ]
+  },
+  {
+    "tipo": "Couple & Relationship App",
+    "keywords": [
+      "couple",
+      "relationship",
+      "partner",
+      "love",
+      "date",
+      "anniversary",
+      "memory",
+      "shared",
+      "intimate",
+      "between"
+    ],
+    "patron": "Aurora UI + Soft UI Evolution",
+    "paleta_ejemplo": [
+      "#C76B4A",
+      "#EC4899",
+      "#F43F5E"
+    ],
+    "anti_patrones": [
+      "Inconsistent styling",
+      "Poor contrast ratios"
+    ]
+  },
+  {
+    "tipo": "Family Calendar & Chores",
+    "keywords": [
+      "family",
+      "calendar",
+      "chores",
+      "tasks",
+      "household",
+      "shared",
+      "kids",
+      "schedule",
+      "cozi",
+      "organize",
+      "member"
+    ],
+    "patron": "Flat Design + Claymorphism",
+    "paleta_ejemplo": [
+      "#C76B4A"
+    ],
+    "anti_patrones": [
+      "Complex shadows",
+      "3D effects"
+    ]
+  },
+  {
+    "tipo": "Mood Tracker",
+    "keywords": [
+      "mood",
+      "emotion",
+      "feeling",
+      "mental",
+      "daily",
+      "journal",
+      "wellbeing",
+      "check-in",
+      "log",
+      "track",
+      "daylio"
+    ],
+    "patron": "Soft UI Evolution + Minimalism",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Excessive decoration"
+    ]
+  },
+  {
+    "tipo": "Gift & Wishlist",
+    "keywords": [
+      "gift",
+      "wishlist",
+      "present",
+      "birthday",
+      "occasion",
+      "registry",
+      "idea",
+      "shop",
+      "list",
+      "share",
+      "surprise"
+    ],
+    "patron": "Vibrant & Block-based + Soft UI Evolution",
+    "paleta_ejemplo": [
+      "#D4AF37",
+      "#E53E3E",
+      "#C76B4A",
+      "#EC4899"
+    ],
+    "anti_patrones": [
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "Running & Cycling GPS",
+    "keywords": [
+      "running",
+      "cycling",
+      "gps",
+      "strava",
+      "track",
+      "route",
+      "speed",
+      "distance",
+      "cadence",
+      "pace",
+      "workout",
+      "sport"
+    ],
+    "patron": "Dark Mode (OLED) + Vibrant & Block-based",
+    "paleta_ejemplo": [
+      "#FF6B35",
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Pure white backgrounds",
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "Yoga & Stretching Guide",
+    "keywords": [
+      "yoga",
+      "stretch",
+      "flexibility",
+      "pose",
+      "asana",
+      "guided",
+      "session",
+      "calm",
+      "routine",
+      "wellness",
+      "down-dog"
+    ],
+    "patron": "Organic Biophilic + Soft UI Evolution",
+    "paleta_ejemplo": [
+      "#FFFDD0",
+      "#C76B4A",
+      "#6B7280"
+    ],
+    "anti_patrones": [
+      "Inconsistent styling",
+      "Poor contrast ratios"
+    ]
+  },
+  {
+    "tipo": "Sleep Tracker",
+    "keywords": [
+      "sleep",
+      "tracker",
+      "alarm",
+      "cycle",
+      "quality",
+      "snore",
+      "analysis",
+      "rem",
+      "deep",
+      "smart",
+      "wake",
+      "insomnia"
+    ],
+    "patron": "Dark Mode (OLED) + Neumorphism",
+    "paleta_ejemplo": [
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Pure white backgrounds"
+    ]
+  },
+  {
+    "tipo": "Calorie & Nutrition Counter",
+    "keywords": [
+      "calorie",
+      "nutrition",
+      "food",
+      "diet",
+      "macro",
+      "protein",
+      "carb",
+      "fat",
+      "log",
+      "fitness",
+      "myfitnesspal"
+    ],
+    "patron": "Flat Design + Vibrant & Block-based",
+    "paleta_ejemplo": [
+      "#FF6B35"
+    ],
+    "anti_patrones": [
+      "Complex shadows",
+      "3D effects",
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "Period & Cycle Tracker",
+    "keywords": [
+      "period",
+      "cycle",
+      "menstrual",
+      "fertility",
+      "ovulation",
+      "pms",
+      "log",
+      "women",
+      "health",
+      "flo",
+      "clue",
+      "hormone"
+    ],
+    "patron": "Soft UI Evolution + Aurora UI",
+    "paleta_ejemplo": [
+      "#8B5CF6",
+      "#F43F5E"
+    ],
+    "anti_patrones": [
+      "Inconsistent styling",
+      "Poor contrast ratios"
+    ]
+  },
+  {
+    "tipo": "Medication & Pill Reminder",
+    "keywords": [
+      "medication",
+      "pill",
+      "reminder",
+      "dose",
+      "schedule",
+      "prescription",
+      "drug",
+      "health",
+      "medisafe",
+      "refill"
+    ],
+    "patron": "Accessible & Ethical + Flat Design",
+    "paleta_ejemplo": [
+      "#0066CC",
+      "#E53E3E",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Complex shadows",
+      "3D effects",
+      "Color-only indicators"
+    ]
+  },
+  {
+    "tipo": "Water & Hydration Reminder",
+    "keywords": [
+      "water",
+      "hydration",
+      "drink",
+      "reminder",
+      "daily",
+      "tracker",
+      "glasses",
+      "intake",
+      "health",
+      "cup",
+      "aqua"
+    ],
+    "patron": "Claymorphism + Vibrant & Block-based",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "Fasting & Intermittent Timer",
+    "keywords": [
+      "fasting",
+      "intermittent",
+      "16:8",
+      "timer",
+      "fast",
+      "eating",
+      "window",
+      "keto",
+      "diet",
+      "zero",
+      "weight",
+      "protocol"
+    ],
+    "patron": "Minimalism + Dark Mode (OLED)",
+    "paleta_ejemplo": [
+      "#7C3AED"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Pure white backgrounds"
+    ]
+  },
+  {
+    "tipo": "Anonymous Community / Confession",
+    "keywords": [
+      "anonymous",
+      "community",
+      "confess",
+      "whisper",
+      "secret",
+      "vent",
+      "share",
+      "safe",
+      "private",
+      "social",
+      "yikyak"
+    ],
+    "patron": "Dark Mode (OLED) + Minimalism",
+    "paleta_ejemplo": [
+      "#C76B4A",
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Pure white backgrounds"
+    ]
+  },
+  {
+    "tipo": "Local Events & Discovery",
+    "keywords": [
+      "local",
+      "events",
+      "discovery",
+      "meetup",
+      "nearby",
+      "social",
+      "city",
+      "activities",
+      "calendar",
+      "community",
+      "explore"
+    ],
+    "patron": "Vibrant & Block-based + Motion-Driven",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "Study Together / Virtual Coworking",
+    "keywords": [
+      "study",
+      "focus",
+      "cowork",
+      "pomodoro",
+      "virtual",
+      "together",
+      "session",
+      "accountability",
+      "live",
+      "stream",
+      "room"
+    ],
+    "patron": "Minimalism + Soft UI Evolution",
+    "paleta_ejemplo": [
+      "#C76B4A"
+    ],
+    "anti_patrones": [
+      "Excessive decoration"
+    ]
+  },
+  {
+    "tipo": "Coding Challenge & Practice",
+    "keywords": [
+      "coding",
+      "leetcode",
+      "challenge",
+      "algorithm",
+      "practice",
+      "programming",
+      "competitive",
+      "skill",
+      "interview",
+      "problem"
+    ],
+    "patron": "Dark Mode (OLED) + Cyberpunk UI",
+    "paleta_ejemplo": [
+      "#10B981",
+      "#F59E0B",
+      "#E53E3E",
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Pure white backgrounds"
+    ]
+  },
+  {
+    "tipo": "Kids Learning (ABC & Math)",
+    "keywords": [
+      "kids",
+      "children",
+      "learning",
+      "abc",
+      "math",
+      "phonics",
+      "numbers",
+      "education",
+      "games",
+      "preschool",
+      "early"
+    ],
+    "patron": "Claymorphism + Vibrant & Block-based",
+    "paleta_ejemplo": [
+      "#D4AF37"
+    ],
+    "anti_patrones": [
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "Music Instrument Learning",
+    "keywords": [
+      "music",
+      "instrument",
+      "piano",
+      "guitar",
+      "learn",
+      "lesson",
+      "tutorial",
+      "notes",
+      "play",
+      "chord",
+      "practice",
+      "simply"
+    ],
+    "patron": "Vibrant & Block-based + Motion-Driven",
+    "paleta_ejemplo": [
+      "#E53E3E",
+      "#C76B4A"
+    ],
+    "anti_patrones": [
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "Parking Finder",
+    "keywords": [
+      "parking",
+      "spot",
+      "finder",
+      "map",
+      "pay",
+      "meter",
+      "garage",
+      "location",
+      "car",
+      "reserve",
+      "spothero"
+    ],
+    "patron": "Minimalism + Glassmorphism",
+    "paleta_ejemplo": [
+      "#0066CC",
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Excessive decoration"
+    ]
+  },
+  {
+    "tipo": "Public Transit Guide",
+    "keywords": [
+      "transit",
+      "bus",
+      "metro",
+      "subway",
+      "train",
+      "route",
+      "schedule",
+      "map",
+      "city",
+      "commute",
+      "trip",
+      "citymapper"
+    ],
+    "patron": "Flat Design + Accessible & Ethical",
+    "paleta_ejemplo": [
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Complex shadows",
+      "3D effects",
+      "Color-only indicators"
+    ]
+  },
+  {
+    "tipo": "Road Trip Planner",
+    "keywords": [
+      "road",
+      "trip",
+      "drive",
+      "route",
+      "planner",
+      "travel",
+      "stop",
+      "map",
+      "adventure",
+      "scenic",
+      "car",
+      "wanderlog"
+    ],
+    "patron": "Aurora UI + Organic Biophilic",
+    "paleta_ejemplo": [
+      "#FF6B35",
+      "#C76B4A",
+      "#20B2AA"
+    ],
+    "anti_patrones": [
+      "Inconsistent styling",
+      "Poor contrast ratios"
+    ]
+  },
+  {
+    "tipo": "VPN & Privacy Tool",
+    "keywords": [
+      "vpn",
+      "privacy",
+      "secure",
+      "anonymous",
+      "encrypt",
+      "proxy",
+      "ip",
+      "protect",
+      "shield",
+      "network",
+      "nordvpn"
+    ],
+    "patron": "Minimalism + Dark Mode (OLED)",
+    "paleta_ejemplo": [
+      "#E53E3E",
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Pure white backgrounds"
+    ]
+  },
+  {
+    "tipo": "Emergency SOS & Safety",
+    "keywords": [
+      "emergency",
+      "sos",
+      "safety",
+      "alert",
+      "location",
+      "help",
+      "danger",
+      "crisis",
+      "first-aid",
+      "guard",
+      "bsafe"
+    ],
+    "patron": "Accessible & Ethical + Flat Design",
+    "paleta_ejemplo": [
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Complex shadows",
+      "3D effects",
+      "Color-only indicators"
+    ]
+  },
+  {
+    "tipo": "Wallpaper & Theme App",
+    "keywords": [
+      "wallpaper",
+      "theme",
+      "background",
+      "customize",
+      "aesthetic",
+      "home-screen",
+      "lock-screen",
+      "widget",
+      "design",
+      "zedge"
+    ],
+    "patron": "Vibrant & Block-based + Aurora UI",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Muted colors",
+      "Low energy"
+    ]
+  },
+  {
+    "tipo": "White Noise & Ambient Sound",
+    "keywords": [
+      "white noise",
+      "ambient",
+      "sound",
+      "sleep",
+      "focus",
+      "rain",
+      "nature",
+      "relax",
+      "concentration",
+      "background",
+      "noisli"
+    ],
+    "patron": "Minimalism + Dark Mode (OLED)",
+    "paleta_ejemplo": [
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Excessive decoration",
+      "Pure white backgrounds"
+    ]
+  },
+  {
+    "tipo": "Home Decoration & Interior Design",
+    "keywords": [
+      "home",
+      "interior",
+      "decor",
+      "design",
+      "furniture",
+      "room",
+      "renovation",
+      "ar",
+      "plan",
+      "inspire",
+      "3d",
+      "houzz"
+    ],
+    "patron": "Minimalism + 3D Product Preview",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Excessive decoration"
+    ]
+  },
+  {
+    "tipo": "Academic Journal / Scholarly Publishing",
+    "keywords": [
+      "academic",
+      "journal",
+      "paper",
+      "research",
+      "peer-review",
+      "open-access",
+      "scholarly",
+      "publication",
+      "citation",
+      "manuscript",
+      "issn",
+      "doi"
+    ],
+    "patron": "Swiss Modernism 2.0 + Minimalism",
+    "paleta_ejemplo": [
+      "#0A1628",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Prioritize readability (serif body text)",
+      "Clear article hierarchy",
+      "Abstract/DOI prominence"
+    ]
+  },
+  {
+    "tipo": "API Developer Portal",
+    "keywords": [
+      "api",
+      "developer",
+      "documentation",
+      "sdk",
+      "endpoint",
+      "integration",
+      "rest",
+      "graphql",
+      "webhook",
+      "reference",
+      "getting-started",
+      "auth"
+    ],
+    "patron": "Trust & Authority + Minimalism",
+    "paleta_ejemplo": [
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Endpoint discoverability",
+      "Copy-paste code samples",
+      "Auth flow clarity"
+    ]
+  },
+  {
+    "tipo": "Forum / Discussion Board",
+    "keywords": [
+      "forum",
+      "discussion",
+      "thread",
+      "post",
+      "reply",
+      "community",
+      "comment",
+      "moderation",
+      "subreddit",
+      "stackexchange",
+      "topic"
+    ],
+    "patron": "Dark Mode (OLED) + Minimalism",
+    "paleta_ejemplo": [
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Thread list with pagination",
+      "Rich text editor",
+      "Quote/mention system"
+    ]
+  },
+  {
+    "tipo": "Directory / Listing Site",
+    "keywords": [
+      "directory",
+      "listing",
+      "classifieds",
+      "catalogue",
+      "business-directory",
+      "yellow-pages",
+      "venue",
+      "find",
+      "search",
+      "filter",
+      "map"
+    ],
+    "patron": "Flat Design + Vibrant & Block-based",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Category tree",
+      "Multi-filter sidebar",
+      "Map/list toggle"
+    ]
+  },
+  {
+    "tipo": "Status Page / Incident Management",
+    "keywords": [
+      "status",
+      "incident",
+      "outage",
+      "uptime",
+      "downtime",
+      "statuspage",
+      "monitoring",
+      "sla",
+      "maintenance",
+      "sev1",
+      "postmortem"
+    ],
+    "patron": "Data-Dense + Trust & Authority",
+    "paleta_ejemplo": [
+      "#F59E0B",
+      "#E53E3E",
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Service status matrix",
+      "Incident timeline",
+      "Severity badges"
+    ]
+  },
+  {
+    "tipo": "Wiki / Encyclopedia",
+    "keywords": [
+      "wiki",
+      "encyclopedia",
+      "knowledge",
+      "article",
+      "reference",
+      "wikipedia",
+      "documentation",
+      "collaborative",
+      "edit",
+      "version",
+      "citation"
+    ],
+    "patron": "Minimalism + Flat Design",
+    "paleta_ejemplo": [
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Full-text search bar",
+      "Table of contents sidebar",
+      "Edit history"
+    ]
+  },
+  {
+    "tipo": "Auction Platform",
+    "keywords": [
+      "auction",
+      "bid",
+      "hammer",
+      "lot",
+      "live-auction",
+      "bidding-war",
+      "estate-sale",
+      "proxibid",
+      "gavel",
+      "lot-number",
+      "reserve-price"
+    ],
+    "patron": "Dark Mode (OLED) + Motion-Driven",
+    "paleta_ejemplo": [
+      "#F59E0B",
+      "#E53E3E",
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Real-time bid updates",
+      "Countdown timer urgency",
+      "Auto-bid ceiling"
+    ]
+  },
+  {
+    "tipo": "Changelog / Release Notes",
+    "keywords": [
+      "changelog",
+      "release-notes",
+      "version-history",
+      "whats-new",
+      "product-updates",
+      "semver",
+      "patch-notes",
+      "release-tracker"
+    ],
+    "patron": "Minimalism + Flat Design",
+    "paleta_ejemplo": [
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Chronological release feed",
+      "Semver badges",
+      "Breaking change warnings"
+    ]
+  },
+  {
+    "tipo": "Citizen Science Platform",
+    "keywords": [
+      "citizen-science",
+      "zooniverse",
+      "crowdsourced-research",
+      "volunteer-science",
+      "public-participation",
+      "distributed-research",
+      "citizen-researcher"
+    ],
+    "patron": "Organic Biophilic + Vibrant & Block-based",
+    "paleta_ejemplo": [
+      "#4A7C23",
+      "#FF6B35"
+    ],
+    "anti_patrones": [
+      "Project cards with impact metrics",
+      "Contribution tracker",
+      "Beginner-friendly onboarding"
+    ]
+  },
+  {
+    "tipo": "Classifieds / Buy-Sell",
+    "keywords": [
+      "classifieds",
+      "buy-sell",
+      "craigslist",
+      "secondhand",
+      "marketplace-listing",
+      "for-sale",
+      "trade",
+      "flea-market",
+      "thrift",
+      "resell"
+    ],
+    "patron": "Flat Design + Vibrant & Block-based",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Category tree",
+      "Photo-first listing cards",
+      "Price negotiation"
+    ]
+  },
+  {
+    "tipo": "Conference / Symposium Landing Page",
+    "keywords": [
+      "conference",
+      "symposium",
+      "summit",
+      "cfp",
+      "call-for-papers",
+      "speaker-lineup",
+      "registration",
+      "venue",
+      "proceedings",
+      "keynote",
+      "track"
+    ],
+    "patron": "Swiss Modernism 2.0 + Minimalism",
+    "paleta_ejemplo": [
+      "#0A1628",
+      "#D4AF37",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Speaker grid",
+      "Multi-track agenda",
+      "CFP deadline countdown"
+    ]
+  },
+  {
+    "tipo": "Crowdfunding Platform",
+    "keywords": [
+      "crowdfunding",
+      "kickstarter",
+      "indiegogo",
+      "campaign",
+      "backer",
+      "pledge",
+      "funding-goal",
+      "stretch-goal",
+      "reward-tier",
+      "all-or-nothing"
+    ],
+    "patron": "Vibrant & Block-based + Motion-Driven",
+    "paleta_ejemplo": [
+      "#F59E0B"
+    ],
+    "anti_patrones": [
+      "Funding progress bar with % goal",
+      "Reward tier selector",
+      "Backer count"
+    ]
+  },
+  {
+    "tipo": "Digital Signage / Kiosk",
+    "keywords": [
+      "digital-signage",
+      "kiosk",
+      "interactive-display",
+      "touchscreen",
+      "wayfinding",
+      "lobby-display",
+      "menu-board",
+      "point-of-sale-display"
+    ],
+    "patron": "Minimalism + Dark Mode (OLED)",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Full-screen single-purpose layout",
+      "Touch targets ≥56px",
+      "Auto-rotate content"
+    ]
+  },
+  {
+    "tipo": "E-signature / Document Workflow",
+    "keywords": [
+      "esignature",
+      "e-sign",
+      "docusign",
+      "digital-signature",
+      "document-workflow",
+      "approval-chain",
+      "contract-signing",
+      "signing-ceremony"
+    ],
+    "patron": "Trust & Authority + Minimalism",
+    "paleta_ejemplo": [
+      "#0A1628",
+      "#F59E0B"
+    ],
+    "anti_patrones": [
+      "Document preview with annotation",
+      "Signature placement UI",
+      "Multi-signer workflow"
+    ]
+  },
+  {
+    "tipo": "Feature Flag / Config Management",
+    "keywords": [
+      "feature-flag",
+      "config",
+      "launchdarkly",
+      "feature-toggle",
+      "experiment",
+      "rollout",
+      "kill-switch",
+      "a-b-test-config",
+      "percentage-rollout"
+    ],
+    "patron": "Dark Mode (OLED) + Data-Dense",
+    "paleta_ejemplo": [
+      "#F59E0B",
+      "#E53E3E",
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Feature list with on/off toggles",
+      "Percentage rollout slider",
+      "Environment selector (prod/staging)"
+    ]
+  },
+  {
+    "tipo": "Government Portal / Civic Services",
+    "keywords": [
+      "government-portal",
+      "civic-services",
+      "city-hall",
+      "permit-application",
+      "tax-payment",
+      "voter-registration",
+      "public-records",
+      "municipal-online"
+    ],
+    "patron": "Accessible & Ethical + Trust & Authority",
+    "paleta_ejemplo": [
+      "#0077B6"
+    ],
+    "anti_patrones": [
+      "Multilingual toggle",
+      "Service A-Z index",
+      "Form wizard with save-progress"
+    ]
+  },
+  {
+    "tipo": "Grant / Funding Portal",
+    "keywords": [
+      "grant",
+      "funding",
+      "rfp",
+      "proposal",
+      "research-grant",
+      "foundation",
+      "fellowship",
+      "award",
+      "application-portal",
+      "funding-opportunity"
+    ],
+    "patron": "Trust & Authority + Minimalism",
+    "paleta_ejemplo": [
+      "#0A1628",
+      "#E53E3E",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Funding opportunity cards",
+      "Eligibility checker",
+      "Deadline countdown"
+    ]
+  },
+  {
+    "tipo": "LMS (Learning Management System)",
+    "keywords": [
+      "lms",
+      "course-management",
+      "learning-management",
+      "canvas",
+      "moodle",
+      "blackboard",
+      "enrollment",
+      "gradebook",
+      "syllabus",
+      "assignment-submit"
+    ],
+    "patron": "Flat Design + Accessible & Ethical",
+    "paleta_ejemplo": [
+      "#5B9BD5",
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Dashboard with enrolled courses",
+      "Assignment deadlines",
+      "Gradebook view"
+    ]
+  },
+  {
+    "tipo": "No-code / Low-code Builder",
+    "keywords": [
+      "no-code",
+      "low-code",
+      "builder",
+      "bubble",
+      "webflow",
+      "drag-drop",
+      "visual-builder",
+      "app-builder",
+      "workflow-builder",
+      "logic-blocks"
+    ],
+    "patron": "Vibrant & Block-based + Bento Box Grid",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Drag-drop canvas",
+      "Component library sidebar",
+      "Logic flow visual editor"
+    ]
+  },
+  {
+    "tipo": "Open Source Project Landing",
+    "keywords": [
+      "open-source",
+      "github-project",
+      "oss",
+      "contributor",
+      "star",
+      "fork",
+      "pull-request",
+      "maintainer",
+      "sponsoring",
+      "readme",
+      "repository"
+    ],
+    "patron": "Dark Mode (OLED) + Minimalism",
+    "paleta_ejemplo": [
+      "#D4AF37",
+      "#7C3AED",
+      "#1A1A2E",
+      "#C0C0C0"
+    ],
+    "anti_patrones": [
+      "Star/fork count badges",
+      "Install command (copy-paste)",
+      "Language breakdown bar"
+    ]
+  },
+  {
+    "tipo": "Patient Portal / Health Records",
+    "keywords": [
+      "patient-portal",
+      "health-records",
+      "ehr",
+      "emr",
+      "mychart",
+      "lab-results",
+      "prescription-refill",
+      "medical-history",
+      "test-results",
+      "care-team"
+    ],
+    "patron": "Trust & Authority + Accessible & Ethical",
+    "paleta_ejemplo": [
+      "#2ECC71",
+      "#E53E3E",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Labs and results timeline",
+      "Medication list with refill",
+      "Appointment scheduling"
+    ]
+  },
+  {
+    "tipo": "Patent / IP Database",
+    "keywords": [
+      "patent",
+      "intellectual-property",
+      "trademark",
+      "prior-art",
+      "uspto",
+      "wipo",
+      "invention",
+      "ip-portfolio",
+      "patent-search",
+      "claims"
+    ],
+    "patron": "Swiss Modernism 2.0 + Minimalism",
+    "paleta_ejemplo": [],
+    "anti_patrones": [
+      "Full-text patent search",
+      "Classification tree",
+      "Citation graph"
+    ]
+  },
+  {
+    "tipo": "Q&A Community Platform",
+    "keywords": [
+      "qa",
+      "stack-overflow",
+      "question-answer",
+      "knowledge-sharing",
+      "community-qa",
+      "expert-answer",
+      "upvote",
+      "accepted-answer",
+      "reputation"
+    ],
+    "patron": "Minimalism + Flat Design",
+    "paleta_ejemplo": [
+      "#D4AF37",
+      "#FF6B35",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Question list with vote count",
+      "Rich code blocks",
+      "Tag filter"
+    ]
+  },
+  {
+    "tipo": "Research Lab / University Department",
+    "keywords": [
+      "research-lab",
+      "university-department",
+      "academic-lab",
+      "principal-investigator",
+      "lab-members",
+      "publications",
+      "research-group",
+      "pi-page"
+    ],
+    "patron": "Swiss Modernism 2.0 + Minimalism",
+    "paleta_ejemplo": [
+      "#0A1628",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "PI bio and research focus",
+      "Current members grid",
+      "Publication list with links"
+    ]
+  },
+  {
+    "tipo": "Resume / CV Builder",
+    "keywords": [
+      "resume",
+      "cv",
+      "builder",
+      "job-search",
+      "curriculum-vitae",
+      "portfolio-resume",
+      "cover-letter",
+      "career-builder",
+      "ats-friendly"
+    ],
+    "patron": "Minimalism + Flat Design",
+    "paleta_ejemplo": [
+      "#0A1628",
+      "#10B981",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Template picker",
+      "Section-by-section editor",
+      "Real-time preview"
+    ]
+  },
+  {
+    "tipo": "Review Platform",
+    "keywords": [
+      "review",
+      "rating",
+      "yelp",
+      "trustpilot",
+      "testimonial",
+      "customer-review",
+      "star-rating",
+      "verified-purchase",
+      "pros-cons"
+    ],
+    "patron": "Flat Design + Vibrant & Block-based",
+    "paleta_ejemplo": [
+      "#D4AF37",
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Star rating summary with distribution",
+      "Verified purchase badge",
+      "Photo/video reviews"
+    ]
+  },
+  {
+    "tipo": "RPA / Automation Dashboard",
+    "keywords": [
+      "rpa",
+      "robotic-process-automation",
+      "uipath",
+      "automation-anywhere",
+      "bot-orchestrator",
+      "process-discovery",
+      "attended-bot",
+      "unattended-bot"
+    ],
+    "patron": "Dark Mode (OLED) + Data-Dense",
+    "paleta_ejemplo": [
+      "#F59E0B",
+      "#E53E3E",
+      "#1A1A2E"
+    ],
+    "anti_patrones": [
+      "Bot status grid (running/idle/failed)",
+      "Queue depth",
+      "Process flow visualization"
+    ]
+  },
+  {
+    "tipo": "Survey / Form Builder",
+    "keywords": [
+      "survey",
+      "form-builder",
+      "questionnaire",
+      "typeform",
+      "survey-monkey",
+      "poll",
+      "feedback-form",
+      "multi-step-form",
+      "nps-survey",
+      "logic-jump"
+    ],
+    "patron": "Minimalism + Micro-interactions",
+    "paleta_ejemplo": [
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Drag-drop form builder",
+      "Question type library",
+      "Conditional logic visualizer"
+    ]
+  },
+  {
+    "tipo": "Telemedicine Platform",
+    "keywords": [
+      "telemedicine",
+      "telehealth",
+      "virtual-visit",
+      "remote-consultation",
+      "video-doctor",
+      "remote-patient-monitoring",
+      "telehealth-app"
+    ],
+    "patron": "Neumorphism + Accessible & Ethical",
+    "paleta_ejemplo": [
+      "#0077B6",
+      "#F59E0B",
+      "#FFFFFF"
+    ],
+    "anti_patrones": [
+      "Video call UI with screen share",
+      "Appointment queue",
+      "Symptom intake form"
+    ]
+  },
+  {
+    "tipo": "Testimonial & Social Proof Widget",
+    "keywords": [
+      "testimonial",
+      "social-proof",
+      "wall-of-love",
+      "customer-quote",
+      "case-study",
+      "review-widget",
+      "trust-signal",
+      "user-story"
+    ],
+    "patron": "Vibrant & Block-based + Flat Design",
+    "paleta_ejemplo": [
+      "#D4AF37"
+    ],
+    "anti_patrones": [
+      "Testimonial cards with photo",
+      "Star ratings",
+      "Video testimonials"
+    ]
+  },
+  {
+    "tipo": "Ticketing / Box Office",
+    "keywords": [
+      "ticketing",
+      "box-office",
+      "eventbrite",
+      "ticket-sales",
+      "seat-selection",
+      "will-call",
+      "qr-ticket",
+      "venue-capacity",
+      "will-call-pickup"
+    ],
+    "patron": "Vibrant & Block-based + Motion-Driven",
+    "paleta_ejemplo": [
+      "#E53E3E"
+    ],
+    "anti_patrones": [
+      "Event cards with date/venue",
+      "Interactive seat map",
+      "Cart with countdown"
+    ]
+  }
+]

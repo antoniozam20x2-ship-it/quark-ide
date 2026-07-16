@@ -1,8 +1,34 @@
 import { Router } from 'express'
 import { callAI } from '../lib/aiRouter.js'
 import pool from '../services/db.js'
+import { readFileSync } from 'fs'
 
 const router = Router()
+
+// ── Design rules (from ui-ux-pro-max-skill CSVs) ─────────────────────────────
+
+interface DesignRule {
+  tipo: string
+  keywords: string[]
+  patron: string
+  paleta_ejemplo: string[]
+  anti_patrones: string[]
+}
+
+const designRules: DesignRule[] = JSON.parse(
+  readFileSync(new URL('../lib/designRules.json', import.meta.url), 'utf-8')
+)
+
+function matchDesignRule(brief: string): DesignRule | null {
+  const lowerBrief = brief.toLowerCase()
+  let bestMatch: DesignRule | null = null
+  let bestScore = 0
+  for (const rule of designRules) {
+    const score = rule.keywords.filter(kw => lowerBrief.includes(kw)).length
+    if (score > bestScore) { bestScore = score; bestMatch = rule }
+  }
+  return bestScore >= 1 ? bestMatch : null
+}
 
 // ── HTML sanitizer ────────────────────────────────────────────────────────────
 
@@ -198,15 +224,25 @@ ESTRUCTURA DEL HERO CON VIDEO:
 </section>`,
 
   qa: `Eres un crítico de diseño senior. Recibes el BRIEF, la DIRECCIÓN CREATIVA y el HTML
-generado por el Designer. Evalúa con honestidad:
-1. ¿Sigue exactamente la paleta y tipografía indicadas?
+generado por el Designer. Evalúa con honestidad siguiendo este checklist:
+
+CHECKLIST TÉCNICO (extraído de ux-guidelines reales — cualquier falla = REVISAR obligatorio):
+☐ Contraste mínimo 4.5:1 para texto normal sobre fondo (WCAG AA)
+☐ Transiciones hover/focus en 150-300ms — ni más lentas ni más rápidas
+☐ prefers-reduced-motion respetado: animaciones decorativas solo cuando la media query lo permita
+☐ Sin emojis como íconos funcionales — usar SVG con aria-label o texto
+☐ cursor-pointer en TODOS los elementos interactivos (botones, links, cards clicables)
+☐ Layout responsive verificado para 375px / 768px / 1024px / 1440px
+
+CHECKLIST DE DISEÑO (evalúa calidad):
+1. ¿Sigue exactamente la paleta y tipografía de la DIRECCIÓN CREATIVA?
 2. ¿Tiene jerarquía visual real o se ve genérico/plantilla/todo centrado?
 3. ¿El contenido es específico al brief o es relleno genérico?
-4. ¿Hay algún bug visible (HTML roto, bloques de markdown sin limpiar, texto sin estilo)?
+4. ¿Hay bugs visibles (HTML roto, bloques de markdown sin limpiar, texto sin estilo)?
 
-Si todo está bien, responde EXACTAMENTE: APROBADO
-Si algo falla, responde con máximo 4 líneas de instrucciones de revisión específicas
-y accionables, empezando con: REVISAR:`,
+Si TODO el checklist pasa y el diseño es sólido, responde EXACTAMENTE: APROBADO
+Si algo falla, responde con máximo 4 líneas de instrucciones específicas y accionables,
+empezando con: REVISAR:`,
 
   engineer: `Eres un engineer senior especialista en React y TypeScript. Recibes el BRIEF, la
 DIRECCIÓN CREATIVA, y el HTML aprobado del Designer — es la referencia visual exacta
@@ -306,7 +342,11 @@ router.post('/analyze', async (req, res) => {
       userPrompt = `BRIEF: ${brief}\n\nDIRECCIÓN CREATIVA:\n${engineerArchitectContext}\n\nHTML APROBADO DEL DESIGNER:\n${designerResult ?? ''}`
       task = 'analyze'
     } else {
-      userPrompt = `BRIEF: ${brief}`
+      const matchedRule = matchDesignRule(brief)
+      const refBlock = matchedRule
+        ? `\n\nREFERENCIA DE DISEÑO (tipo de proyecto detectado: ${matchedRule.tipo}):\n- Patrón recomendado: ${matchedRule.patron}\n- Paleta de referencia: ${matchedRule.paleta_ejemplo.join(', ')}\n- Anti-patrones a evitar: ${matchedRule.anti_patrones.join('; ')}`
+        : ''
+      userPrompt = `BRIEF: ${brief}${refBlock}`
       task = 'analyze'
     }
 
