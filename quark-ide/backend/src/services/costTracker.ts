@@ -17,6 +17,8 @@ export interface APICall {
   tokensOut: number;
   costUSD: number;
   endpoint: string;
+  task?: string;
+  stopReason?: string;
 }
 
 interface CostStore {
@@ -48,16 +50,19 @@ function persistStore(store: CostStore): void {
 export function recordCall(
   endpoint: string,
   tokensIn: number,
-  tokensOut: number
+  tokensOut: number,
+  extras?: { task?: string; stopReason?: string; model?: string },
 ): void {
   const costUSD = tokensIn * INPUT_COST_PER_TOKEN + tokensOut * OUTPUT_COST_PER_TOKEN;
   const call: APICall = {
     timestamp: new Date().toISOString(),
-    model: MODEL,
+    model: extras?.model ?? MODEL,
     tokensIn,
     tokensOut,
     costUSD,
     endpoint,
+    task:       extras?.task,
+    stopReason: extras?.stopReason,
   };
   sessionCalls.push(call);
 
