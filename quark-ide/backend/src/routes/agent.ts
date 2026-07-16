@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getFileTree, getFileContent, searchCodeInRepo, createOrUpdateFile } from '../services/github.js';
+import { getFileTree, getFileContent, getFileContentConditional, searchCodeInRepo, createOrUpdateFile } from '../services/github.js';
 import { callAI } from '../lib/aiRouter.js';
 import { generateContent } from '../services/gemini.js';
 import pool from '../services/db.js';
@@ -2467,6 +2467,8 @@ interface SessionFileCacheEntry {
   contentHash: string;
   fullContent: string;
   lastReadAt: number;
+  /** ETag returned by GitHub for this content version, used for conditional GETs. */
+  etag: string | null;
 }
 
 const SESSION_FILE_CACHE = new Map<string, { files: Map<string, SessionFileCacheEntry>; ts: number }>();
@@ -2596,59 +2598,97 @@ const SKELETON_EXT           = /\.(ts|tsx|js|jsx|py)$/;
 
 type SmartReadDecision = 'full' | 'cached' | 'diff' | 'skeleton';
 
+/** Fire-and-forget PostgreSQL insert for measuring token and quota savings. */
+function logSmartRead(opts: {
+  sessionId: string;
+  repo: string;
+  path: string;
+  decision: SmartReadDecision;
+  httpStatus: 200 | 304;
+  tokensBefore: number;
+  tokensAfter: number;
+}): void {
+  pool.query(
+    `INSERT INTO smart_read_log
+       (session_id, repo, path, decision, http_status, tokens_before, tokens_after)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [opts.sessionId, opts.repo, opts.path, opts.decision,
+     opts.httpStatus, opts.tokensBefore, opts.tokensAfter],
+  ).catch(err =>
+    console.warn('[smartReadFile] log insert failed:', err instanceof Error ? err.message : err),
+  );
+}
+
 async function smartReadFile(
   filePath: string,
   repo: string,
   sessionId: string,
   send: (event: string, data: Record<string, unknown>) => void,
 ): Promise<{ result: string; decision: SmartReadDecision }> {
-  // Security exclusion — always full read, never cached
+  // ── Security exclusion — always full read, no ETag, no cache ───────────────
   if (isNoCacheFile(filePath, repo)) {
     send('action', { text: `📖 Leyendo ${filePath}` });
-    const content = await getFileContent(filePath, repo);
+    // No If-None-Match → always 200, result never null
+    const fetched = await getFileContentConditional(filePath, repo);
+    const content = fetched!.content;
     const est = Math.ceil(content.length / 4);
-    console.log(`[smartReadFile] decision=full(security) repo=${repo} path=${filePath} tokens≈${est}`);
+    logSmartRead({ sessionId, repo, path: filePath, decision: 'full', httpStatus: 200, tokensBefore: est, tokensAfter: est });
     return { result: content, decision: 'full' };
   }
 
-  const currentContent = await getFileContent(filePath, repo);
-  const currentHash = contentSha256(currentContent);
   const sessionFiles = getSessionFiles(sessionId);
   const cacheKey = `${filePath}@${repo}`;
   const cached = sessionFiles.get(cacheKey);
 
+  // ── Conditional GET — sends If-None-Match when we have a stored ETag ───────
+  const fetched = await getFileContentConditional(filePath, repo, undefined, cached?.etag ?? undefined);
+
+  // ── 304 Not Modified — GitHub confirmed the content hasn't changed ─────────
+  if (fetched === null) {
+    // cached is guaranteed to exist: we only send If-None-Match when cached != null
+    send('action', { text: `📖 Leyendo ${filePath} (sin cambios)` });
+    const est = Math.ceil(cached!.fullContent.length / 4);
+    logSmartRead({ sessionId, repo, path: filePath, decision: 'cached', httpStatus: 304, tokensBefore: est, tokensAfter: est });
+    return { result: cached!.fullContent, decision: 'cached' };
+  }
+
+  // ── 200 — new content received ─────────────────────────────────────────────
+  const { content: currentContent, etag: currentEtag } = fetched;
+  const currentHash = contentSha256(currentContent);
+
   // First read in this session
   if (!cached) {
-    sessionFiles.set(cacheKey, { contentHash: currentHash, fullContent: currentContent, lastReadAt: Date.now() });
+    sessionFiles.set(cacheKey, { contentHash: currentHash, fullContent: currentContent, lastReadAt: Date.now(), etag: currentEtag });
     send('action', { text: `📖 Leyendo ${filePath}` });
     const est = Math.ceil(currentContent.length / 4);
-    console.log(`[smartReadFile] decision=full(first) repo=${repo} path=${filePath} tokens≈${est}`);
+    logSmartRead({ sessionId, repo, path: filePath, decision: 'full', httpStatus: 200, tokensBefore: est, tokensAfter: est });
     return { result: currentContent, decision: 'full' };
   }
 
-  // Hash unchanged — serve from cache, no repo fetch needed next time
+  // Hash fallback: server returned 200 but hash is the same (ETag absent or not honoured)
   if (cached.contentHash === currentHash) {
+    sessionFiles.set(cacheKey, { ...cached, etag: currentEtag ?? cached.etag, lastReadAt: Date.now() });
     send('action', { text: `📖 Leyendo ${filePath} (sin cambios)` });
     const est = Math.ceil(cached.fullContent.length / 4);
-    console.log(`[smartReadFile] decision=cached repo=${repo} path=${filePath} tokens≈${est}`);
+    logSmartRead({ sessionId, repo, path: filePath, decision: 'cached', httpStatus: 200, tokensBefore: est, tokensAfter: est });
     return { result: cached.fullContent, decision: 'cached' };
   }
 
-  // Hash changed — compute unified diff
+  // Content changed — decide diff / skeleton / full
   const diffText = createPatch(filePath, cached.fullContent, currentContent, '', '');
   const diffLines = diffText.split('\n').length;
   const isSmallDiff = diffText.length < SMART_DIFF_CHAR_LIMIT && diffLines < SMART_DIFF_LINE_LIMIT;
   const isLarge = currentContent.length > SMART_LARGE_BYTES
     || currentContent.split('\n').length > SMART_LARGE_LINES;
 
-  // Always update cache with latest content
-  sessionFiles.set(cacheKey, { contentHash: currentHash, fullContent: currentContent, lastReadAt: Date.now() });
+  // Update cache regardless of which branch we take below
+  sessionFiles.set(cacheKey, { contentHash: currentHash, fullContent: currentContent, lastReadAt: Date.now(), etag: currentEtag });
 
   const estFull = Math.ceil(currentContent.length / 4);
 
   if (isSmallDiff) {
     const estDiff = Math.ceil(diffText.length / 4);
-    console.log(`[smartReadFile] decision=diff repo=${repo} path=${filePath} tokensBefore≈${estFull} tokensAfter≈${estDiff}`);
+    logSmartRead({ sessionId, repo, path: filePath, decision: 'diff', httpStatus: 200, tokensBefore: estFull, tokensAfter: estDiff });
     send('action', { text: `📖 Leyendo ${filePath} (diff desde última lectura)` });
     return { result: `[Archivo modificado desde tu última lectura. Diff:]\n${diffText}`, decision: 'diff' };
   }
@@ -2656,7 +2696,7 @@ async function smartReadFile(
   if (isLarge && SKELETON_EXT.test(filePath)) {
     const skeleton = generateStructuralSkeleton(currentContent, filePath);
     const estSkeleton = Math.ceil(skeleton.length / 4);
-    console.log(`[smartReadFile] decision=skeleton repo=${repo} path=${filePath} tokensBefore≈${estFull} tokensAfter≈${estSkeleton}`);
+    logSmartRead({ sessionId, repo, path: filePath, decision: 'skeleton', httpStatus: 200, tokensBefore: estFull, tokensAfter: estSkeleton });
     send('action', { text: `📖 Leyendo ${filePath} (esqueleto estructural — archivo grande modificado)` });
     return {
       result: `[Archivo grande modificado. Esqueleto estructural — pedí lectura completa si necesitás implementación]\n${skeleton}`,
@@ -2665,7 +2705,7 @@ async function smartReadFile(
   }
 
   // Fallback: full content
-  console.log(`[smartReadFile] decision=full(fallback) repo=${repo} path=${filePath} tokens≈${estFull}`);
+  logSmartRead({ sessionId, repo, path: filePath, decision: 'full', httpStatus: 200, tokensBefore: estFull, tokensAfter: estFull });
   send('action', { text: `📖 Leyendo ${filePath}` });
   return { result: currentContent, decision: 'full' };
 }

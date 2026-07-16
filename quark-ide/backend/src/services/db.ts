@@ -76,6 +76,21 @@ export async function initDb(): Promise<void> {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS smart_read_log (
+      id            BIGSERIAL PRIMARY KEY,
+      session_id    TEXT        NOT NULL,
+      repo          TEXT        NOT NULL,
+      path          TEXT        NOT NULL,
+      decision      TEXT        NOT NULL,     -- full | cached | diff | skeleton
+      http_status   SMALLINT    NOT NULL,     -- 200 (new content) or 304 (not modified)
+      tokens_before INT         NOT NULL,
+      tokens_after  INT         NOT NULL,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_smart_read_log_session ON smart_read_log(session_id);
+    CREATE INDEX IF NOT EXISTS idx_smart_read_log_repo    ON smart_read_log(repo, created_at);
+
     CREATE INDEX IF NOT EXISTS idx_audit_history_repo ON audit_history(repo_name);
     CREATE INDEX IF NOT EXISTS idx_audit_history_review_date ON audit_history(review_date);
     CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);

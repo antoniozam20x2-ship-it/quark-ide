@@ -52,6 +52,58 @@ export async function getFileContent(path: string, repo?: string, branch?: strin
   return Buffer.from(data.content, 'base64').toString('utf-8');
 }
 
+export interface FileContentResult {
+  content: string;
+  /** ETag returned by GitHub (quoted string, e.g. `"abc123"`), or null if absent. */
+  etag: string | null;
+}
+
+/**
+ * Fetches file content from GitHub with optional ETag-based conditional GET.
+ *
+ * - If `ifNoneMatch` is provided and GitHub responds 304 Not Modified,
+ *   returns `null` (caller should use its cached copy).
+ * - Otherwise returns `{ content, etag }` for a 200 response.
+ */
+export async function getFileContentConditional(
+  path: string,
+  repo?: string,
+  branch?: string,
+  ifNoneMatch?: string,
+): Promise<FileContentResult | null> {
+  const r = requireRepo(repo);
+  const b = branch ?? DEFAULT_BRANCH;
+
+  const reqHeaders: Record<string, string> = {};
+  if (ifNoneMatch) reqHeaders['If-None-Match'] = ifNoneMatch;
+
+  try {
+    const response = await octokit.repos.getContent({
+      owner: OWNER, repo: r, path, ref: b,
+      headers: reqHeaders,
+    });
+
+    const data = response.data;
+    if (Array.isArray(data) || data.type !== 'file') {
+      throw new Error(`${path} is not a file`);
+    }
+
+    const content = Buffer.from(data.content, 'base64').toString('utf-8');
+    const headers = response.headers as Record<string, string | undefined>;
+    const etag = headers['etag'] ?? null;
+    return { content, etag };
+  } catch (err: unknown) {
+    // octokit throws RequestError with status 304 on Not Modified
+    if (
+      typeof err === 'object' && err !== null &&
+      'status' in err && (err as { status: number }).status === 304
+    ) {
+      return null;
+    }
+    throw err;
+  }
+}
+
 export async function searchCodeInRepo(
   query: string,
   repo?: string,
