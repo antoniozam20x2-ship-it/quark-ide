@@ -1,0 +1,84 @@
+Prompt listo para pegar en Replit Agent
+========================================
+
+Necesito 4 cambios en el backend (aiRouter.ts / costTracker.ts / studio.ts),
+cada uno independiente, sin tocar lógica que no corresponda:
+
+0) Migrar el Designer y el Editor de claude-sonnet-4-5 a claude-sonnet-5
+
+- Ubicar todas las referencias al model ID "claude-sonnet-4-5" en aiRouter.ts
+  (usadas por el Designer, task: 'html', y por el Editor, POST /api/studio/edit)
+  y reemplazarlas por "claude-sonnet-5"
+- Sonnet 5 soporta hasta 128K tokens de output (vs. 8192 de Sonnet 4.5) —
+  esto es la causa raíz real del truncamiento visto en producción con briefs
+  complejos, más que un problema de configuración de max_tokens
+- Actualizar el max_tokens configurado para la task 'html' a un valor generoso
+  pero acotado (ej. 16000-24000), NO al máximo absoluto de 128K por defecto
+  — evitar costos innecesarios en sitios simples
+- Importante: Sonnet 5 usa un tokenizer nuevo — el mismo texto genera ~30% más
+  tokens que en Sonnet 4.5. Si costTracker.ts tiene algún cálculo de costo o
+  umbral basado en conteos de tokens históricos de Sonnet 4.5, señalarlo en
+  un comentario para recalibrar después (no recalcular automáticamente en
+  esta tarea, solo dejar la nota)
+- No tocar los modelos usados por Architect/Critic/Engineer (siguen en
+  gemini-3.1-flash-lite), esta migración es solo para Designer y Editor
+
+1) URGENTE — Reemplazar Llama 3.3 70B free (OpenRouter) antes del 19-jul-2026
+
+Ese modelo se retira del tier gratuito de OpenRouter el 19 de julio de 2026
+(en 3 días). Es uno de los fallbacks configurados en aiRouter.ts. Necesito:
+
+- Ubicar dónde está referenciado "llama-3.3-70b-versatile" o el string
+  equivalente de OpenRouter en aiRouter.ts
+- Reemplazarlo por un modelo free equivalente que siga activo (verificar en
+  el momento de implementar cuál está disponible en OpenRouter free tier —
+  candidatos a confirmar: qwen-2.5-72b-instruct:free o
+  llama-3.1-70b-instruct:free si sigue vigente)
+- No tocar el orden de fallback ni ningún otro proveedor en esta misma tarea
+
+2) Corregir límites de max_tokens mal configurados por proveedor
+
+Límites actuales vs. reales investigados:
+
+| Proveedor                          | Configurado | Real   |
+|-------------------------------------|-------------|--------|
+| Claude sonnet-5 (post-migración 0)  | 16000-24000 | 128000 (dejar margen, no usar el máximo por defecto) |
+| gpt-4o (GitHub Models)              | 4096        | 16384  |
+| Gemma 3 27B free (OpenRouter)       | 4096        | 8192   |
+| Mistral Small 3.2 24B free          | 4096        | 8192   |
+
+Actualizar estos 3 valores (gpt-4o, Gemma, Mistral) a sus límites reales.
+El valor de Sonnet ya se ajusta en el punto 0 de este mismo prompt.
+
+3) Detección de truncamiento + continuación automática en el Designer (respaldo)
+
+Con la migración a Sonnet 5 (punto 0) el truncamiento debería ser mucho menos
+frecuente, pero igual conviene esta red de seguridad para briefs extremos.
+Problema real detectado en producción antes de la migración: con briefs de
+arquitectura ambiciosa (3+ componentes, ej. galería dinámica + menú filtrable
++ formulario de reserva + video hero), el Designer truncó el HTML a mitad de
+una etiqueta, y el Critic lo detectó como "HTML incompleto" en su REVISAR.
+
+Implementar en la función que llama al Designer (task: 'html' en aiRouter.ts):
+
+- Después de recibir la respuesta, verificar si el HTML termina correctamente
+  en `</html>` (trim y chequeo de sufijo)
+- Si NO termina en `</html>` (truncamiento detectado):
+  a. Hacer una segunda llamada al mismo modelo con un prompt de continuación:
+     "Continúa exactamente desde donde terminó este HTML incompleto, sin
+     repetir nada ya escrito, sin agregar comentarios ni explicaciones,
+     hasta cerrar correctamente el documento con </html>:\n\n[HTML_PARCIAL]"
+  b. Concatenar HTML_PARCIAL + la continuación
+  c. Repetir el chequeo de sufijo hasta un máximo de 2 continuaciones (evitar
+     loop infinito si el modelo nunca cierra el documento)
+  d. Loguear cada evento de truncamiento detectado (`console.warn`) para
+     poder medir con qué frecuencia pasa esto en producción
+- Si el HTML sí termina en `</html>` en el primer intento, no cambia nada
+  del flujo actual
+
+No modificar la lógica de REVISAR/APROBADO del Critic en esta tarea — eso
+queda para una tarea separada (agregar una segunda pasada del Critic después
+de la revisión automática del Designer).
+
+Después de aplicar los 4 cambios (0, 1, 2, 3), correr build local y confirmar
+que compila sin errores antes de hacer commit.

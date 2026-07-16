@@ -134,6 +134,42 @@ async function withContinuation(
   return accumulated;
 }
 
+/**
+ * After token-based continuation, checks whether the HTML document closed
+ * correctly with </html>. If not, fires up to 2 targeted completion calls.
+ * Runs only for 'html'/'designer' tasks.
+ */
+async function withHtmlCompletion(
+  html: string,
+  task: string,
+  providerFactory: (p: string, s: string) => Array<{ name: string; fn: () => Promise<ProviderResult> }>,
+): Promise<string> {
+  let accumulated = html;
+  let attempts = 0;
+
+  while (!accumulated.trimEnd().toLowerCase().endsWith('</html>') && attempts < 2) {
+    attempts++;
+    console.warn(
+      `[AI Router] ⚠️  HTML-completeness check failed (attempt ${attempts}/2) — ` +
+      `does not end with </html>, chars=${accumulated.length}, task=${task}`,
+    );
+    const contPrompt =
+      `Continúa exactamente desde donde terminó este HTML incompleto, sin ` +
+      `repetir nada ya escrito, sin agregar comentarios ni explicaciones, ` +
+      `hasta cerrar correctamente el documento con </html>:\n\n` +
+      accumulated;
+    try {
+      const cont = await tryProviders(`${task}:htmlfix${attempts}`, providerFactory(contPrompt, CONTINUATION_SYSTEM));
+      accumulated += cont.text;
+    } catch (err) {
+      console.error('[AI Router] HTML-completion call failed, returning partial output:', err);
+      break;
+    }
+  }
+
+  return accumulated;
+}
+
 // ── callAI ────────────────────────────────────────────────────────────────────
 
 export async function callAI(
@@ -148,8 +184,8 @@ export async function callAI(
     // ── Edición quirúrgica: Claude → GPT-4o ──────────────────────────────────
     case 'edit': {
       const editProviders = (p: string, s: string) => [
-        { name: 'anthropic/claude-sonnet-4-5', fn: () => callAnthropic(p, s) },
-        { name: 'github/gpt-4o',              fn: () => callGitHubModels(p, s, 'gpt-4o') },
+        { name: 'anthropic/claude-sonnet-5', fn: () => callAnthropic(p, s, 8192) },
+        { name: 'github/gpt-4o',             fn: () => callGitHubModels(p, s, 'gpt-4o') },
       ];
       const result = await tryProviders(task, editProviders(prompt, sys));
       return withContinuation(result, task, (cp) => editProviders(cp, CONTINUATION_SYSTEM));
@@ -159,15 +195,16 @@ export async function callAI(
     case 'html':
     case 'designer': {
       const htmlProviders = (p: string, s: string) => [
-        { name: 'anthropic/claude-sonnet-4-5',  fn: () => callAnthropic(p, s) },
+        { name: 'anthropic/claude-sonnet-5',    fn: () => callAnthropic(p, s, 20000) },
         { name: 'github/gpt-4o',                fn: () => callGitHubModels(p, s, 'gpt-4o') },
         { name: 'openrouter/gemma-3-27b',        fn: () => callOpenRouter(p, s, 'google/gemma-3-27b-it:free') },
-        // ⚠️  meta-llama/llama-3.3-70b-instruct:free retires 2026-07-19 — replace if unavailable
-        { name: 'openrouter/llama-3.3-70b',     fn: () => callOpenRouter(p, s, 'meta-llama/llama-3.3-70b-instruct:free') },
+        // Replaced llama-3.3-70b-instruct:free (retired 2026-07-19) with qwen-2.5-72b-instruct:free
+        { name: 'openrouter/qwen-2.5-72b',      fn: () => callOpenRouter(p, s, 'qwen/qwen-2.5-72b-instruct:free') },
         { name: 'openrouter/mistral-small-3.2', fn: () => callOpenRouter(p, s, 'mistralai/mistral-small-3.2-24b-instruct:free') },
       ];
       const result = await tryProviders(task, htmlProviders(prompt, sys));
-      return withContinuation(result, task, (cp) => htmlProviders(cp, CONTINUATION_SYSTEM));
+      const accumulated = await withContinuation(result, task, (cp) => htmlProviders(cp, CONTINUATION_SYSTEM));
+      return withHtmlCompletion(accumulated, task, htmlProviders);
     }
 
     // ── Fix de código: Gemini → Groq → DeepSeek ──────────────────────────────
@@ -219,9 +256,16 @@ export async function callAI(
 
 // ── Provider implementations ──────────────────────────────────────────────────
 
-async function callAnthropic(prompt: string, system: string): Promise<ProviderResult> {
+// ⚠️ TOKENIZER NOTE (costTracker calibration pending): claude-sonnet-5 uses a new
+// tokenizer that generates ~30% more tokens than sonnet-4-5 for the same text.
+// costTracker.ts uses INPUT_COST_PER_TOKEN / OUTPUT_COST_PER_TOKEN constants that
+// were set for gemini-3.1-flash-lite pricing. After observing real sonnet-5 usage
+// data in production, recalibrate those constants with Anthropic's published rates.
+async function callAnthropic(prompt: string, system: string, maxTokens = 20000): Promise<ProviderResult> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('ANTHROPIC_API_KEY not set');
+  // claude-sonnet-5 supports up to 128K output tokens; maxTokens is set per call site
+  // (20000 for Designer/html, 8192 for Editor) to avoid unnecessary cost on simple briefs.
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -230,8 +274,8 @@ async function callAnthropic(prompt: string, system: string): Promise<ProviderRe
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 8192,           // Claude sonnet-4-5 hard ceiling
+      model: 'claude-sonnet-5',
+      max_tokens: maxTokens,
       system,
       messages: [{ role: 'user', content: prompt }],
     }),
@@ -244,7 +288,7 @@ async function callAnthropic(prompt: string, system: string): Promise<ProviderRe
     tokensOut:  data.usage?.output_tokens ?? 0,
     stopReason: data.stop_reason ?? 'unknown',
     provider:   'anthropic',
-    model:      data.model ?? 'claude-sonnet-4-5',
+    model:      data.model ?? 'claude-sonnet-5',
   };
 }
 
