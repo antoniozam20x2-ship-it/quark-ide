@@ -2818,15 +2818,53 @@ async function executeChatTool(
 
 // ── runChatTurn ───────────────────────────────────────────────────────────────
 
+// System prompt for Haiku exploration tier — smart domain-aware search strategy
+const HAIKU_SEARCH_SYSTEM = `Eres un asistente de exploración de código. Tu objetivo es encontrar el código \
+relevante para responder la pregunta del usuario de forma eficiente.
+
+PROCESO DE BÚSQUEDA — seguí exactamente este orden, sin saltarte pasos:
+
+1. MIRÁ LA ESTRUCTURA PRIMERO: usá list_files en las carpetas raíz relevantes antes de leer contenido. \
+Los nombres de carpeta/archivo te dicen dónde vivirá la lógica (ej: "lib/", "routes/", "services/" para \
+backend; "components/", "pages/" para UI; "utils/", "helpers/" para funciones compartidas).
+
+2. GENERÁ VARIANTES DE DOMINIO ANTES DE BUSCAR — a partir del término de la pregunta, generá 3-5 variantes \
+basadas en convenciones reales de código, NO en el término literal:
+   - camelCase (ej: "trailing stop" → trailingStop)
+   - CONSTANT_CASE (ej: TRAILING_STOP_ENABLED)
+   - snake_case (ej: trailing_stop)
+   - Jerga del dominio si aplica (en trading: callbackRatio, rangeRate, movingPlan; en auth: token, session, jwt; \
+en pagos: charge, invoice, webhook)
+   - Sinónimos funcionales cortos (ej: "stop dinámico", "SL móvil")
+
+3. PRIMERA PASADA — mandá TODAS las variantes en UN SOLO llamado a grep_code usando el separador "|": \
+pattern: "trailingStop|TRAILING_STOP|trailing_stop|callbackRatio". NO busques una, esperes el resultado, \
+y recién ahí pienses la siguiente. Todas las variantes van juntas en la primera llamada.
+
+4. SEGUNDA PASADA (solo si la primera no encontró nada): revisá los nombres de archivo reales que listaste \
+en el paso 1, generá nuevas variantes informadas por esos nombres reales, y hacé UNA segunda búsqueda con \
+las variantes más probables dado lo que existe en el repo.
+
+5. Si después de estas dos pasadas no encontraste nada, terminá tu respuesta con el texto EXACTO: \
+"BÚSQUEDA_SIN_RESULTADOS". No rellenes con conocimiento general que no venga del código real.
+
+Una vez que encontraste los archivos relevantes, leelos con read_file y respondé la pregunta citando \
+fragmentos exactos del código. No inferás lo que no leíste.`;
+
+// Tools available for Sonnet synthesis turn — no search tools, only read + patch
+const SONNET_SYNTHESIS_TOOLS = CHAT_TOOLS.filter(t => ['read_file', 'propose_patch'].includes(t.name));
+
 async function runHaikuTier(
   messages: any[],
   repo: string,
   send: (event: string, data: Record<string, unknown>) => void,
   sessionId: string,
-  maxSteps = 6,
-): Promise<{ resolved: boolean; messages: any[] }> {
-  send('action', { text: '⚡ Escalando a Haiku 4.5 — investigación ligera' });
+  maxSteps = 8,
+): Promise<{ resolved: boolean; messages: any[]; foundFiles: boolean }> {
+  send('action', { text: '⚡ Haiku 4.5 — exploración inteligente del codebase' });
   send('model_active', { model: 'Haiku 4.5', tier: 'balanced' });
+
+  let foundFiles = false;
 
   for (let step = 0; step < maxSteps; step++) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -2840,6 +2878,7 @@ async function runHaikuTier(
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 4096,
+        system: [{ type: 'text', text: HAIKU_SEARCH_SYSTEM, cache_control: { type: 'ephemeral' } }],
         tools: CHAT_TOOLS.map((t, i) =>
           i === CHAT_TOOLS.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t
         ),
@@ -2857,19 +2896,33 @@ async function runHaikuTier(
 
     const toolUses = data.content.filter((b: any) => b.type === 'tool_use');
     if (toolUses.length === 0) {
-      return { resolved: true, messages };
+      // Check if Haiku signalled no results via the sentinel text
+      const allText = textBlocks.map((b: any) => b.text as string).join('\n');
+      if (allText.includes('BÚSQUEDA_SIN_RESULTADOS')) {
+        return { resolved: false, messages, foundFiles: false };
+      }
+      return { resolved: true, messages, foundFiles };
     }
 
     const toolResults: any[] = [];
     for (const tool of toolUses) {
       const resultText = await executeChatTool(tool.name, tool.input, repo, send, sessionId);
       toolResults.push({ type: 'tool_result', tool_use_id: tool.id, content: resultText });
+      // Track whether any tool call returned real content (not an error or empty result)
+      if (
+        (tool.name === 'grep_code' || tool.name === 'read_file' || tool.name === 'list_files') &&
+        !resultText.startsWith('Sin resultados') &&
+        !resultText.startsWith('Error:') &&
+        resultText.trim().length > 50
+      ) {
+        foundFiles = true;
+      }
     }
     messages.push({ role: 'user', content: toolResults });
   }
 
-  send('action', { text: '🧠 Haiku no resolvió en el límite — escalando a Sonnet 5' });
-  return { resolved: false, messages };
+  send('action', { text: '🧠 Haiku alcanzó el límite de pasos de exploración' });
+  return { resolved: false, messages, foundFiles };
 }
 
 async function runChatTurn(
@@ -2961,40 +3014,70 @@ async function runChatTurn(
       return;
     }
 
-    const reason = groqAnswer.replace('NEEDS_TOOLS:', '').trim();
-    const effort = classifyEffort(userMessage);
+    const groqReason = groqAnswer.replace('NEEDS_TOOLS:', '').trim();
+    send('action', { text: `🧠 Groq necesita explorar el codebase (${groqReason}) — Haiku 4.5 investigando` });
+    // All NEEDS_TOOLS cases — both medium and high effort — go through the Haiku
+    // exploration phase below. Haiku does the search; Sonnet only synthesises.
+  }
 
-    if (effort === 'medium') {
-      send('action', { text: `🧠 Groq necesita más contexto (${reason})` });
-      const haikuResult = await runHaikuTier(messages, repo, send, sessionId);
-      if (haikuResult.resolved) {
-        await saveChatHistory(sessionId, haikuResult.messages);
-        return;
-      }
-    } else {
-      send('action', { text: `🧠 Groq necesita más contexto — escalando directo a Sonnet 5 (tarea de ${effort} effort)` });
+  // ── Haiku exploration phase (ALL paths that need code inspection) ─────────────
+  // Both simple-NEEDS_TOOLS and complex queries come here. Haiku explores with the
+  // smart domain-aware search strategy. Sonnet only enters afterward, for synthesis.
+  {
+    const haikuResult = await runHaikuTier(messages, repo, send, sessionId);
+    if (haikuResult.resolved) {
+      await saveChatHistory(sessionId, haikuResult.messages);
+      return;
+    }
+    if (!haikuResult.foundFiles) {
+      // Two full search passes found nothing — don't escalate to Sonnet;
+      // ask the user for more precise context instead.
+      const noResultMsg =
+        'No encontré referencias a esto en el codebase después de buscar con variantes de nombres ' +
+        '(camelCase, snake_case, CONSTANT_CASE y jerga del dominio).\n\n' +
+        'Para que pueda ayudarte mejor, indicame:\n' +
+        '- El nombre exacto del archivo o carpeta donde lo esperás encontrar, o\n' +
+        '- El nombre de la función o variable tal como aparece en el código.';
+      send('chat_message', { text: noResultMsg });
+      haikuResult.messages.push({ role: 'assistant', content: [{ type: 'text', text: noResultMsg }] });
+      await saveChatHistory(sessionId, haikuResult.messages);
+      return;
     }
 
+    // Haiku found relevant files but didn't produce a final answer — hand off
+    // to Sonnet with a synthesis-only instruction.  Sonnet gets NO search tools
+    // (grep_code / list_files are excluded) so it cannot loop into exploration.
     messages.push({
       role: 'user',
-      content: `[Contexto: Groq/Haiku intentaron responder esto primero. Razón: ${reason}]`,
+      content: '[Haiku 4.5 ya exploró el codebase y cargó los archivos relevantes (ver mensajes anteriores). ' +
+        'Tu tarea es ÚNICAMENTE sintetizar la respuesta final citando fragmentos exactos del código ya presente en la conversación. ' +
+        'NO uses grep_code ni list_files — el contexto ya está cargado. ' +
+        'Si necesitás una sección específica de un archivo ya identificado, usá read_file con start_line/end_line. ' +
+        'Respondé en un solo turno.]',
     });
   }
 
-  // ── Complex path (or escalated from simple): Claude + adaptive thinking + CHAT_TOOLS ─
+  // ── Sonnet synthesis phase ────────────────────────────────────────────────────
+  // Sonnet enters ONCE, with no search tools, to produce the final answer.
+  // grep_code and list_files are excluded from SONNET_SYNTHESIS_TOOLS.
 
   const systemPrompt = `Eres QUARK, un asistente de código que conversa con el usuario igual que un ingeniero senior — no un generador de una sola pasada.
 
 REGLAS:
 - Antes de dar un problema por resuelto, pregúntate: ¿esto arregla la CAUSA raíz, o solo un síntoma relacionado? Si el problema depende de un flujo de control (loops, funciones que se llaman entre sí, condiciones de reinicio), sigue la cadena hasta el final antes de proponer un fix.
-- Usa read_file y grep_code para explorar antes de asumir. No inventes contenido de archivos.
 - Cuando encuentres algo que amerite un cambio de código, usa propose_patch (no apply_patch directo) — el usuario decide si lo aplica.
 - Si el usuario solo está preguntando o pidiendo una explicación, responde en texto normal, sin usar tools de escritura.
 - Sé directo. No expliques de más si no te lo piden.
-- REGLA DE ANCLAJE POR AFIRMACIÓN: cada afirmación específica sobre el comportamiento del código (qué activa algo, qué condición dispara qué, cómo se relacionan dos variables) debe ir acompañada del fragmento de código exacto que la sustenta — no solo el nombre del archivo. Formato: la afirmación, seguida de la línea o condición literal entre backticks. Si no podés citar el fragmento exacto, no hagas la afirmación — es señal de que estás infiriendo en vez de leyendo. Si el código tiene dos funciones o ramas similares y opuestas (ej. "Bull"/"alcista" vs "Bear"/"bajista", o un "if" y su "else"), tratalas por separado — no mezcles las condiciones de ambas en un mismo párrafo. Indicá explícitamente qué condición pertenece a cuál.`;
+- REGLA DE ANCLAJE POR AFIRMACIÓN: cada afirmación específica sobre el comportamiento del código (qué activa algo, qué condición dispara qué, cómo se relacionan dos variables) debe ir acompañada del fragmento de código exacto que la sustenta — no solo el nombre del archivo. Formato: la afirmación, seguida de la línea o condición literal entre backticks. Si no podés citar el fragmento exacto, no hagas la afirmación — es señal de que estás infiriendo en vez de leyendo. Si el código tiene dos funciones o ramas similares y opuestas (ej. "Bull"/"alcista" vs "Bear"/"bajista", o un "if" y su "else"), tratalas por separado — no mezcles las condiciones de ambas en un mismo párrafo. Indicá explícitamente qué condición pertenece a cuál.
+
+RESTRICCIÓN DE ESTE TURNO: el codebase ya fue explorado por Haiku 4.5 — el contexto relevante está en el historial de la conversación. \
+NO uses grep_code ni list_files. Si necesitás ver una sección específica de un archivo ya identificado, podés usar read_file con start_line/end_line como máximo una vez. \
+Sintetizá la respuesta final en un solo turno.`;
 
   send('model_active', { model: 'Sonnet 5', tier: 'deep' });
-  for (let step = 0; step < maxToolSteps; step++) {
+  // maxSynthesisSteps: enough for at most 1 targeted read_file + final synthesis reply
+  const maxSynthesisSteps = 3;
+  for (let step = 0; step < maxSynthesisSteps; step++) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -3009,8 +3092,8 @@ REGLAS:
         thinking: { type: 'adaptive', display: 'summarized' },
         output_config: { effort: classifyEffort(userMessage) },
         system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
-        tools: CHAT_TOOLS.map((t, i) =>
-          i === CHAT_TOOLS.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t
+        tools: SONNET_SYNTHESIS_TOOLS.map((t, i) =>
+          i === SONNET_SYNTHESIS_TOOLS.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t
         ),
         messages,
       }),
@@ -3038,7 +3121,7 @@ REGLAS:
 
     const toolUses = data.content.filter((b: any) => b.type === 'tool_use');
     if (toolUses.length === 0) {
-      // Claude terminó sin más tool calls — guardar resumen de su respuesta
+      // Sonnet produced the final answer — save and share the summary
       const claudeText = textBlocks.map((b: any) => b.text).join('\n');
       if (claudeText.trim()) {
         const claudeSharedSummary = await summarizeForSharedContext(claudeText);
@@ -3057,7 +3140,6 @@ REGLAS:
     messages.push({ role: 'user', content: toolResults });
   }
 
-  send('action', { text: `⚠️ Se alcanzó el límite de ${maxToolSteps} turnos sin una respuesta final — el análisis puede estar incompleto` });
   await saveChatHistory(sessionId, messages);
 }
 

@@ -1,0 +1,95 @@
+Prompt/instrucciones para Replit Agent — búsqueda inteligente en CHAT mode
+============================================================================
+
+Objetivo: que CHAT mode encuentre código relevante en 1-2 intentos (como FAST
+mode ya lo hace), en vez de adivinar términos uno por uno en un loop de 20.
+Idealmente reusando la misma función de expansión de keywords que ya usa FAST
+mode, en vez de duplicar lógica nueva.
+
+---
+
+PASO 0 — Antes que nada: reusar, no reinventar
+
+- Ubicar la función que FAST mode usa para generar variantes de búsqueda
+  (la que produjo [trailingStop, trailing, stop móvil, Signal OS] a partir de
+  "trailing stop"). Si es una función separada y reusable, llamarla también
+  desde el flujo de CHAT como primer paso de búsqueda, antes de cualquier
+  grep manual del tool-calling loop.
+- Si esa función está atada específicamente al flujo de FAST y no es
+  fácilmente reusable, replicar su comportamiento (ver PASO 1) en el punto
+  donde CHAT arma su primera búsqueda dentro de executeChatTool.
+
+---
+
+PASO 1 — System prompt / instrucciones para el paso de búsqueda de CHAT
+(aplican al modelo que ejecuta el tool-calling exploratorio — Haiku 4.5/Groq,
+NUNCA Sonnet 5 en esta fase)
+
+Agregar esto al system prompt o a las instrucciones de la función de búsqueda:
+
+```
+Antes de buscar código, seguí este proceso — no busques términos literales
+al azar, uno por uno:
+
+1. MIRÁ LA ESTRUCTURA PRIMERO: listá carpetas y nombres de archivo antes de
+   leer contenido. Usá los nombres de carpeta/archivo como pista de dónde
+   vivirá la lógica relevante (ej: "lib/", "routes/" para backend de trading;
+   "components/" para UI).
+
+2. GENERÁ VARIANTES DE DOMINIO ANTES DE BUSCAR, no reacciones a cada fallo:
+   a partir del término de la pregunta, generá de 3 a 5 variantes probables
+   basadas en convenciones reales de código, no en el término literal:
+   - camelCase (ej: "trailing stop" → trailingStop)
+   - CONSTANT_CASE (ej: TRAILING_STOP_ENABLED)
+   - snake_case (ej: trailing_stop)
+   - jerga específica del dominio si aplica (ej: en trading:
+     callbackRatio, rangeRate, moving_plan; en auth: token, session, jwt;
+     en pagos: charge, invoice, webhook)
+   - sinónimos funcionales cortos (ej: "trailing stop" → "stop dinámico",
+     "SL móvil")
+
+3. BUSCÁ TODAS LAS VARIANTES EN PARALELO EN LA PRIMERA PASADA — no busques
+   una, esperes el resultado, y recién ahí pienses la siguiente. Mandá las
+   3-5 variantes de una sola vez.
+
+4. SOLO SI el lote completo de variantes no encuentra nada, hacé una segunda
+   pasada: revisá los nombres de archivo reales que sí existen en el repo
+   (de la estructura que ya miraste en el paso 1) y generá nuevas variantes
+   informadas por esos nombres reales — no seguir adivinando términos
+   genéricos sin mirar qué existe.
+
+5. Si después de estas dos pasadas no encontraste nada, decilo explícitamente
+   ("no encontré referencias a esto en el codebase revisado") — no rellenes
+   con conocimiento general que no venga del código real.
+```
+
+---
+
+PASO 2 — Regla de enrutamiento: Sonnet 5 solo para síntesis final
+
+Ubicar dónde CHAT decide escalar de Haiku 4.5 a Sonnet 5 (aiRouter.ts /
+runChatTurn) y agregar esta regla:
+
+- Sonnet 5 NUNCA debe recibir turnos donde su única función sea seguir
+  buscando (grep_code, read_file exploratorio). Esos turnos se quedan en
+  Haiku 4.5/Groq siguiendo el proceso del PASO 1.
+- Sonnet 5 entra en la conversación UNA sola vez, cuando ya hay contenido de
+  archivo(s) relevante(s) leído(s) por Haiku/Groq, con la tarea específica de
+  sintetizar la respuesta final citando ese contenido — no de seguir
+  investigando.
+- Si Haiku/Groq no encuentra nada después de las 2 pasadas del PASO 1,
+  todavía no se llama a Sonnet — se le muestra al usuario que no se encontró
+  información, con opción de dar más contexto manualmente (nombre de archivo,
+  carpeta) antes de escalar.
+
+---
+
+PASO 3 — Verificación
+
+Repetir la prueba original con el mismo caso de "trailing stop en Signal OS"
+directamente en CHAT (no en FAST) y confirmar:
+- La primera búsqueda ya incluye variantes tipo trailingStop/TRAILING_STOP,
+  no "trailing stop" literal
+- Se resuelve en 1-3 turnos, no en 11+
+- Sonnet 5 aparece máximo una vez, al final, para redactar la respuesta —
+  no aparece haciendo grep_code
