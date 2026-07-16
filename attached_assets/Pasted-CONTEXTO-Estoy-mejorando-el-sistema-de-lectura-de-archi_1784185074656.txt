@@ -1,0 +1,48 @@
+CONTEXTO
+Estoy mejorando el sistema de lectura de archivos de Quark Agent (repo: quark-ide) para reducir tokens de forma inteligente. Actualmente existe una caché de sesión para read_file que evita releer archivos completos ya leídos. Quiero extenderla para que, en vez de un booleano "ya leído / no leído", decida entre tres modos según el caso: (1) sin cambios → devolver del caché sin tocar el repo, (2) cambio pequeño → devolver solo el diff, (3) archivo de código grande con cambio grande → devolver un esqueleto estructural (firmas de funciones, imports, clases) en vez del archivo completo.
+
+PASO 1 — Localizar código existente (no modificar aún)
+Busca y muéstrame:
+1. El archivo donde vive la implementación actual de read_file / la caché de sesión mencionada en el memory_entries namespace del backend.
+2. Cómo se define hoy el schema de memory_entries (columnas, TTL, invalidación por repo).
+3. Si existe ya alguna utilidad de diff (librería instalada) o si hay que usar difflib-equivalente en Node.
+4. Confirma la versión de TypeScript instalada (necesito el compiler API: import ts from 'typescript').
+
+Repórtame esto antes de tocar nada. No escribas código todavía.
+
+PASO 2 — Implementar la función de decisión (smartReadFile)
+Una vez confirmada la ubicación, crea (o extiende el archivo existente de read_file) con esta lógica:
+
+- Nueva tabla/namespace: quark-agent-readcache (o extiende memory_entries si el schema ya soporta namespaces arbitrarios), con TTL de sesión (se invalida al cerrar el chat de Quark Agent, NO persiste entre sesiones).
+- Campos: repo, filePath, contentHash (sha256 del contenido), fullContent (cap 50KB), lastReadAt, sessionId.
+- Función smartReadFile(path, repo, sessionId) con esta decisión:
+  a) Primera lectura en la sesión → leer completo, cachear, devolver completo.
+  b) Hash sin cambios desde última lectura → devolver del caché, NO tocar el repo.
+  c) Cambió y el diff es pequeño (<1500 caracteres, <100 líneas) → devolver solo el diff (unified diff).
+  d) Cambió, es archivo .ts/.tsx/.js/.jsx/.py, y es grande (>50KB o >2000 líneas) → devolver esqueleto estructural.
+  e) Cualquier otro caso → devolver completo.
+
+Usa sha256 (no mtime — Railway puede no preservarlo de forma confiable entre despliegues).
+
+PASO 3 — Generador de esqueleto estructural
+Implementa generateStructuralSkeleton(content, filePath) usando el compiler API de TypeScript (import ts from 'typescript', NO regex) para extraer:
+- Imports completos
+- Firmas de funciones y métodos (sin cuerpo, terminando en "{ ... }")
+- Declaraciones de clases con sus miembros recorridos igual
+- Interfaces completas (son cortas, inclúyelas enteras)
+
+Si el parseo falla (excepción), haz fallback silencioso a lectura completa — nunca debe romper el flujo del agente.
+
+PASO 4 — Reglas de seguridad (obligatorias, no opcionales)
+- Excluir del caché y de cualquier compresión: archivos .env, cualquier archivo cuyo nombre contenga SECRET o API_KEY, y archivos de configuración de riesgo en los repos Ahorar (Signal OS) y Trade-SnipeOS (Sniper OS) — para esos, siempre full read sin importar el tamaño del diff.
+- Nunca cachear archivos en dist/, node_modules/, o *.min.js.
+- Todo fallback debe ser silencioso y explícito en logs, nunca fallar la operación completa de Quark Agent.
+
+PASO 5 — Logging para medir impacto
+Agrega un log (aprovechando el patrón de audit_history si aplica, o una tabla simple nueva) que registre por cada llamada: repo, filePath, decisionType (full/cached/diff/skeleton), tokensEstimadosAntes, tokensEstimadosDespues, sessionId. Esto lo necesito para medir el ahorro real después en el dashboard de costos, igual que hicimos con el fix del header de prompt-caching.
+
+REGLAS DE TRABAJO
+- Un paso a la vez. Termina el Paso 1 y espera mi confirmación antes de escribir código.
+- Valida con TypeScript (tsc --noEmit o el check que ya uses pre-commit) antes de cada commit.
+- No toques la lógica existente de War Room, Studio, ni el router FAST/DEEP/CHAT — esto es exclusivo del flujo de lectura de archivos de Quark Agent.
+- Si algo del Paso 1 revela que la arquitectura actual es distinta a lo que asumo aquí, dime qué encontraste y ajustamos el plan antes de seguir.
