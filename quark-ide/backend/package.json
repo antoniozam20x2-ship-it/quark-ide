@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && shx mkdir -p dist/lib && shx cp src/lib/designRules.json dist/lib/designRules.json",
     "start": "node dist/index.js"
   },
   "dependencies": {
@@ -25,6 +25,7 @@
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/node": "^20.0.0",
+    "shx": "^0.4.0",
     "tsx": "^4.21.0"
   },
   "engines": {

@@ -15,9 +15,14 @@ interface DesignRule {
   anti_patrones: string[]
 }
 
-const designRules: DesignRule[] = JSON.parse(
-  readFileSync(new URL('../lib/designRules.json', import.meta.url), 'utf-8')
-)
+let designRules: DesignRule[] = []
+try {
+  designRules = JSON.parse(
+    readFileSync(new URL('../lib/designRules.json', import.meta.url), 'utf-8')
+  )
+} catch (err) {
+  console.error('[Studio] No se pudo cargar designRules.json — matchDesignRule desactivado:', err)
+}
 
 // Fix 1: Spanish→English domain dictionary (covers ~90% of real briefs)
 const ES_EN: Record<string, string[]> = {
