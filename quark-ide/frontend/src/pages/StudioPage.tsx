@@ -85,6 +85,8 @@ export default function StudioPage({ initialBrief, initialHtml, initialProjectId
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'ok' | 'error'>('idle')
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null)
   const [leftCollapsed, setLeftCollapsed] = useState(() => localStorage.getItem('quark_studio_left_collapsed') === 'true')
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768)
+  const [mobileTab, setMobileTab] = useState<'pipeline' | 'preview'>('pipeline')
 
   // Edit project state
   const [showEditModal, setShowEditModal] = useState(false)
@@ -93,6 +95,17 @@ export default function StudioPage({ initialBrief, initialHtml, initialProjectId
   const [editStatus, setEditStatus] = useState<'idle' | 'applying' | 'done' | 'error'>('idle')
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null)
   const [saveEditStatus, setSaveEditStatus] = useState<'idle' | 'saving' | 'ok' | 'error'>('idle')
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768)
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [])
+
+  // Auto-collapse left panel on mobile
+  useEffect(() => {
+    if (isMobile) setLeftCollapsed(true)
+  }, [isMobile])
 
   useEffect(() => {
     loadProjects()
@@ -398,6 +411,32 @@ export default function StudioPage({ initialBrief, initialHtml, initialProjectId
         </button>
       </div>
 
+      {/* Mobile tab bar */}
+      {isMobile && (
+        <div style={{ display: 'flex', flexShrink: 0, borderBottom: '1px solid #1E1E2E', background: '#12121A' }}>
+          <button
+            onClick={() => setMobileTab('pipeline')}
+            style={{
+              flex: 1, padding: '11px 0', border: 'none',
+              borderBottom: `2px solid ${mobileTab === 'pipeline' ? '#7C3AED' : 'transparent'}`,
+              background: 'transparent',
+              color: mobileTab === 'pipeline' ? '#7C3AED' : '#64748B',
+              fontFamily: mono, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+            }}
+          >⚡ Pipeline</button>
+          <button
+            onClick={() => setMobileTab('preview')}
+            style={{
+              flex: 1, padding: '11px 0', border: 'none',
+              borderBottom: `2px solid ${mobileTab === 'preview' ? '#06B6D4' : 'transparent'}`,
+              background: 'transparent',
+              color: mobileTab === 'preview' ? '#06B6D4' : '#64748B',
+              fontFamily: mono, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+            }}
+          >🖼 Preview</button>
+        </div>
+      )}
+
       {/* Content — 3-column layout */}
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
 
@@ -542,7 +581,8 @@ export default function StudioPage({ initialBrief, initialHtml, initialProjectId
         <div style={{
           flex: 1, minWidth: 0,
           overflowY: 'auto', padding: 14,
-          display: 'flex', flexDirection: 'column', gap: 12,
+          display: isMobile && mobileTab === 'preview' ? 'none' : 'flex',
+          flexDirection: 'column', gap: 12,
         }}>
           {agents.map(agent => agent.status !== 'idle' && (
             <div
@@ -612,14 +652,15 @@ export default function StudioPage({ initialBrief, initialHtml, initialProjectId
                       maxHeight: 200, overflowY: 'auto',
                       fontFamily: mono, fontSize: 11, lineHeight: 1.7, whiteSpace: 'pre-wrap',
                       color: agent.content.trim().startsWith('APROBADO') ? '#00ff88' : '#F59E0B',
-                      paddingTop: 4,
+                      paddingTop: 4, wordBreak: 'break-word', overflowWrap: 'break-word',
                     }}>
                       {agent.content}
                     </div>
                   ) : agent.role !== 'qa' && agent.role !== 'designer' && expandedCards[agent.role] ? (
                     <div style={{
                       maxHeight: 200, overflowY: 'auto',
-                      fontFamily: mono, fontSize: 11, color: '#94A3B8', lineHeight: 1.7, whiteSpace: 'pre-wrap', paddingTop: 4,
+                      fontFamily: mono, fontSize: 11, color: '#94A3B8', lineHeight: 1.7, whiteSpace: 'pre-wrap',
+                      paddingTop: 4, wordBreak: 'break-word', overflowWrap: 'break-word',
                     }}>
                       {agent.content}
                     </div>
@@ -632,10 +673,12 @@ export default function StudioPage({ initialBrief, initialHtml, initialProjectId
 
         {/* ── RIGHT: Preview panel ── */}
         <div style={{
-          width: 420, flexShrink: 0,
-          borderLeft: '1px solid #1E1E2E',
-          display: 'flex', flexDirection: 'column', overflowY: 'auto',
+          width: isMobile ? '100%' : 420, flexShrink: 0,
+          borderLeft: isMobile ? 'none' : '1px solid #1E1E2E',
+          display: isMobile && mobileTab === 'pipeline' ? 'none' : 'flex',
+          flexDirection: 'column', overflowY: 'auto',
           padding: 14, gap: 12,
+          maxWidth: '100%', boxSizing: 'border-box',
         }}>
 
           {/* Design prototype */}
@@ -804,7 +847,8 @@ export default function StudioPage({ initialBrief, initialHtml, initialProjectId
         }}>
           <div style={{
             background: '#12121A', border: '1px solid #7C3AED44', borderRadius: 14,
-            padding: 24, width: 560, maxHeight: '90vh', display: 'flex', flexDirection: 'column', gap: 14, overflow: 'hidden',
+            padding: 24, width: isMobile ? '95vw' : 560, maxWidth: '95vw', maxHeight: '90vh',
+            display: 'flex', flexDirection: 'column', gap: 14, overflow: 'hidden',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontFamily: mono, fontSize: 12, color: '#A78BFA', fontWeight: 700 }}>✏️ EDITAR PROYECTO</span>
@@ -919,7 +963,8 @@ export default function StudioPage({ initialBrief, initialHtml, initialProjectId
         }}>
           <div style={{
             background: '#12121A', border: '1px solid #1E1E2E', borderRadius: 14,
-            padding: 24, width: 360, display: 'flex', flexDirection: 'column', gap: 14,
+            padding: 24, width: isMobile ? '95vw' : 360, maxWidth: '95vw',
+            display: 'flex', flexDirection: 'column', gap: 14,
           }}>
             <span style={{ fontFamily: mono, fontSize: 12, color: '#10B981', fontWeight: 700 }}>💾 GUARDAR PROYECTO</span>
 
