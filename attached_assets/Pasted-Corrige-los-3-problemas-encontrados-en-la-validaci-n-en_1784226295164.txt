@@ -1,0 +1,42 @@
+Corrige los 3 problemas encontrados en la validación, en este orden:
+
+1. MATCHING POR IDIOMA (prioridad alta)
+   Los briefs llegan mayormente en español pero las keywords del CSV están en 
+   inglés. Antes de hacer matching, traduce el brief a keywords en inglés — 
+   no traduzcas el brief completo, solo agrega una capa de sinónimos/mapeo 
+   español→inglés para los términos de dominio más comunes en tus briefs 
+   (restaurante→restaurant, comida→food, menú→menu, reserva→reservation/booking, 
+   negocio→business, tienda→shop/store, hotel→hotel, salud→health, 
+   entrenamiento→fitness/training, etc.). No hace falta traducción automática 
+   vía API — un diccionario de mapeo de 40-60 términos comunes en tus briefs 
+   reales cubre el 90% de los casos. Vuelve a correr el test (a) de Trattoria 
+   d'Oro después del fix y confirma que ahora matchea Restaurant/Food Service.
+
+2. SUBSTRING MATCHING (prioridad media)
+   Cambia el matching de "keyword incluida como substring" a "keyword como 
+   palabra completa" (word boundary — separar el brief en tokens/palabras y 
+   comparar por igualdad exacta de token, no con .includes()). Esto elimina 
+   el falso positivo de "ar" dentro de "para". Vuelve a correr el test (c) 
+   ("Página para mi negocio") y confirma que ya no matchea Spatial Computing 
+   por ese motivo — en ese caso es válido que no matchee nada (brief 
+   demasiado ambiguo), simplemente que no matchee por ruido.
+
+3. UMBRAL Y DESEMPATE
+   Ahora que el matching es más limpio, sube el mínimo de hits a 2 (no 1) 
+   para considerar un match válido, y en caso de empate de score usa el 
+   candidato con más % de sus propias keywords cubiertas por el brief, no 
+   solo el conteo absoluto. Si un brief no alcanza el mínimo, matchDesignRule 
+   debe retornar null/sin match — el Architect debe seguir funcionando sin 
+   inyección en ese caso (comportamiento actual, no lo rompas).
+
+4. PALETAS VACÍAS (prioridad baja)
+   Para las 39 entradas sin paleta_ejemplo parseada, no reintentes el regex — 
+   en su lugar, agrega un fallback en el momento de uso: si paleta_ejemplo 
+   está vacío, simplemente omite esa línea del bloque REFERENCIA DE DISEÑO 
+   en vez de inyectar un array vacío o placeholder. El patrón y anti-patrones 
+   solos siguen aportando valor aunque falte la paleta.
+
+Al terminar, vuelve a correr los 3 tests del punto 3 de la validación anterior 
+(Trattoria d'Oro, Dashboard SaaS, brief ambiguo) y muéstrame los 3 resultados 
+para confirmar que quedaron correctos. No toques el checklist del Critic — 
+ese ya quedó bien.

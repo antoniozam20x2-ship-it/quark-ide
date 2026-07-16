@@ -19,15 +19,71 @@ const designRules: DesignRule[] = JSON.parse(
   readFileSync(new URL('../lib/designRules.json', import.meta.url), 'utf-8')
 )
 
+// Fix 1: Spanish→English domain dictionary (covers ~90% of real briefs)
+const ES_EN: Record<string, string[]> = {
+  restaurante: ['restaurant'], comida: ['food'], menú: ['menu'], menu: ['menu'],
+  reserva: ['reservation', 'booking'], reservación: ['reservation', 'booking'],
+  cocina: ['food', 'kitchen'], chef: ['chef'], carta: ['menu'],
+  tienda: ['shop', 'store', 'ecommerce'], negocio: ['business'],
+  empresa: ['business', 'corporate'], corporativo: ['corporate'],
+  hotel: ['hotel'], hospedaje: ['hotel', 'lodging'], alojamiento: ['hotel', 'lodging'],
+  salud: ['health', 'medical'], médico: ['medical', 'health'], clínica: ['medical', 'clinic'],
+  hospital: ['hospital', 'medical'], bienestar: ['wellness', 'health'],
+  entrenamiento: ['fitness', 'training'], gimnasio: ['fitness', 'gym'],
+  ejercicio: ['fitness', 'exercise'], deporte: ['sports'],
+  educación: ['education', 'learning'], curso: ['course', 'learning'],
+  formación: ['training', 'education'], escuela: ['education', 'school'],
+  música: ['music'], sonido: ['audio', 'music'], podcast: ['podcast'],
+  fotografía: ['photography'], foto: ['photography', 'photo'],
+  viaje: ['travel'], turismo: ['travel', 'tourism'], vuelo: ['travel', 'flight'],
+  moda: ['fashion'], ropa: ['clothing', 'fashion'], vestimenta: ['clothing'],
+  tecnología: ['technology', 'tech'], software: ['software', 'saas'],
+  aplicación: ['app'], aplicacion: ['app'],
+  finanzas: ['finance', 'financial'], banco: ['banking', 'finance'],
+  inversión: ['investment', 'finance'], inversion: ['investment', 'finance'],
+  inmobiliaria: ['real-estate'], propiedad: ['real-estate', 'property'],
+  boda: ['wedding'], evento: ['event'], conferencia: ['conference'],
+  portfolio: ['portfolio'], portafolio: ['portfolio'],
+  arte: ['art', 'creative'], diseño: ['design', 'creative'], creativo: ['creative'],
+  juego: ['game', 'gaming'], videojuego: ['gaming', 'game'],
+  italiano: ['restaurant', 'food', 'dining'], mexicano: ['restaurant', 'food', 'dining'],
+  japonés: ['restaurant', 'food', 'dining'], sushi: ['restaurant', 'food', 'dining'],
+  trattoria: ['restaurant', 'dining', 'cuisine'], bistro: ['restaurant', 'dining'],
+  brasserie: ['restaurant', 'dining'], taberna: ['restaurant', 'dining'],
+  cafetería: ['restaurant', 'food'], panadería: ['bakery', 'food'],
+  pastelería: ['bakery', 'food'], cantina: ['restaurant', 'food'],
+  lujo: ['luxury'], premium: ['luxury', 'premium'],
+  delivery: ['delivery', 'food'], pedido: ['order', 'delivery'],
+  dashboard: ['dashboard'], inventario: ['inventory'],
+  gestión: ['management', 'saas'], administración: ['admin', 'management'],
+}
+
+function briefTokens(brief: string): Set<string> {
+  // Tokenize brief into words, expand Spanish terms via dictionary
+  const words = brief.toLowerCase().split(/[\s,.\-_/\\()[\]{}!?:;'"]+/).filter(w => w.length > 1)
+  const expanded = new Set<string>(words)
+  for (const word of words) {
+    const mapped = ES_EN[word]
+    if (mapped) mapped.forEach(t => expanded.add(t))
+  }
+  return expanded
+}
+
 function matchDesignRule(brief: string): DesignRule | null {
-  const lowerBrief = brief.toLowerCase()
+  // Fix 2: word-boundary matching via tokenization (no substring)
+  const tokens = briefTokens(brief)
   let bestMatch: DesignRule | null = null
   let bestScore = 0
+  let bestPct   = 0
   for (const rule of designRules) {
-    const score = rule.keywords.filter(kw => lowerBrief.includes(kw)).length
-    if (score > bestScore) { bestScore = score; bestMatch = rule }
+    const hits  = rule.keywords.filter(kw => tokens.has(kw)).length
+    const pct   = rule.keywords.length > 0 ? hits / rule.keywords.length : 0
+    // Fix 3: min 2 hits; tiebreak by % of rule's own keywords covered
+    if (hits > bestScore || (hits === bestScore && hits >= 2 && pct > bestPct)) {
+      bestScore = hits; bestPct = pct; bestMatch = rule
+    }
   }
-  return bestScore >= 1 ? bestMatch : null
+  return bestScore >= 2 ? bestMatch : null
 }
 
 // ── HTML sanitizer ────────────────────────────────────────────────────────────
@@ -343,9 +399,14 @@ router.post('/analyze', async (req, res) => {
       task = 'analyze'
     } else {
       const matchedRule = matchDesignRule(brief)
-      const refBlock = matchedRule
-        ? `\n\nREFERENCIA DE DISEÑO (tipo de proyecto detectado: ${matchedRule.tipo}):\n- Patrón recomendado: ${matchedRule.patron}\n- Paleta de referencia: ${matchedRule.paleta_ejemplo.join(', ')}\n- Anti-patrones a evitar: ${matchedRule.anti_patrones.join('; ')}`
-        : ''
+      let refBlock = ''
+      if (matchedRule) {
+        // Fix 4: omit palette line when empty (39 entries have no parsed hex)
+        const paletaLine = matchedRule.paleta_ejemplo.length > 0
+          ? `\n- Paleta de referencia: ${matchedRule.paleta_ejemplo.join(', ')}`
+          : ''
+        refBlock = `\n\nREFERENCIA DE DISEÑO (tipo de proyecto detectado: ${matchedRule.tipo}):\n- Patrón recomendado: ${matchedRule.patron}${paletaLine}\n- Anti-patrones a evitar: ${matchedRule.anti_patrones.join('; ')}`
+      }
       userPrompt = `BRIEF: ${brief}${refBlock}`
       task = 'analyze'
     }
