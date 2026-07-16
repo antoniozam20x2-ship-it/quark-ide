@@ -9,6 +9,9 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { runAutoMode, readChangedFileContents, cleanupWorkDir } from '../services/agentSdkAuto.js';
+import { createHash } from 'crypto';
+import { createPatch } from 'diff';
+import ts from 'typescript';
 
 // ── Agent session persistence (reuses memory_entries table) ───────────────────
 
@@ -2459,11 +2462,17 @@ router.post('/apply-patch', async (req, res) => {
 
 // ── Shared tool executor ──────────────────────────────────────────────────────
 
-// ── Session-level file cache — evita re-fetch de archivos ya leídos en el turno actual ─────────
-const SESSION_FILE_CACHE = new Map<string, { files: Map<string, string>; ts: number }>();
+// ── Session-level file cache — smartReadFile con decisión full/cached/diff/skeleton ───────────
+interface SessionFileCacheEntry {
+  contentHash: string;
+  fullContent: string;
+  lastReadAt: number;
+}
+
+const SESSION_FILE_CACHE = new Map<string, { files: Map<string, SessionFileCacheEntry>; ts: number }>();
 const SESSION_CACHE_TTL_MS = 30 * 60 * 1000;
 
-function getSessionFiles(sessionId: string): Map<string, string> {
+function getSessionFiles(sessionId: string): Map<string, SessionFileCacheEntry> {
   const now = Date.now();
   for (const [id, entry] of SESSION_FILE_CACHE) {
     if (now - entry.ts > SESSION_CACHE_TTL_MS) SESSION_FILE_CACHE.delete(id);
@@ -2472,6 +2481,193 @@ function getSessionFiles(sessionId: string): Map<string, string> {
   if (!entry) { entry = { files: new Map(), ts: now }; SESSION_FILE_CACHE.set(sessionId, entry); }
   entry.ts = now;
   return entry.files;
+}
+
+// ── Security: paths that bypass smart cache and are always read in full ───────
+const NO_CACHE_PATTERNS = [
+  /\.env/i,
+  /SECRET/i,
+  /API_KEY/i,
+  /[/\\]dist[/\\]/,
+  /node_modules[/\\]/,
+  /\.min\.js$/,
+];
+// Risk config patterns for sensitive repos (Ahorar = Signal OS, Trade-SnipeOS = Sniper OS)
+const SENSITIVE_REPO_PATTERNS: Record<string, RegExp[]> = {
+  'Ahorar':         [/[/\\]config[/\\]/i, /[/\\]secrets?[/\\]/i, /[/\\]keys?[/\\]/i, /[/\\]credentials?[/\\]/i],
+  'Trade-SnipeOS':  [/[/\\]config[/\\]/i, /[/\\]secrets?[/\\]/i, /[/\\]keys?[/\\]/i, /[/\\]credentials?[/\\]/i],
+};
+
+function isNoCacheFile(filePath: string, repo: string): boolean {
+  if (NO_CACHE_PATTERNS.some(p => p.test(filePath))) return true;
+  return (SENSITIVE_REPO_PATTERNS[repo] ?? []).some(p => p.test(filePath));
+}
+
+function contentSha256(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+// ── Structural skeleton generator (TypeScript Compiler API + Python regex) ────
+function generateStructuralSkeleton(content: string, filePath: string): string {
+  // Python: regex-based skeleton
+  if (filePath.endsWith('.py')) {
+    try {
+      const lines = content.split('\n')
+        .filter(l => /^(import |from .+ import |class |def |    def )/.test(l))
+        .map(l => l.endsWith(':') ? l + ' ...' : l);
+      return lines.length > 0 ? lines.join('\n') : content;
+    } catch { return content; }
+  }
+
+  // TS/JS: TypeScript Compiler API
+  try {
+    const scriptKind = filePath.endsWith('.tsx') ? ts.ScriptKind.TSX
+      : filePath.endsWith('.jsx') ? ts.ScriptKind.JSX
+      : filePath.endsWith('.ts')  ? ts.ScriptKind.TS
+      : ts.ScriptKind.JS;
+
+    const sf = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true, scriptKind);
+    const out: string[] = [];
+
+    const g = (node: ts.Node) => node.getText(sf);
+    const mods = (m: ts.NodeArray<ts.ModifierLike> | undefined) =>
+      m?.length ? m.map(x => x.getText(sf)).join(' ') + ' ' : '';
+
+    function visit(node: ts.Node): void {
+      if (ts.isImportDeclaration(node)) { out.push(g(node)); return; }
+      if (ts.isExportDeclaration(node)) { const t = g(node); if (t.length < 300) out.push(t); return; }
+      if (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) { out.push(g(node)); return; }
+
+      if (ts.isFunctionDeclaration(node) && node.name) {
+        const params = node.parameters.map(p => g(p)).join(', ');
+        const ret = node.type ? `: ${g(node.type)}` : '';
+        out.push(`${mods(node.modifiers)}function ${g(node.name)}(${params})${ret} { ... }`);
+        return;
+      }
+
+      if (ts.isVariableStatement(node)) {
+        for (const decl of node.declarationList.declarations) {
+          const init = decl.initializer;
+          if (init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init))) {
+            const fn = init as ts.ArrowFunction | ts.FunctionExpression;
+            const params = fn.parameters.map(p => g(p)).join(', ');
+            const ret = fn.type ? `: ${g(fn.type)}` : '';
+            const asyncKw = fn.modifiers?.some(m => m.kind === ts.SyntaxKind.AsyncKeyword) ? 'async ' : '';
+            out.push(`${mods(node.modifiers)}const ${g(decl.name)} = ${asyncKw}(${params})${ret} => { ... }`);
+          } else {
+            const t = g(node); if (t.length < 200) out.push(t);
+          }
+        }
+        return;
+      }
+
+      if (ts.isClassDeclaration(node) && node.name) {
+        const heritage = node.heritageClauses?.map(h => g(h)).join(' ') ?? '';
+        out.push(`${mods(node.modifiers)}class ${g(node.name)}${heritage ? ' ' + heritage : ''} {`);
+        for (const m of node.members) {
+          if (ts.isConstructorDeclaration(m) || ts.isMethodDeclaration(m)) {
+            const mn = ts.isConstructorDeclaration(m) ? 'constructor' : g((m as ts.MethodDeclaration).name!);
+            const params = m.parameters.map(p => g(p)).join(', ');
+            const ret = (m as ts.MethodDeclaration).type ? `: ${g((m as ts.MethodDeclaration).type!)}` : '';
+            out.push(`  ${mods(m.modifiers)}${mn}(${params})${ret} { ... }`);
+          } else if (ts.isPropertyDeclaration(m)) {
+            const pt = m.type ? `: ${g(m.type)}` : '';
+            out.push(`  ${mods(m.modifiers)}${g(m.name)}${pt};`);
+          }
+        }
+        out.push('}'); return;
+      }
+    }
+
+    ts.forEachChild(sf, visit);
+    return out.length > 0 ? out.join('\n') : content;
+  } catch (err) {
+    console.warn('[smartReadFile] skeleton parse failed, using full content:', err instanceof Error ? err.message : err);
+    return content;
+  }
+}
+
+// ── Smart read file: full / cached / diff / skeleton ─────────────────────────
+const SMART_DIFF_CHAR_LIMIT  = 1500;
+const SMART_DIFF_LINE_LIMIT  = 100;
+const SMART_LARGE_BYTES      = 50 * 1024;
+const SMART_LARGE_LINES      = 2000;
+const SKELETON_EXT           = /\.(ts|tsx|js|jsx|py)$/;
+
+type SmartReadDecision = 'full' | 'cached' | 'diff' | 'skeleton';
+
+async function smartReadFile(
+  filePath: string,
+  repo: string,
+  sessionId: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+): Promise<{ result: string; decision: SmartReadDecision }> {
+  // Security exclusion — always full read, never cached
+  if (isNoCacheFile(filePath, repo)) {
+    send('action', { text: `📖 Leyendo ${filePath}` });
+    const content = await getFileContent(filePath, repo);
+    const est = Math.ceil(content.length / 4);
+    console.log(`[smartReadFile] decision=full(security) repo=${repo} path=${filePath} tokens≈${est}`);
+    return { result: content, decision: 'full' };
+  }
+
+  const currentContent = await getFileContent(filePath, repo);
+  const currentHash = contentSha256(currentContent);
+  const sessionFiles = getSessionFiles(sessionId);
+  const cacheKey = `${filePath}@${repo}`;
+  const cached = sessionFiles.get(cacheKey);
+
+  // First read in this session
+  if (!cached) {
+    sessionFiles.set(cacheKey, { contentHash: currentHash, fullContent: currentContent, lastReadAt: Date.now() });
+    send('action', { text: `📖 Leyendo ${filePath}` });
+    const est = Math.ceil(currentContent.length / 4);
+    console.log(`[smartReadFile] decision=full(first) repo=${repo} path=${filePath} tokens≈${est}`);
+    return { result: currentContent, decision: 'full' };
+  }
+
+  // Hash unchanged — serve from cache, no repo fetch needed next time
+  if (cached.contentHash === currentHash) {
+    send('action', { text: `📖 Leyendo ${filePath} (sin cambios)` });
+    const est = Math.ceil(cached.fullContent.length / 4);
+    console.log(`[smartReadFile] decision=cached repo=${repo} path=${filePath} tokens≈${est}`);
+    return { result: cached.fullContent, decision: 'cached' };
+  }
+
+  // Hash changed — compute unified diff
+  const diffText = createPatch(filePath, cached.fullContent, currentContent, '', '');
+  const diffLines = diffText.split('\n').length;
+  const isSmallDiff = diffText.length < SMART_DIFF_CHAR_LIMIT && diffLines < SMART_DIFF_LINE_LIMIT;
+  const isLarge = currentContent.length > SMART_LARGE_BYTES
+    || currentContent.split('\n').length > SMART_LARGE_LINES;
+
+  // Always update cache with latest content
+  sessionFiles.set(cacheKey, { contentHash: currentHash, fullContent: currentContent, lastReadAt: Date.now() });
+
+  const estFull = Math.ceil(currentContent.length / 4);
+
+  if (isSmallDiff) {
+    const estDiff = Math.ceil(diffText.length / 4);
+    console.log(`[smartReadFile] decision=diff repo=${repo} path=${filePath} tokensBefore≈${estFull} tokensAfter≈${estDiff}`);
+    send('action', { text: `📖 Leyendo ${filePath} (diff desde última lectura)` });
+    return { result: `[Archivo modificado desde tu última lectura. Diff:]\n${diffText}`, decision: 'diff' };
+  }
+
+  if (isLarge && SKELETON_EXT.test(filePath)) {
+    const skeleton = generateStructuralSkeleton(currentContent, filePath);
+    const estSkeleton = Math.ceil(skeleton.length / 4);
+    console.log(`[smartReadFile] decision=skeleton repo=${repo} path=${filePath} tokensBefore≈${estFull} tokensAfter≈${estSkeleton}`);
+    send('action', { text: `📖 Leyendo ${filePath} (esqueleto estructural — archivo grande modificado)` });
+    return {
+      result: `[Archivo grande modificado. Esqueleto estructural — pedí lectura completa si necesitás implementación]\n${skeleton}`,
+      decision: 'skeleton',
+    };
+  }
+
+  // Fallback: full content
+  console.log(`[smartReadFile] decision=full(fallback) repo=${repo} path=${filePath} tokens≈${estFull}`);
+  send('action', { text: `📖 Leyendo ${filePath}` });
+  return { result: currentContent, decision: 'full' };
 }
 
 // ── Helpers para limpiar patrones antes de enviarlos a GitHub code search ────────────────────────
@@ -2501,29 +2697,25 @@ async function executeChatTool(
     return await listFilesFiltered(repo, input.path);
   }
   if (name === 'read_file') {
-    const sessionFiles = getSessionFiles(sessionId);
-    const cacheKey = `${input.path}@${repo}`;
-    let content: string;
-    if (sessionFiles.has(cacheKey)) {
-      content = sessionFiles.get(cacheKey)!;
-      send('action', { text: `📖 Leyendo ${input.path} (caché de sesión)` });
-    } else {
-      send('action', { text: `📖 Leyendo ${input.path}` });
-      content = await getFileContent(input.path, repo);
-      sessionFiles.set(cacheKey, content);
-    }
-    const lines = content.split('\n');
+    // Targeted range read — bypass smart cache, always serve the exact lines requested
     if (input.start_line) {
+      const raw = await getFileContent(input.path, repo);
+      const lines = raw.split('\n');
+      send('action', { text: `📖 Leyendo ${input.path} líneas ${input.start_line}–${input.end_line ?? lines.length}` });
       return lines.slice(input.start_line - 1, input.end_line ?? lines.length).join('\n');
     }
-    // No range specified — truncate by character count (~8000 chars ≈ 2000 tokens),
-    // cutting at the nearest line boundary to avoid splitting mid-line.
+    // Full read — apply smart decision (cached / diff / skeleton / full)
+    const { result, decision } = await smartReadFile(input.path, repo, sessionId, send);
+    // For diff/skeleton responses, return as-is — they are already compressed
+    if (decision === 'diff' || decision === 'skeleton') return result;
+    // For full content, apply existing 8 000-char truncation to keep prompt sizes bounded
     const CHAR_LIMIT = 8000;
-    if (content.length <= CHAR_LIMIT) return content;
+    if (result.length <= CHAR_LIMIT) return result;
+    const lines = result.split('\n');
     let chars = 0;
     let cutLine = 0;
     for (let i = 0; i < lines.length; i++) {
-      chars += lines[i].length + 1; // +1 for the newline
+      chars += lines[i].length + 1;
       if (chars > CHAR_LIMIT) { cutLine = i; break; }
     }
     const remaining = lines.length - cutLine;

@@ -1,0 +1,31 @@
+Continuamos con Opción A: extender SESSION_FILE_CACHE (in-memory), sin tocar memory_entries ni DEEP/runAgenticLoop.
+
+PASO 2 — Implementar smartReadFile sobre SESSION_FILE_CACHE
+
+1. Instala el paquete diff (npm install diff --save, y sus tipos si aplica: npm install @types/diff --save-dev).
+
+2. Cambia el tipo del value en SESSION_FILE_CACHE (línea ~2463) de:
+   Map<string, { files: Map<string, string>; ts: number }>
+   a que el Map interno "files" pase de Map<string, string> a:
+   Map<string, { contentHash: string; fullContent: string; lastReadAt: number }>
+
+3. Implementa smartReadFile(path, repo, sessionId) que reemplace la lógica actual de read_file en executeChatTool (líneas 2503-2531):
+
+   a) Calcula currentContent vía getFileContent(path, repo) (la función ya existente).
+   b) Calcula currentHash con crypto.createHash('sha256').update(currentContent).digest('hex').
+   c) Busca en la caché de sesión con la misma clave actual "${path}@${repo}".
+   d) Si no existe entrada: guarda { contentHash, fullContent: currentContent, lastReadAt: Date.now() }, devuelve currentContent completo.
+   e) Si existe y contentHash coincide: devuelve fullContent cacheado, NO llames getFileContent de nuevo la próxima vez que puedas evitarlo (nota: en este paso igual llamamos getFileContent para poder comparar el hash — eso ya es barato porque es lectura del repo clonado local, no tokens de LLM. Lo caro es lo que se manda al modelo, no la lectura de disco).
+   f) Si existe pero el hash cambió: usa el paquete diff (diffLines o createPatch) para generar un diff entre el contenido cacheado y el actual.
+      - Si el diff resultante tiene menos de 1500 caracteres Y menos de 100 líneas: actualiza la caché con el nuevo contenido/hash, devuelve el diff con un prefijo tipo "[Archivo modificado desde tu última lectura. Diff:]" seguido del diff.
+      - Si el diff es más grande, Y el archivo es .ts/.tsx/.js/.jsx/.py, Y el archivo tiene más de 2000 líneas o 50KB: actualiza caché, devuelve el esqueleto estructural (ver Paso 3) con nota "[Archivo grande modificado. Esqueleto estructural, pide lectura completa si necesitas implementación]".
+      - Cualquier otro caso: actualiza caché, devuelve currentContent completo.
+
+4. Excluye de toda esta lógica (siempre full read, sin caché ni compresión):
+   - Cualquier path que incluya .env, SECRET, o API_KEY
+   - Archivos dentro de dist/, node_modules/, o terminados en .min.js
+   - Cualquier archivo de configuración de riesgo dentro de los repos Ahorar o Trade-SnipeOS (busca en el código actual si hay alguna lista de paths de config de riesgo ya definida antes de asumir cuáles son)
+
+5. No modifiques nada de runAgenticLoop, modifiedFiles, War Room, ni Studio.
+
+Muéstrame el diff propuesto para revisión antes de aplicar el commit. Valida con tsc --noEmit antes de comitear.
