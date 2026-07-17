@@ -2829,6 +2829,7 @@ async function unifiedGrepSearch(
   }
 
   // ── 2. ripgrep on local clone — primary search ────────────────────────────
+  console.log('[DIAGNOSTICO] repo recibido en unifiedGrepSearch:', JSON.stringify(repo));
   if (isCloned(repo)) {
     const rgResults = await rgSearch(pattern, repo);
     if (rgResults.length > 0) {

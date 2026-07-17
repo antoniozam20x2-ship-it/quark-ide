@@ -1,0 +1,57 @@
+# PROMPT PARA REPLIT — Diagnóstico: por qué isCloned(repo) devuelve false para Signal OS
+
+## Contexto
+
+Acabamos de unificar la búsqueda de FAST/CHAT/DEEP sobre `unifiedGrepSearch`, que
+depende de `isCloned(repo)` (en `services/localRepos.ts`) para decidir si usa ripgrep
+local o cae al fallback de GitHub API.
+
+Ya confirmamos por sync manual que el repo Signal OS SÍ está clonado en disco
+(`/data/repos/Ahorar/.git` existe — la carpeta se llama `Ahorar`, ver `ALL_REPOS` en
+`localRepos.ts`). Sin embargo, al correr una búsqueda en FAST mode con el selector de
+repo puesto en "Signal OS (Ahorar)", el log mostró:
+
+```
+☁️ Repo no clonado aún — buscando vía GitHub API
+```
+
+Es decir, `isCloned(repo)` devolvió `false` a pesar de que el clon existe.
+
+`isCloned` es simple y directo:
+
+```typescript
+export function isCloned(repo: string): boolean {
+  try { return fs.existsSync(path.join(repoDir(repo), '.git')); }
+  catch { return false; }
+}
+```
+
+Esto significa que el string `repo` que le está llegando a esta función en tiempo de
+ejecución probablemente NO es exactamente `"Ahorar"` — puede tener mayúsculas
+distintas, espacios, el label completo del selector ("Signal OS (Ahorar)"), o algún
+otro formato que no coincide con el nombre real de la carpeta clonada.
+
+## Lo que necesito que verifiques
+
+1. **Agregá un log temporal** justo antes de la llamada a `isCloned(repo)` dentro de
+   `unifiedGrepSearch` (en `agent.ts`), algo como:
+   ```typescript
+   console.log('[DIAGNOSTICO] repo recibido en unifiedGrepSearch:', JSON.stringify(repo));
+   ```
+
+2. **Corré la app** y repetí la búsqueda de FAST mode con el selector en "Signal OS
+   (Ahorar)" — mandame el valor EXACTO que aparece en el log (con las comillas, para
+   ver si hay espacios o caracteres invisibles).
+
+3. Si el valor no coincide con `"Ahorar"` (el nombre real de la carpeta en
+   `/data/repos/`), buscá en el frontend dónde se define el valor de `repo` que se
+   envía en el body de la request a `/api/agent/generate` — probablemente en
+   `ProjectSwitcher.tsx` o el componente equivalente del selector de repos — y
+   confirmá qué string exacto asigna cada opción del dropdown.
+
+4. NO apliques ningún fix todavía — primero quiero confirmar la causa exacta con el
+   log antes de decidir si el fix va en el frontend (mandar el nombre correcto) o en
+   el backend (normalizar/mapear el nombre recibido antes de llamar a `isCloned`).
+
+Pasame el output del log y, si hace falta, el fragmento del componente del selector
+donde se define el valor de `repo`.
