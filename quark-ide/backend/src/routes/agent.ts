@@ -376,10 +376,9 @@ function applyOperations(
   operations: Array<{ type: string; old_str: string; new_str: string }>,
   filePath: string,
   sendFn: (event: string, data: Record<string, unknown>) => void,
-): string {
+): { content: string; failedOps: Array<{ old_str: string; new_str: string }> } {
   let content = originalContent;
-  const MAX_FAILURES = 1;
-  let failureCount = 0;
+  const failedOps: Array<{ old_str: string; new_str: string }> = [];
 
   for (const op of operations) {
     if (op.type !== 'str_replace') {
@@ -387,63 +386,22 @@ function applyOperations(
       continue;
     }
 
-    // Try 1: Exact match (most reliable)
-    let idx = content.indexOf(op.old_str);
+    // Exact match only — no fuzzy fallback
+    const idx = content.indexOf(op.old_str);
 
     if (idx !== -1) {
       content = content.slice(0, idx) + op.new_str + content.slice(idx + op.old_str.length);
-      sendFn('action', { text: `✅ Exact match aplicado en ${filePath}` });
+      sendFn('action', { text: `✅ Cambio aplicado en ${filePath}` });
       continue;
     }
 
-    // Try 2: Si falla exact match, NO intentar fuzzy — abortar y retornar original
-    sendFn('action', {
-      text: `❌ str_replace sin match exacto en ${filePath}`
-    });
-    sendFn('action', {
-      text: `⚠️ Buscaba: "${op.old_str.slice(0, 80).replace(/\n/g, '↵')}..."`
-    });
-    sendFn('action', {
-      text: `❌ Abortando patch — retornando archivo original sin modificaciones`
-    });
-
-    // Generar prompt para Replit
-    const replicPrompt = `
-🔧 PROMPT PARA REPLIT:
-
-Abre el archivo: ${filePath}
-
-Busca esta línea exacta en el archivo:
-\`\`\`
-${op.old_str.split('\n')[0]?.slice(0, 100)}
-\`\`\`
-
-Copia el bloque EXACTO (mínimo 3 líneas) que contiene esa línea y envía:
-
-[Pega el bloque aquí]
-
-Luego en Quark Agent con modo DEEP:
-\`\`\`
-[DEEP][MODIFICAR] En ${filePath}, reemplaza:
-
-\`\`\`old
-[PEGA EL BLOQUE QUE COPIASTE]
-\`\`\`
-
-Por:
-
-\`\`\`new
-[EL BLOQUE + TUS CAMBIOS]
-\`\`\`
-\`\`\`
-    `.trim();
-
-    sendFn('action', { text: `📋 ${replicPrompt}` });
-
-    return originalContent;
+    // old_str not found — track failure, continue with remaining ops
+    sendFn('action', { text: `❌ old_str no encontrado en ${filePath}` });
+    sendFn('action', { text: `⚠️ Texto buscado: "${op.old_str.slice(0, 80).replace(/\n/g, '↵')}${op.old_str.length > 80 ? '...' : ''}"` });
+    failedOps.push({ old_str: op.old_str, new_str: op.new_str });
   }
 
-  return content;
+  return { content, failedOps };
 }
 
 // ── Read intent detection ────────────────────────────────────────────────────
@@ -1593,7 +1551,7 @@ Ejemplo: ["src/services/radar.ts","src/routes/screener.ts"]`,
             'anthropic-beta': 'prompt-caching-2024-07-31',
           },
           body: JSON.stringify({
-            model: 'claude-sonnet-4-6',
+            model: 'claude-haiku-4-5-20251001',
             max_tokens: 1024,
             output_config: { effort: 'high' },
             messages: [{
@@ -1633,8 +1591,9 @@ Responde en máximo 150 palabras. Solo el razonamiento, sin código.`,
           send('action', { text: `💡 ${reasoningContext.slice(0, 200)}${reasoningContext.length > 200 ? '...' : ''}` })
           send('action', { text: `🎯 Enfoque definido — procediendo con el cambio mínimo necesario` })
         }
-      } catch {
-        send('action', { text: `⚡ Continuando sin razonamiento profundo (Claude no disponible)` })
+      } catch (reasoningErr) {
+        send('action', { text: `⚠️ Análisis de causa-raíz no completado — ${reasoningErr instanceof Error ? reasoningErr.message : 'error desconocido'}` })
+        send('action', { text: `⚠️ El patch se generará sin el paso de razonamiento previo — revisá el resultado con más cuidado` })
       }
     } else {
       send('action', { text: `⚡ Modo análisis — leyendo contexto` })
@@ -1962,8 +1921,11 @@ REGLAS CRÍTICAS PARA old_str:
 
     // Construir archivos finales aplicando operaciones str_replace
     const finalFiles: { path: string; content: string }[] = [];
+    const allFailedOps: { path: string; old_str: string }[] = [];
 
     for (const op of operations) {
+      if (finalFiles.find(f => f.path === op.path)) continue; // ya procesado
+
       const preloaded = preloadedFiles.find(f => f.path === op.path);
       const originalContent = preloaded?.fullContent ?? preloaded?.content ?? '';
 
@@ -1973,10 +1935,78 @@ REGLAS CRÍTICAS PARA old_str:
       }
 
       const opsForFile = operations.filter(o => o.path === op.path);
-      const patchedContent = applyOperations(originalContent, opsForFile, op.path, send);
+      let { content: patchedContent, failedOps } = applyOperations(originalContent, opsForFile, op.path, send);
 
-      if (!finalFiles.find(f => f.path === op.path)) {
-        finalFiles.push({ path: op.path, content: patchedContent });
+      // Retry once per failed op using generateWithFallback
+      if (failedOps.length > 0) {
+        send('action', { text: `🔄 ${failedOps.length} operación(es) fallida(s) en ${op.path} — reintentando con corrección automática...` });
+
+        for (const failed of failedOps) {
+          const filePreview = originalContent.split('\n').slice(0, 150).join('\n');
+          const repairPrompt = `Una operación str_replace falló porque el texto a reemplazar no existe literalmente en el archivo.
+
+Archivo: ${op.path}
+Primeras 150 líneas del archivo REAL:
+\`\`\`
+${filePreview}
+\`\`\`
+
+Texto que NO se encontró (old_str original):
+\`\`\`
+${failed.old_str}
+\`\`\`
+
+Texto de reemplazo deseado (new_str):
+\`\`\`
+${failed.new_str}
+\`\`\`
+
+Devuelve SOLO un JSON con la operación corregida buscando el fragmento equivalente en el archivo real:
+{"type": "str_replace", "old_str": "...", "new_str": "..."}
+
+El old_str DEBE existir literalmente en el archivo. Si no podés encontrar el fragmento correcto, devuelve {"type": "noop"}.
+Devuelve SOLO el JSON, sin markdown ni explicaciones.`;
+
+          try {
+            const repairedRaw = await generateWithFallback(
+              repairPrompt,
+              'Eres un agente de corrección de patches. Devuelve SOLO el JSON solicitado.'
+            );
+            const repaired = JSON.parse(
+              repairedRaw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim()
+            ) as { type: string; old_str?: string; new_str?: string };
+
+            if (repaired.type === 'str_replace' && repaired.old_str && repaired.new_str) {
+              const idx = patchedContent.indexOf(repaired.old_str);
+              if (idx !== -1) {
+                patchedContent = patchedContent.slice(0, idx) + repaired.new_str + patchedContent.slice(idx + repaired.old_str.length);
+                send('action', { text: `✅ Corrección automática aplicada en ${op.path}` });
+              } else {
+                send('action', { text: `❌ Corrección automática también falló en ${op.path} — operación omitida` });
+                send('action', { text: `⚠️ El texto a reemplazar no fue encontrado en el archivo real. Puede que el archivo haya cambiado o el modelo no citó texto literal.` });
+                allFailedOps.push({ path: op.path, old_str: failed.old_str });
+              }
+            } else {
+              send('action', { text: `❌ Corrección automática también falló en ${op.path} — operación omitida` });
+              send('action', { text: `⚠️ El texto a reemplazar no fue encontrado en el archivo real. Puede que el archivo haya cambiado o el modelo no citó texto literal.` });
+              allFailedOps.push({ path: op.path, old_str: failed.old_str });
+            }
+          } catch {
+            send('action', { text: `❌ No se pudo corregir automáticamente la operación en ${op.path} — operación omitida` });
+            send('action', { text: `⚠️ El texto a reemplazar no fue encontrado en el archivo real. Puede que el archivo haya cambiado o el modelo no citó texto literal.` });
+            allFailedOps.push({ path: op.path, old_str: failed.old_str });
+          }
+        }
+      }
+
+      finalFiles.push({ path: op.path, content: patchedContent });
+    }
+
+    // Reportar operaciones que fallaron definitivamente
+    if (allFailedOps.length > 0) {
+      send('action', { text: `⚠️ ${allFailedOps.length} operación(es) NO aplicada(s) — el diff muestra solo los cambios que SÍ se aplicaron:` });
+      for (const f of allFailedOps) {
+        send('action', { text: `  ✗ ${f.path}: "${f.old_str.slice(0, 60).replace(/\n/g, '↵')}${f.old_str.length > 60 ? '...' : ''}"` });
       }
     }
 

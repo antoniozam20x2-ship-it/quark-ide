@@ -1,0 +1,66 @@
+Prompt listo para pegar en Replit Agent
+========================================
+
+Dos fixes independientes en DEEP single-shot (agent.ts), de la auditoría que
+ya hicimos. No tocar DEEP-agéntico (runAgenticLoop) ni los otros 2 caminos
+(FAST READ PATH, CREATE FILE) en esta tarea.
+
+---
+
+1) Bug 1 — Modelo inexistente en el paso de razonamiento/causa-raíz
+
+En el paso de razonamiento previo (líneas ~1596-1637 según la última
+auditoría), la llamada usa el string "claude-sonnet-4-6", que no es un
+modelo válido — la llamada siempre falla, cae al catch, y el patch sale
+"sin razonamiento profundo" sin que el usuario se entere claramente.
+
+Cambios:
+
+- Reemplazar "claude-sonnet-4-6" por "claude-haiku-4-5-20251001" en esa
+  llamada específica (NO usar Sonnet acá — este paso es puramente analítico,
+  citar por qué falla el código, no genera ni modifica código, así que
+  corresponde al tier barato)
+- Mientras estás ahí: si el catch sigue existiendo como red de seguridad,
+  mejorar el mensaje que se le muestra al usuario cuando este paso falla —
+  en vez de silenciarlo con "Continuando sin razonamiento profundo" en el
+  feed narrado, que sea visible que el análisis de causa-raíz no se pudo
+  completar (mismo mecanismo que ya usás para otros eventos del feed, tipo
+  🧠 o ⚠️)
+- Confirmar con un test real que esta llamada ahora sí se ejecuta (antes
+  fallaba silenciosamente el 100% de las veces, así que cualquier prueba
+  debería mostrar la diferencia)
+
+2) Bug 2 — old_str fantasma se skipea sin aviso en single-shot
+
+En applyOperations (single-shot), si el modelo alucina un old_str que no
+existe literalmente en el archivo real, la operación se skipea sin
+reintento — el diff puede parecer aplicado pero el cambio nunca ocurrió.
+
+Cambios (sin llamar a ningún modelo — es una validación determinística):
+
+- Antes de aplicar cada operación, verificar programáticamente que
+  fileContent.includes(operation.old_str) sea true
+- Si es false:
+  a. NO aplicar la operación silenciosamente
+  b. Devolver un error claro en la respuesta al usuario indicando cuál
+     operación falló y por qué ("no se encontró el texto a reemplazar en
+     el archivo — puede que el archivo haya cambiado o el modelo no citó
+     texto literal")
+  c. Marcar explícitamente en el resultado final qué operaciones sí se
+     aplicaron y cuáles no — nunca mostrar un diff que sugiera que todo
+     se aplicó si alguna operación falló
+- Opcional pero recomendado, para acercar el comportamiento al del path
+  agéntico (que maneja esto mejor): si falla la validación, reintentar UNA
+  vez regenerando esa operación específica con generateWithFallback,
+  pasándole el error exacto ("el texto '...' no existe en el archivo,
+  el archivo real dice: ...") para que corrija el old_str — si el segundo
+  intento también falla, ahí sí abortar esa operación con el error visible
+  del punto anterior
+
+---
+
+Después de aplicar ambos cambios, correr build local y confirmar que
+compila. Probar con un caso donde antes se supiera que el razonamiento
+fallaba silenciosamente, y con un caso donde el modelo tienda a alucinar
+old_str (archivo grande truncado por keywords es buen candidato) para
+confirmar que ahora se ve el error en vez de un diff falso.
