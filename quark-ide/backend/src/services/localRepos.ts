@@ -2,12 +2,20 @@
  * localRepos.ts — gestión de clones locales de repos para búsqueda con ripgrep + ctags.
  * Reemplaza la GitHub Code Search API como fuente primaria de grep_code.
  *
- * Rutas:
- *   REPOS_DIR (env) → /data/repos en Railway con Volume montado, /tmp/quark-repos en dev.
+ * Rutas de búsqueda de repos (en orden de prioridad):
+ *   1. REPOS_DIR env  → explícito (ej: /data/repos en Railway con Volume montado)
+ *   2. ARTIFACTS_DIR env → ruta alternativa explícita
+ *   3. <cwd>/artifacts/<repo> → artefactos relativos al proceso
+ *   4. /artifacts/<repo>     → volumen Railway montado en /artifacts
+ *   5. /tmp/quark-repos/<repo> → fallback de desarrollo local
+ *
+ * Cada candidato se valida comprobando:
+ *   a) Clon normal: directorio tiene subcarpeta .git/
+ *   b) Clon bare:   directorio tiene HEAD + objects/ + refs/ en su raíz
  *
  * Pipeline de búsqueda por grep_code:
  *   1. Exact lookup en symbol_index (BD)  → si hay match exacto, retorna directo con línea
- *   2. rg search en clon local            → si el repo está clonado
+ *   2. rg search en clon local            → si el repo está clonado (isCloned → true)
  *   3. Fallback a GitHub Code Search API  → si el repo no está clonado todavía
  */
 
@@ -20,7 +28,8 @@ import pool from './db.js';
 const execAsync  = promisify(exec);
 const execFileAsync = promisify(execFile);
 
-export const REPOS_DIR = process.env.REPOS_DIR ?? '/tmp/quark-repos';
+export const REPOS_DIR    = process.env.REPOS_DIR    ?? '/tmp/quark-repos';
+export const ARTIFACTS_DIR = process.env.ARTIFACTS_DIR ?? '';
 const GITHUB_OWNER = process.env.GITHUB_OWNER ?? '';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? '';
 
@@ -48,14 +57,100 @@ export function isExcludedPath(filePath: string, repo: string): boolean {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-export function repoDir(repo: string): string {
-  return path.join(REPOS_DIR, repo);
+/**
+ * Returns true if `dir` looks like a valid git checkout we can ripgrep.
+ *   • Normal clone → has  <dir>/.git  (directory or file for worktrees)
+ *   • Bare clone   → has  <dir>/HEAD  + <dir>/objects  at root
+ */
+function looksLikeGitDir(dir: string): boolean {
+  try {
+    if (!fs.existsSync(dir)) return false;
+    // Normal clone
+    if (fs.existsSync(path.join(dir, '.git'))) return true;
+    // Bare clone
+    if (
+      fs.existsSync(path.join(dir, 'HEAD')) &&
+      fs.existsSync(path.join(dir, 'objects'))
+    ) return true;
+    return false;
+  } catch {
+    return false;
+  }
 }
 
-export function isCloned(repo: string): boolean {
-  try { return fs.existsSync(path.join(repoDir(repo), '.git')); }
-  catch { return false; }
+/**
+ * Returns the first candidate directory for `repo` that actually exists
+ * as a git checkout, or `null` if the repo is not available locally.
+ *
+ * Search order:
+ *   1. $REPOS_DIR/<repo>           (primary, env-controlled)
+ *   2. $ARTIFACTS_DIR/<repo>       (secondary explicit env var)
+ *   3. <cwd>/artifacts/<repo>      (workspace-relative artifacts folder)
+ *   4. /artifacts/<repo>           (volume mounted at /artifacts on Railway)
+ *   5. /tmp/quark-repos/<repo>     (legacy dev fallback when REPOS_DIR unset)
+ */
+export function resolveRepoDir(repo: string): string | null {
+  const candidates: string[] = [];
+
+  // 1. Primary — always first
+  candidates.push(path.join(REPOS_DIR, repo));
+
+  // 2. Explicit secondary env var (only if different from REPOS_DIR)
+  if (ARTIFACTS_DIR && ARTIFACTS_DIR !== REPOS_DIR) {
+    candidates.push(path.join(ARTIFACTS_DIR, repo));
+  }
+
+  // 3. Workspace-relative artifacts/
+  const cwdArtifacts = path.join(process.cwd(), 'artifacts', repo);
+  if (!candidates.includes(cwdArtifacts)) candidates.push(cwdArtifacts);
+
+  // 4. /artifacts volume
+  const volumeArtifacts = path.join('/artifacts', repo);
+  if (!candidates.includes(volumeArtifacts)) candidates.push(volumeArtifacts);
+
+  // 5. Hardcoded dev fallback (if REPOS_DIR was overridden away from this)
+  const devFallback = path.join('/tmp/quark-repos', repo);
+  if (!candidates.includes(devFallback)) candidates.push(devFallback);
+
+  for (const dir of candidates) {
+    if (looksLikeGitDir(dir)) return dir;
+  }
+  return null;
 }
+
+/**
+ * Canonical directory for `repo`. If already cloned anywhere, returns that
+ * resolved path. Otherwise returns the primary write target (REPOS_DIR).
+ */
+export function repoDir(repo: string): string {
+  return resolveRepoDir(repo) ?? path.join(REPOS_DIR, repo);
+}
+
+/**
+ * Returns true when the repo is available locally for ripgrep.
+ * Logs the resolved path (or the candidates checked) to aid debugging.
+ */
+export function isCloned(repo: string): boolean {
+  const resolved = resolveRepoDir(repo);
+  if (resolved) {
+    console.log(`[isCloned] ✅ ${repo} → ${resolved}`);
+    return true;
+  }
+  // Only log once per process per repo to avoid log spam on every search
+  if (!_isClonedMissCache.has(repo)) {
+    _isClonedMissCache.add(repo);
+    const tried = [
+      path.join(REPOS_DIR, repo),
+      ...(ARTIFACTS_DIR ? [path.join(ARTIFACTS_DIR, repo)] : []),
+      path.join(process.cwd(), 'artifacts', repo),
+      '/artifacts/' + repo,
+      '/tmp/quark-repos/' + repo,
+    ].join(', ');
+    console.log(`[isCloned] ❌ ${repo} no encontrado. REPOS_DIR=${REPOS_DIR} CWD=${process.cwd()} Probados: [${tried}]`);
+  }
+  return false;
+}
+const _isClonedMissCache = new Set<string>();
 
 // Ensure base directory exists
 function ensureBaseDir(): void {
