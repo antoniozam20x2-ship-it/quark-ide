@@ -91,6 +91,25 @@ export async function initDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_smart_read_log_session ON smart_read_log(session_id);
     CREATE INDEX IF NOT EXISTS idx_smart_read_log_repo    ON smart_read_log(repo, created_at);
 
+    CREATE TABLE IF NOT EXISTS symbol_index (
+      id          BIGSERIAL PRIMARY KEY,
+      repo        TEXT        NOT NULL,
+      symbol_name TEXT        NOT NULL,
+      file_path   TEXT        NOT NULL,
+      line_number INTEGER     NOT NULL,
+      symbol_type TEXT        NOT NULL DEFAULT 'unknown',
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS repo_sync_log (
+      repo          TEXT        PRIMARY KEY,
+      synced_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      files_changed INTEGER     NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_symbol_index_repo_name ON symbol_index(repo, symbol_name);
+    CREATE INDEX IF NOT EXISTS idx_symbol_index_repo_file ON symbol_index(repo, file_path);
+
     CREATE INDEX IF NOT EXISTS idx_audit_history_repo ON audit_history(repo_name);
     CREATE INDEX IF NOT EXISTS idx_audit_history_review_date ON audit_history(review_date);
     CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);

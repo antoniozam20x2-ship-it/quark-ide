@@ -1,0 +1,113 @@
+Prompt listo para pegar en Replit Agent
+========================================
+
+Este es un cambio grande — léelo completo antes de empezar a implementar.
+Objetivo: reemplazar la búsqueda de código vía API de GitHub (que no
+devuelve línea exacta y se descontinúa ~29-sep-2026) por un clon local de
+los 5 repos dentro del mismo backend de Quark IDE, con búsqueda vía
+ripgrep + índice de símbolos vía Tree-sitter/ctags. Sin webhook — actualización
+manual por botón.
+
+No tocar: el flujo de escritura/commit a GitHub (sigue igual, vía API).
+Este cambio es SOLO para lectura/búsqueda.
+
+---
+
+1) Volumen persistente
+
+- Agregar un Volume de Railway al servicio backend existente (no crear
+  servicio nuevo), montado en una ruta tipo /data/repos
+- No es necesario un servicio dedicado — reusar el backend actual para
+  mantener el costo mínimo (solo pagás almacenamiento, ~$0.15/GB-mes)
+
+2) Clon inicial de los 5 repos
+
+- Los 5 repos a clonar: Signal OS, Sniper OS, Studio, Quark(-agent),
+  y el quinto repo relevante (confirmar el nombre exacto antes de
+  implementar si no está claro)
+- Clon vía HTTPS usando el mismo token de GitHub que ya usás para la API
+  (mismo scope de permisos, no hace falta uno nuevo)
+- Lazy clone: si un repo no está clonado todavía y se lo necesita, clonarlo
+  en ese momento en vez de forzar que los 5 estén clonados desde el arranque
+- Cada repo en su propia carpeta dentro del volumen: /data/repos/<nombre>
+
+3) Botón manual de actualización (reemplaza webhook)
+
+- UI: un botón "🔄 Actualizar [nombre]" por cada uno de los 5 repos,
+  visible donde el usuario selecciona el repo activo en Quark
+- Al presionarlo: git pull de ese repo específico (o git clone si todavía
+  no existe localmente)
+- Mostrar junto al botón cuándo fue la última actualización (timestamp
+  relativo, ej. "hace 2 horas") — guardar ese timestamp en una tabla o
+  campo simple por repo
+- Si el pull trae cambios: regenerar el índice de símbolos SOLO para los
+  archivos que cambiaron (no todo el repo de nuevo) — usar git diff
+  --name-only entre el HEAD anterior y el nuevo para saber cuáles
+
+4) Instalar ripgrep + universal-ctags a nivel de sistema
+
+- Agregar estos paquetes al build de Railway (Nixpacks/Railpack) — vía
+  nixpacks.toml o el mecanismo equivalente que use el proyecto
+- Confirmar que ambos binarios queden disponibles en el PATH del contenedor
+  en producción, no solo en desarrollo local
+
+5) Índice de símbolos (Tree-sitter, multi-lenguaje)
+
+- Usar web-tree-sitter (WASM, no requiere compilación nativa) en vez del
+  TypeScript Compiler API + regex que se usa hoy en
+  generateStructuralSkeleton() para el smart caching — Tree-sitter cubre
+  TS/JS/Python/etc con una sola herramienta
+- Al clonar o actualizar un repo, parsear cada archivo relevante y extraer:
+  nombre de símbolo (función/clase/método/constante), archivo, línea exacta
+- Guardar en una tabla nueva (ej. symbol_index): repo, symbol_name, file_path,
+  line_number, symbol_type
+- Esta tabla es consultable con un lookup directo — si el usuario pregunta
+  por "placeTrailingStop", se busca primero acá antes de hacer cualquier
+  grep, y si hay match exacto, se va directo a leer esa línea sin pasos
+  de búsqueda intermedios
+
+6) grep_code pasa a usar ripgrep local
+
+- Reemplazar (o agregar como camino primario, con fallback a la API de
+  GitHub si el repo no está clonado todavía) la llamada a la GitHub Code
+  Search API por un child_process que ejecuta `rg` sobre
+  /data/repos/<repo>
+- rg ya devuelve archivo:línea:contenido de forma nativa — pasarle ese
+  resultado a Haiku tal cual, sin necesidad de calcular la línea por texto
+  como se hizo en el fix anterior (ese cálculo aproximado deja de ser
+  necesario para los repos ya clonados)
+- Mantener el fallback a la API de GitHub SOLO para el caso de un repo que
+  todavía no se haya clonado (mientras se clona)
+
+7) Actualizar HAIKU_SEARCH_SYSTEM
+
+- Agregar instrucción: antes de usar grep_code, consultar primero el
+  symbol_index (lookup directo) si la pregunta menciona un nombre de
+  función/símbolo específico — solo caer a grep_code si el símbolo no
+  está en el índice o la pregunta es más conceptual que un nombre exacto
+
+8) Seguridad — extender las mismas exclusiones que ya existen
+
+- La búsqueda local NUNCA debe leer ni indexar: .env, archivos con SECRET
+  o API_KEY en el nombre, dist/, node_modules/, .min.js, ni las rutas de
+  riesgo ya definidas en isNoCacheFile() para Ahorro/Trade-SnipeOS — aplicar
+  el mismo filtro a la etapa de clonado/indexado, no solo a la lectura
+
+---
+
+Plan de prueba antes de dar esto por cerrado:
+
+1. Actualizar manualmente uno de los 5 repos con el botón nuevo, confirmar
+   que el timestamp se actualiza y el índice de símbolos se regenera
+2. Repetir la prueba de "trailing stop en Signal OS" en CHAT — confirmar
+   que ahora resuelve en muy pocos pasos (lookup directo en symbol_index
+   en vez de grep + adivinar líneas)
+3. Repetir la prueba de "setAgentActive/runCycle" en Signal OS (Ahorar) —
+   mismo chequeo, en el caso que había fallado antes
+4. Confirmar que un repo NO clonado todavía sigue funcionando por el
+   fallback a la API de GitHub, sin errores
+5. Confirmar que archivos excluidos (.env, etc.) no aparecen ni en el clon
+   indexado ni en resultados de búsqueda
+
+Después de todo esto, correr build local y confirmar que compila antes de
+hacer commit.

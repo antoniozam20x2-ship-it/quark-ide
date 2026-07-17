@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getFileTree, getFileContent, getFileContentConditional, searchCodeInRepo, createOrUpdateFile } from '../services/github.js';
+import { lookupSymbol, rgSearch, isCloned } from '../services/localRepos.js';
 import { callAI } from '../lib/aiRouter.js';
 import { generateContent } from '../services/gemini.js';
 import pool from '../services/db.js';
@@ -879,8 +880,33 @@ async function runAgenticLoop(
 
       if (tool.name === 'grep_code') {
         send('action', { text: `🔎 Buscando "${tool.input.pattern}"` });
-        const results = await searchCodeInRepo(tool.input.pattern, repo);
-        resultText = results.slice(0, 10).map((r: any) => r.path).join('\n') || 'Sin resultados';
+        const agTerms = tool.input.pattern.split('|').map((t: string) => t.trim()).filter(Boolean);
+
+        // 1. Symbol index exact lookup
+        let agSymResult = '';
+        for (const term of agTerms) {
+          if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(term)) {
+            const sym = await lookupSymbol(term, repo);
+            if (sym) {
+              agSymResult = `${sym.filePath} — línea ${sym.lineNumber}: [${sym.symbolType}] "${term}"`;
+              break;
+            }
+          }
+        }
+
+        if (agSymResult) {
+          resultText = agSymResult;
+        } else if (isCloned(repo)) {
+          // 2. ripgrep on local clone
+          const rgResults = await rgSearch(tool.input.pattern, repo);
+          resultText = rgResults.length > 0
+            ? rgResults.map(r => `${r.path} — línea ${r.line}: "${r.text}"`).join('\n')
+            : `Sin resultados para "${tool.input.pattern}" en el clon local.`;
+        } else {
+          // 3. Fallback: GitHub API (repo not cloned yet)
+          const results = await searchCodeInRepo(tool.input.pattern, repo);
+          resultText = results.slice(0, 10).map((r: any) => r.path).join('\n') || 'Sin resultados';
+        }
       }
 
       if (tool.name === 'apply_patch') {
@@ -2802,9 +2828,35 @@ async function executeChatTool(
   if (name === 'grep_code') {
     send('action', { text: `🔎 Buscando "${input.pattern}"` });
     const rawTerms = input.pattern.split('|').map((t: string) => t.trim()).filter(Boolean);
+    console.log(`[grep_code] patrón recibido: "${input.pattern}" → ${rawTerms.length} término(s) pipe-separado(s): [${rawTerms.join(', ')}]`);
+
+    // ── 1. Symbol index — exact identifier lookup, O(1) ──────────────────────
+    for (const term of rawTerms) {
+      if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(term)) {
+        const sym = await lookupSymbol(term, repo);
+        if (sym) {
+          console.log(`[grep_code] symbol_index hit: ${term} → ${sym.filePath}:${sym.lineNumber}`);
+          send('action', { text: `⚡ Símbolo en índice: ${sym.filePath}:${sym.lineNumber}` });
+          return `${sym.filePath} — línea ${sym.lineNumber}: [${sym.symbolType}] "${term}"`;
+        }
+      }
+    }
+
+    // ── 2. ripgrep on local clone — primary search ────────────────────────────
+    if (isCloned(repo)) {
+      const rgResults = await rgSearch(input.pattern, repo);
+      if (rgResults.length > 0) {
+        send('action', { text: `📍 ${rgResults.length} resultado(s) vía ripgrep local` });
+        return rgResults.map(r => `${r.path} — línea ${r.line}: "${r.text}"`).join('\n');
+      }
+      return `Sin resultados para "${input.pattern}" en el clon local. El término puede no existir literalmente — revisá variantes o usá read_file en los archivos más probables.`;
+    }
+
+    // ── 3. Fallback: GitHub Code Search API (repo no clonado aún) ─────────────
+    send('action', { text: `☁️ Repo no clonado aún — buscando vía GitHub API` });
     const seen = new Set<string>();
     const rawResults: { path: string; fragment: string }[] = [];
-    console.log(`[grep_code] patrón recibido: "${input.pattern}" → ${rawTerms.length} término(s) pipe-separado(s): [${rawTerms.join(', ')}]`);
+    console.log(`[grep_code] fallback GitHub API para "${input.pattern}"`);
     for (const rawTerm of rawTerms) {
       if (rawResults.length >= 10) break;
       const cleaned = cleanForGitHubSearch(rawTerm);
@@ -2900,6 +2952,9 @@ en pagos: charge, invoice, webhook)
 3. PRIMERA PASADA — mandá TODAS las variantes en UN SOLO llamado a grep_code usando el separador "|": \
 pattern: "trailingStop|TRAILING_STOP|trailing_stop|callbackRatio". NO busques una, esperes el resultado, \
 y recién ahí pienses la siguiente. Todas las variantes van juntas en la primera llamada.
+   NOTA: grep_code ya consulta automáticamente el índice de símbolos del repo antes de buscar. Si el \
+término es un nombre de función/clase exacto que ya fue indexado, vas a obtener el archivo y línea exacta \
+de inmediato sin pasos intermedios. Mandá el nombre exacto (camelCase) como primera variante en el pipe.
 
 4. SEGUNDA PASADA (solo si la primera no encontró nada): revisá los nombres de archivo reales que listaste \
 en el paso 1, generá nuevas variantes informadas por esos nombres reales, y hacé UNA segunda búsqueda con \

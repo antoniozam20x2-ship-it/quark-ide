@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["nodejs_20"]
+nixPkgs = ["nodejs_20", "git", "ripgrep", "universal-ctags"]
 
 [phases.install]
 cmds = ["cd quark-ide && npm install"]

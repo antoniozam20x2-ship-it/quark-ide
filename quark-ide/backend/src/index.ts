@@ -19,6 +19,7 @@ import editorRouter from './routes/editor.js';
 import studioRouter from './routes/studio.js';
 import healthRouter from './routes/health.js';
 import auditRouter from './routes/audit.js';
+import reposRouter from './routes/repos.js';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3001);
@@ -48,6 +49,7 @@ app.use('/api/editor', editorRouter);
 app.use('/api/studio', studioRouter);
 app.use('/api/health', healthRouter);
 app.use('/api/audit', auditRouter);
+app.use('/api/repos', reposRouter);
 
 app.get('/api/costs', (_req, res) => {
   res.json(getCosts());

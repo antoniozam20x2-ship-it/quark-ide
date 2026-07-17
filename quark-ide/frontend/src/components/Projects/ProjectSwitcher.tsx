@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { PROJECTS, type Project } from '../../App';
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
@@ -8,9 +8,42 @@ interface Props {
   onSwitch: (project: Project) => void;
 }
 
+interface RepoStatus {
+  repo: string;
+  cloned: boolean;
+  syncedAt: string | null;
+  filesChanged: number;
+}
+
+function formatRelative(iso: string | null): string {
+  if (!iso) return 'nunca sincronizado';
+  const diff = Date.now() - new Date(iso).getTime();
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return 'hace un momento';
+  if (min < 60) return `hace ${min} min`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `hace ${hr}h`;
+  return `hace ${Math.floor(hr / 24)}d`;
+}
+
 export default function ProjectSwitcher({ activeProject, onSwitch }: Props) {
-  const [open, setOpen]           = useState(false);
-  const [switching, setSwitching] = useState(false);
+  const [open, setOpen]             = useState(false);
+  const [switching, setSwitching]   = useState(false);
+  const [statuses, setStatuses]     = useState<Record<string, RepoStatus>>({});
+  const [syncing, setSyncing]       = useState<string | null>(null);
+
+  // Fetch repo status whenever dropdown opens
+  useEffect(() => {
+    if (!open) return;
+    fetch(`${API_BASE}/api/repos/status`)
+      .then(r => r.json())
+      .then((list: RepoStatus[]) => {
+        const map: Record<string, RepoStatus> = {};
+        for (const s of list) map[s.repo] = s;
+        setStatuses(map);
+      })
+      .catch(() => {/* silently ignore if repos API not yet available */});
+  }, [open]);
 
   async function switchProject(p: Project) {
     if (p.repo === activeProject.repo) { setOpen(false); return; }
@@ -26,6 +59,22 @@ export default function ProjectSwitcher({ activeProject, onSwitch }: Props) {
       setSwitching(false);
       setOpen(false);
     }
+  }
+
+  async function syncRepo(e: React.MouseEvent, repo: string) {
+    e.stopPropagation(); // don't trigger switchProject
+    if (syncing) return;
+    setSyncing(repo);
+    try {
+      await fetch(`${API_BASE}/api/repos/${repo}/sync`, { method: 'POST' });
+      // Refresh statuses after sync
+      const res = await fetch(`${API_BASE}/api/repos/status`);
+      const list: RepoStatus[] = await res.json();
+      const map: Record<string, RepoStatus> = {};
+      for (const s of list) map[s.repo] = s;
+      setStatuses(map);
+    } catch { /* ignore */ }
+    finally { setSyncing(null); }
   }
 
   return (
@@ -96,6 +145,9 @@ export default function ProjectSwitcher({ activeProject, onSwitch }: Props) {
         }}>
           {PROJECTS.map((p) => {
             const isActive = p.repo === activeProject.repo;
+            const status   = statuses[p.repo];
+            const isSyncing = syncing === p.repo;
+
             return (
               <button
                 key={p.repo}
@@ -121,6 +173,8 @@ export default function ProjectSwitcher({ activeProject, onSwitch }: Props) {
                 }}
               >
                 <span style={{ fontSize: 14, lineHeight: 1 }}>{p.emoji}</span>
+
+                {/* Repo name + sync status */}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{
                     color: isActive ? '#00ff88' : '#e2e8f0',
@@ -134,21 +188,69 @@ export default function ProjectSwitcher({ activeProject, onSwitch }: Props) {
                     {p.name}
                   </div>
                   <div style={{
-                    color: '#3a3a5c',
+                    color: status?.cloned ? '#3a5c4a' : '#3a3a5c',
                     fontFamily: 'JetBrains Mono, monospace',
-                    fontSize: 10,
+                    fontSize: 9,
+                    marginTop: 1,
                   }}>
-                    {p.repo}
+                    {status
+                      ? `${status.cloned ? '● ' : '○ '}${formatRelative(status.syncedAt)}`
+                      : p.repo}
                   </div>
                 </div>
+
+                {/* Sync button */}
+                <button
+                  onClick={(e) => syncRepo(e, p.repo)}
+                  disabled={isSyncing || !!syncing}
+                  title={`Actualizar clon local de ${p.repo}`}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid #1e1e3f',
+                    borderRadius: 4,
+                    color: isSyncing ? '#00ff88' : '#3a3a5c',
+                    cursor: isSyncing || syncing ? 'wait' : 'pointer',
+                    fontSize: 11,
+                    padding: '2px 5px',
+                    lineHeight: 1,
+                    flexShrink: 0,
+                    transition: 'color 0.15s, border-color 0.15s',
+                    animation: isSyncing ? 'spin 1s linear infinite' : 'none',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isSyncing && !syncing)
+                      (e.currentTarget as HTMLButtonElement).style.color = '#00ff88';
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isSyncing)
+                      (e.currentTarget as HTMLButtonElement).style.color = '#3a3a5c';
+                  }}
+                >
+                  🔄
+                </button>
+
                 {isActive && (
-                  <span style={{ color: '#00ff88', fontSize: 10, flexShrink: 0 }}>●</span>
+                  <span style={{ color: '#00ff88', fontSize: 10, flexShrink: 0, marginLeft: 2 }}>●</span>
                 )}
               </button>
             );
           })}
+
+          <div style={{
+            padding: '6px 12px',
+            color: '#2a2a4c',
+            fontFamily: 'JetBrains Mono, monospace',
+            fontSize: 9,
+            borderTop: '1px solid #1e1e3f',
+          }}>
+            🔄 = clonar/actualizar repo local para búsqueda rápida
+          </div>
         </div>
       )}
+
+      <style>{`
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+      `}</style>
     </div>
   );
 }
