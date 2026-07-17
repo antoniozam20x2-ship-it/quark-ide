@@ -1,0 +1,60 @@
+# PROMPT PARA REPLIT — Diagnóstico: estado real del clon de Signal OS en /data/repos
+
+## Contexto
+
+Ya confirmamos que `REPOS_DIR=/data/repos` está correctamente seteada en las
+variables de entorno de Railway. Sin embargo, al correr una búsqueda en FAST mode
+para Signal OS (repo `Ahorar`), el resultado fue:
+
+```
+⚠️ Sin resultados en índice local ni GitHub — usando árbol como fallback
+```
+
+Esto es distinto al error anterior ("Repo no clonado aún — buscando vía GitHub API").
+Ahora `isCloned('Ahorar')` está devolviendo `true` (porque si no, hubiera caído al
+mensaje de "no clonado"), pero `rgSearch('trailingStop|...', 'Ahorar')` no encontró
+NADA — a pesar de que sabemos con certeza que el término `placeTrailingStop` existe
+en `autonomousAgent.ts` (ya lo confirmamos antes vía GitHub API).
+
+Esto sugiere que `isCloned` está devolviendo `true` porque existe un directorio
+`.git` en `/data/repos/Ahorar`, pero el contenido del clon está vacío, incompleto, o
+corresponde a un clon viejo/roto de un intento anterior (posiblemente de cuando
+`REPOS_DIR` todavía no estaba bien seteada y el clon se hizo en otro lugar o falló a
+mitad de camino).
+
+## Lo que necesito que verifiques
+
+Agregá un endpoint de diagnóstico temporal (o corré esto directo en la consola/shell
+de Railway si tenés acceso) que confirme, para el repo `Ahorar`:
+
+1. **¿Existe `/data/repos/Ahorar/.git`?** (ya sabemos que sí, según `isCloned`, pero
+   confirmalo explícitamente)
+
+2. **¿Cuántos archivos hay dentro de `/data/repos/Ahorar`?** — un `ls -la
+   /data/repos/Ahorar` o equivalente. Si el clon fue exitoso deberías ver la
+   estructura completa del repo (carpetas como `artifacts/`, `lib/`, etc. — las
+   mismas que aparecieron en el fallback del árbol en la última prueba).
+
+3. **¿Existe específicamente el archivo
+   `/data/repos/Ahorar/artifacts/api-server/src/services/autonomousAgent.ts`** (o la
+   ruta real donde vive `placeTrailingStop` — confirmar la ruta exacta con la API de
+   GitHub si hace falta)? Si existe, hacé un `grep -n "trailingStop"` directo sobre
+   ese archivo en disco para confirmar que el contenido es correcto.
+
+4. **¿Cuándo se hizo el último `git log -1` en ese clon?** — para saber si es un
+   clon reciente (post-fix de `REPOS_DIR`) o uno viejo que quedó de un intento
+   anterior fallido.
+
+5. Adicionalmente, confirmá **cuánto espacio libre queda en el Volume de Railway**
+   (`df -h /data`) — si el Volume se quedó sin espacio a mitad del clon (con 5 repos
+   clonándose), eso explicaría un clon truncado que deja `.git` creado pero el
+   checkout incompleto.
+
+## No apliques ningún fix todavía
+
+Primero necesito ver estos resultados para saber si el fix correcto es:
+- Borrar el clon roto de `Ahorar` y re-clonarlo desde cero (`rm -rf
+  /data/repos/Ahorar && synceo manual`), o
+- Hay un problema de espacio en el Volume que hay que resolver antes de re-intentar
+
+Pasame el output de los 5 puntos de arriba.
