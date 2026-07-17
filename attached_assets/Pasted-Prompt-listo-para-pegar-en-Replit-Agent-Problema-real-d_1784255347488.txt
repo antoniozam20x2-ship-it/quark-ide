@@ -1,0 +1,50 @@
+Prompt listo para pegar en Replit Agent
+========================================
+
+Problema real detectado: en archivos grandes (ej. autonomousAgent.ts, miles
+de líneas), cuando Haiku necesita leer el cuerpo completo de una función que
+ya localizó con grep_code, en vez de ir directo a la línea exacta, adivina
+rangos secuenciales de 100-200 líneas (1-100, 700-900, 900-1050, 1800-2000,
+2400-2600) hasta encontrarla — agotando el presupuesto de 12 pasos sin
+concluir.
+
+Investigar y arreglar:
+
+1) Confirmar si grep_code ya devuelve número de línea exacto por match
+
+- Ubicar dónde se parsea la respuesta de la GitHub Code Search API en
+  grep_code (executeChatTool)
+- Confirmar si el resultado que se le da al modelo incluye el número de
+  línea de cada coincidencia, o solo el nombre del archivo
+- Si NO incluye línea: agregarlo — la API de GitHub normalmente devuelve
+  fragmentos con contexto de línea, hay que extraerlo y pasarlo explícito
+  en el resultado de la tool (ej: "match en línea 847 de autonomousAgent.ts")
+
+2) Reforzar el system prompt de Haiku (HAIKU_SEARCH_SYSTEM) con esta regla
+
+Agregar explícitamente:
+
+```
+Cuando grep_code encuentre una coincidencia con número de línea, tu próximo
+read_file debe apuntar directo a esa línea ± 50 líneas de contexto — NUNCA
+leas el archivo en bloques secuenciales adivinando dónde está (ej: 1-100,
+100-200, 200-300...). Si necesitás confirmar el rango completo de una
+función que empieza en la línea que encontraste, leé un rango generoso
+alrededor de esa línea (ej. línea-20 a línea+150) en UNA sola llamada, no
+en múltiples llamadas incrementales.
+```
+
+3) Caso límite: si el match no trae línea (ej. búsqueda por concepto, no
+   por símbolo exacto)
+
+- En ese caso, permitir una sola llamada de read_file con un rango amplio
+  (ej. primeras 300 líneas para entender la estructura del archivo, o
+  usar el skeleton generado por generateStructuralSkeleton() si ya existe
+  para ese archivo desde el smart caching, para ubicar la función sin leer
+  todo el contenido)
+
+Después de aplicar el fix, repetir la prueba de "trailing stop en Signal
+OS" en CHAT y confirmar: (a) el read_file después del grep va directo a la
+zona correcta sin lecturas secuenciales de más de 1-2 intentos, (b) el
+total de pasos usados baja considerablemente respecto al intento anterior
+que agotó los 12 sin concluir.

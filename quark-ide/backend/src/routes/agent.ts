@@ -2803,25 +2803,22 @@ async function executeChatTool(
     send('action', { text: `🔎 Buscando "${input.pattern}"` });
     const rawTerms = input.pattern.split('|').map((t: string) => t.trim()).filter(Boolean);
     const seen = new Set<string>();
-    const allResults: string[] = [];
+    const rawResults: { path: string; fragment: string }[] = [];
     console.log(`[grep_code] patrón recibido: "${input.pattern}" → ${rawTerms.length} término(s) pipe-separado(s): [${rawTerms.join(', ')}]`);
     for (const rawTerm of rawTerms) {
-      if (allResults.length >= 10) break;
+      if (rawResults.length >= 10) break;
       const cleaned = cleanForGitHubSearch(rawTerm);
       const termsToTry = generateSearchVariants(cleaned);
       console.log(`[grep_code] término "${rawTerm}" → ${termsToTry.length} sub-búsqueda(s) vía generateSearchVariants: [${termsToTry.join(', ')}]`);
       let foundWithVariant = false;
       for (const term of termsToTry) {
-        if (allResults.length >= 10) break;
+        if (rawResults.length >= 10) break;
         try {
           const results = await searchCodeInRepo(term, repo);
           for (const r of results.slice(0, 10)) {
             if (!seen.has(r.path)) {
               seen.add(r.path);
-              const snippet = r.fragments[0]
-                ? ` — "${r.fragments[0].replace(/\n/g, ' ').slice(0, 120)}"`
-                : '';
-              allResults.push(`${r.path}${snippet}`);
+              rawResults.push({ path: r.path, fragment: r.fragments[0] ?? '' });
             }
           }
           if (results.length > 0) { foundWithVariant = true; break; }
@@ -2838,10 +2835,34 @@ async function executeChatTool(
       }
       if (rawTerms.length > 1) await new Promise(r => setTimeout(r, 300));
     }
-    if (allResults.length === 0) {
+    if (rawResults.length === 0) {
       return `Sin resultados vía GitHub code search para "${input.pattern}". Causas posibles: delay de indexación de GitHub, rate limit silencioso, o caracteres especiales en el patrón (${input.pattern}). Si el término existe, usá read_file directamente en los archivos donde lo esperás encontrar, en vez de reintentar grep_code con el mismo término.`;
     }
-    return allResults.slice(0, 10).join('\n');
+
+    // Resolve line numbers by fetching file content (top 3 only to limit API calls)
+    const toReturn = rawResults.slice(0, 10);
+    const resolved = await Promise.all(
+      toReturn.map(async ({ path, fragment }, idx) => {
+        if (!fragment) return path;
+        if (idx < 3) {
+          try {
+            const fileContent = await getFileContent(path, repo);
+            // Find the first distinctive line of the fragment in the file
+            const fragLine = fragment.split('\n').find(l => l.trim().length > 8) ?? fragment.slice(0, 60);
+            const charIdx = fileContent.indexOf(fragLine.trim());
+            if (charIdx !== -1) {
+              const lineNum = fileContent.slice(0, charIdx).split('\n').length;
+              console.log(`[grep_code] línea resuelta: ${path}:${lineNum}`);
+              return `${path} — línea ~${lineNum}: "${fragment.replace(/\n/g, ' ').slice(0, 100)}"`;
+            }
+          } catch (e: any) {
+            console.warn(`[grep_code] no se pudo resolver línea para ${path}:`, e.message);
+          }
+        }
+        return `${path} — "${fragment.replace(/\n/g, ' ').slice(0, 120)}"`;
+      })
+    );
+    return resolved.join('\n');
   }
   if (name === 'propose_patch') {
     send('patch_proposal', {
@@ -2886,6 +2907,18 @@ las variantes más probables dado lo que existe en el repo.
 
 5. Si después de estas dos pasadas no encontraste nada, terminá tu respuesta con el texto EXACTO: \
 "BÚSQUEDA_SIN_RESULTADOS". No rellenes con conocimiento general que no venga del código real.
+
+REGLA CRÍTICA — read_file después de grep_code:
+Cuando grep_code devuelva un resultado con "línea ~N", tu siguiente read_file DEBE apuntar \
+directamente a esa zona: start_line: N-20, end_line: N+150 — UNA sola llamada. \
+NUNCA leas el archivo en bloques secuenciales adivinando dónde está la función \
+(ej: 1-100, 100-200, 200-300...). Si la función es más larga que ese rango, ampliá \
+end_line en esa misma llamada (ej. N+300), no con una segunda llamada incremental.
+
+Si grep_code NO incluye número de línea (búsqueda conceptual sin match exacto): \
+hacé UNA sola llamada a read_file con start_line: 1, end_line: 300 para ver la \
+estructura general del archivo, luego UNA segunda llamada dirigida a la sección \
+relevante que identifiques de esa estructura. No más de dos llamadas por archivo.
 
 Una vez que encontraste los archivos relevantes, leelos con read_file y respondé la pregunta citando \
 fragmentos exactos del código. No inferás lo que no leíste.`;
