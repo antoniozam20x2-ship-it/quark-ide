@@ -2398,6 +2398,13 @@ function classifyEffort(message: string): 'medium' | 'high' | 'xhigh' {
   return 'medium';
 }
 
+// Classifies whether the user wants an EXPLANATION (Haiku handles end-to-end)
+// or CODE GENERATION/MODIFICATION (Haiku explores, Sonnet patches).
+function classifyIntent(message: string): 'explain' | 'generate' {
+  const GENERATE_SIGNALS = /\b(corrige|corrigí|arregla|arreglá|implementa|implementá|agrega|agregá|añade|añadí|crea|creá|refactor|escribe|escribí|modifica|modificá|cambia|cambiá|propone|proponé|propone un patch|haz el cambio|hacé el cambio|fix|patch|añadir|agregar|crear|modificar|cambiar|implementar|escribir|elimina|eliminá|borrá|borrar|remov|delet|insert|reemplaz|reemplazá|update|añadi)\b/i;
+  return GENERATE_SIGNALS.test(message) ? 'generate' : 'explain';
+}
+
 function classifyComplexity(message: string): 'simple' | 'complex' {
   const COMPLEX_SIGNALS = [
     /\b(por qué|causa raíz|no funciona|bug|error|falla|se rompe|arregla|corrige|resuelve)\b/i,
@@ -2767,10 +2774,12 @@ async function executeChatTool(
     const rawTerms = input.pattern.split('|').map((t: string) => t.trim()).filter(Boolean);
     const seen = new Set<string>();
     const allResults: string[] = [];
+    console.log(`[grep_code] patrón recibido: "${input.pattern}" → ${rawTerms.length} término(s) pipe-separado(s): [${rawTerms.join(', ')}]`);
     for (const rawTerm of rawTerms) {
       if (allResults.length >= 10) break;
       const cleaned = cleanForGitHubSearch(rawTerm);
       const termsToTry = generateSearchVariants(cleaned);
+      console.log(`[grep_code] término "${rawTerm}" → ${termsToTry.length} sub-búsqueda(s) vía generateSearchVariants: [${termsToTry.join(', ')}]`);
       let foundWithVariant = false;
       for (const term of termsToTry) {
         if (allResults.length >= 10) break;
@@ -2852,14 +2861,17 @@ Una vez que encontraste los archivos relevantes, leelos con read_file y respond�
 fragmentos exactos del código. No inferás lo que no leíste.`;
 
 // Tools available for Sonnet synthesis turn — no search tools, only read + patch
-const SONNET_SYNTHESIS_TOOLS = CHAT_TOOLS.filter(t => ['read_file', 'propose_patch'].includes(t.name));
+// Sonnet only gets propose_patch — it must not re-investigate with search tools.
+// Haiku already gathered all context; Sonnet's job is to write the patch.
+const SONNET_SYNTHESIS_TOOLS = CHAT_TOOLS.filter(t => t.name === 'propose_patch');
 
 async function runHaikuTier(
   messages: any[],
   repo: string,
   send: (event: string, data: Record<string, unknown>) => void,
   sessionId: string,
-  maxSteps = 8,
+  maxSteps = 12,
+  allowPatch = true,
 ): Promise<{ resolved: boolean; messages: any[]; foundFiles: boolean }> {
   send('action', { text: '⚡ Haiku 4.5 — exploración inteligente del codebase' });
   send('model_active', { model: 'Haiku 4.5', tier: 'balanced' });
@@ -2879,8 +2891,8 @@ async function runHaikuTier(
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 4096,
         system: [{ type: 'text', text: HAIKU_SEARCH_SYSTEM, cache_control: { type: 'ephemeral' } }],
-        tools: CHAT_TOOLS.map((t, i) =>
-          i === CHAT_TOOLS.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t
+        tools: (allowPatch ? CHAT_TOOLS : CHAT_TOOLS.filter(t => t.name !== 'propose_patch')).map((t, i, arr) =>
+          i === arr.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t
         ),
         messages,
       }),
@@ -3021,10 +3033,18 @@ async function runChatTurn(
   }
 
   // ── Haiku exploration phase (ALL paths that need code inspection) ─────────────
-  // Both simple-NEEDS_TOOLS and complex queries come here. Haiku explores with the
-  // smart domain-aware search strategy. Sonnet only enters afterward, for synthesis.
+  // Classify intent first so we can:
+  //   'explain'  → Haiku handles everything end-to-end (search + final answer)
+  //   'generate' → Haiku searches/reads, then Sonnet writes the patch
+  const intent = classifyIntent(userMessage);
   {
-    const haikuResult = await runHaikuTier(messages, repo, send, sessionId);
+    // For 'generate' queries, strip propose_patch from Haiku's tools so it cannot
+    // short-circuit into writing the patch itself — that's Sonnet's job.
+    const haikuResult = await runHaikuTier(
+      messages, repo, send, sessionId,
+      12,                          // maxSteps
+      intent === 'explain',        // allowPatch: explain queries may patch; generate queries must not
+    );
     if (haikuResult.resolved) {
       await saveChatHistory(sessionId, haikuResult.messages);
       return;
@@ -3044,35 +3064,47 @@ async function runChatTurn(
       return;
     }
 
-    // Haiku found relevant files but didn't produce a final answer — hand off
-    // to Sonnet with a synthesis-only instruction.  Sonnet gets NO search tools
-    // (grep_code / list_files are excluded) so it cannot loop into exploration.
+    if (intent === 'explain') {
+      // Explain/investigate queries: Haiku is authoritative. It found files but hit
+      // the step limit before producing a final text answer — save and return.
+      // The intermediate messages (streamed during exploration) are already visible
+      // to the user; Sonnet must NOT be invoked for explanation queries.
+      await saveChatHistory(sessionId, haikuResult.messages);
+      return;
+    }
+
+    // intent === 'generate': Haiku explored and found the relevant files.
+    // Hand off to Sonnet with a code-generation-only instruction.
+    // Sonnet receives ONLY propose_patch — no search, no read_file re-exploration.
     messages.push({
       role: 'user',
-      content: '[Haiku 4.5 ya exploró el codebase y cargó los archivos relevantes (ver mensajes anteriores). ' +
-        'Tu tarea es ÚNICAMENTE sintetizar la respuesta final citando fragmentos exactos del código ya presente en la conversación. ' +
-        'NO uses grep_code ni list_files — el contexto ya está cargado. ' +
-        'Si necesitás una sección específica de un archivo ya identificado, usá read_file con start_line/end_line. ' +
-        'Respondé en un solo turno.]',
+      content: '[Haiku 4.5 ya exploró el codebase y encontró los archivos relevantes (ver mensajes anteriores). ' +
+        'Tu tarea es ÚNICAMENTE generar el patch de código requerido usando propose_patch. ' +
+        'NO uses grep_code, list_files ni read_file — todo el contexto ya está cargado en la conversación. ' +
+        'Basate en los fragmentos de código que Haiku ya leyó y proponé el cambio concreto con propose_patch.]',
     });
   }
 
-  // ── Sonnet synthesis phase ────────────────────────────────────────────────────
-  // Sonnet enters ONCE, with no search tools, to produce the final answer.
-  // grep_code and list_files are excluded from SONNET_SYNTHESIS_TOOLS.
+  // ── Sonnet patch-generation phase ────────────────────────────────────────────
+  // Only reached for 'generate' intent. Sonnet writes the patch; it cannot search.
+  // SONNET_SYNTHESIS_TOOLS = [propose_patch] only — no read_file, no grep_code.
 
-  const systemPrompt = `Eres QUARK, un asistente de código que conversa con el usuario igual que un ingeniero senior — no un generador de una sola pasada.
+  const systemPrompt = `Eres QUARK, un asistente de código que actúa como ingeniero senior. \
+Haiku 4.5 ya investigó el codebase y el contexto relevante está en el historial de esta conversación.
+
+TAREA: generá el patch de código solicitado usando propose_patch. No hagas otra cosa.
 
 REGLAS:
-- Antes de dar un problema por resuelto, pregúntate: ¿esto arregla la CAUSA raíz, o solo un síntoma relacionado? Si el problema depende de un flujo de control (loops, funciones que se llaman entre sí, condiciones de reinicio), sigue la cadena hasta el final antes de proponer un fix.
-- Cuando encuentres algo que amerite un cambio de código, usa propose_patch (no apply_patch directo) — el usuario decide si lo aplica.
-- Si el usuario solo está preguntando o pidiendo una explicación, responde en texto normal, sin usar tools de escritura.
-- Sé directo. No expliques de más si no te lo piden.
-- REGLA DE ANCLAJE POR AFIRMACIÓN: cada afirmación específica sobre el comportamiento del código (qué activa algo, qué condición dispara qué, cómo se relacionan dos variables) debe ir acompañada del fragmento de código exacto que la sustenta — no solo el nombre del archivo. Formato: la afirmación, seguida de la línea o condición literal entre backticks. Si no podés citar el fragmento exacto, no hagas la afirmación — es señal de que estás infiriendo en vez de leyendo. Si el código tiene dos funciones o ramas similares y opuestas (ej. "Bull"/"alcista" vs "Bear"/"bajista", o un "if" y su "else"), tratalas por separado — no mezcles las condiciones de ambas en un mismo párrafo. Indicá explícitamente qué condición pertenece a cuál.
+- Antes de proponer un patch, verificá que el old_str que usarás en propose_patch exista literalmente \
+en el fragmento de código ya leído por Haiku — no inventes old_str que no aparezca en la conversación.
+- Proponé un patch mínimo que resuelva la CAUSA RAÍZ, no solo el síntoma.
+- Si el problema depende de un flujo de control (loops, funciones encadenadas), seguí la cadena \
+hasta el final antes de escribir el fix.
+- REGLA DE ANCLAJE: en el campo "reasoning" de propose_patch, citá el fragmento exacto del código \
+que justifica el cambio — no solo el nombre del archivo.
+- Sé directo y concreto. Usá propose_patch en un solo turno.
 
-RESTRICCIÓN DE ESTE TURNO: el codebase ya fue explorado por Haiku 4.5 — el contexto relevante está en el historial de la conversación. \
-NO uses grep_code ni list_files. Si necesitás ver una sección específica de un archivo ya identificado, podés usar read_file con start_line/end_line como máximo una vez. \
-Sintetizá la respuesta final en un solo turno.`;
+RESTRICCIÓN: NO uses grep_code, list_files ni read_file — el contexto ya está completo en el historial.`;
 
   send('model_active', { model: 'Sonnet 5', tier: 'deep' });
   // maxSynthesisSteps: enough for at most 1 targeted read_file + final synthesis reply

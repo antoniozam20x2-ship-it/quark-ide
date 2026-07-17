@@ -1,0 +1,86 @@
+Prompt listo para pegar en Replit Agent
+========================================
+
+Necesito 3 ajustes en el flujo de CHAT (runChatTurn / runHaikuTier /
+grep_code), todos en la misma dirección: que la fase de lectura/investigación
+sea SIEMPRE Haiku, sin excepción, y Sonnet 5 quede reservado únicamente para
+generar o modificar código (propose_patch) — nunca para explicar cómo
+funciona algo ya existente.
+
+---
+
+1) Contabilizar correctamente el split de grep_code por "|"
+
+La GitHub Code Search API trata el carácter "|" literalmente, no como "o" —
+por eso grep_code ya divide internamente un patrón tipo
+"trailingStop|TRAILING_STOP|trailing_stop" en búsquedas secuenciales
+separadas (una por término, con ~300ms de espacio entre cada una).
+
+Necesito confirmar y corregir cómo se cuenta esto contra el límite de pasos
+de exploración de Haiku:
+
+- Ubicar dónde se lleva la cuenta de "pasos" en runHaikuTier (el contador
+  que dispara "Haiku alcanzó el límite de pasos de exploración")
+- Verificar si una sola llamada a grep_code con 7 variantes pipe-separadas
+  se está contando como 1 paso o como 7 (uno por sub-búsqueda interna)
+- Si se está contando como 7 (o más): ajustar para que el split interno de
+  grep_code cuente como 1 solo paso de cara al límite de exploración — el
+  usuario/agente pidió una búsqueda, no siete, aunque técnicamente se
+  ejecuten por separado por la limitación de la API de GitHub
+- Loguear (console.log o similar) cuántas sub-búsquedas reales dispara cada
+  llamada a grep_code, para poder confirmar esto empíricamente después
+
+2) Subir el presupuesto de pasos de exploración de Haiku
+
+La prueba real (pregunta sobre trailing stop) mostró que Haiku explora con
+propósito (no a ciegas) y encontró dos implementaciones reales del código,
+pero llegó al límite de pasos antes de terminar de leer todo lo relevante
+(no llegó a leer dónde se llama placeTrailingStop desde server.ts).
+
+- Ubicar el valor actual del límite de pasos de exploración en runHaikuTier
+- Subirlo de su valor actual a 10-12 pasos (ajustar el número exacto según
+  lo que encuentres configurado — el objetivo es dar más margen para casos
+  con múltiples archivos/implementaciones a comparar, sin volver a un loop
+  descontrolado tipo el de 20 turnos original)
+- Combinado con el punto 1 (split de "|" no debe consumir el presupuesto de
+  más), esto debería ser suficiente para que una investigación legítima como
+  la del trailing stop termine de leer todo antes de cortar
+
+3) Modo lectura/investigación: SOLO Haiku, nunca Sonnet — Sonnet solo para
+   generar/modificar código
+
+Este es el cambio de diseño más importante. La lógica actual (implementada
+en una tarea anterior) escala a Sonnet para "toda síntesis final" una vez
+que Haiku encuentra archivos relevantes. Eso hay que cambiarlo:
+
+- Clasificar la intención de la pregunta del usuario en dos categorías antes
+  de decidir el flujo:
+  a) EXPLICATIVA/INVESTIGACIÓN — preguntas tipo "cómo funciona X",
+     "dónde está Y", "qué hace esta función", "explícame el flujo de Z"
+  b) GENERACIÓN/MODIFICACIÓN DE CÓDIGO — pedidos que requieren escribir,
+     modificar, o proponer un patch de código real
+- Si es (a) EXPLICATIVA: Haiku hace la búsqueda Y también redacta la
+  respuesta final — NUNCA escalar a Sonnet para este tipo de pregunta,
+  sin importar cuántos archivos haya tenido que leer. La prueba ya
+  demostró que Haiku sintetiza bien este tipo de respuesta (distinguió
+  código real de legacy, no inventó conexiones sin verificar).
+- Si es (b) GENERACIÓN/MODIFICACIÓN: Haiku sigue haciendo toda la fase de
+  búsqueda/lectura de contexto (grep_code, read_file) como hasta ahora: una
+  vez que tiene el contexto necesario, ahí sí escala a Sonnet, pero con
+  SONNET_SYNTHESIS_TOOLS restringido a propose_patch únicamente (no
+  read_file, no grep_code — Sonnet no debe volver a investigar, solo
+  generar el patch con el contexto que Haiku ya reunió)
+- Revisar el punto de decisión en runChatTurn donde hoy se decide escalar a
+  Sonnet, y cambiar la condición de "Haiku encontró archivos" a "la
+  intención de la pregunta es (b) generación/modificación de código"
+
+No tocar el sentinel BÚSQUEDA_SIN_RESULTADOS ni el flujo de "pedir más
+contexto al usuario" cuando Haiku no encuentra nada — eso queda igual.
+
+---
+
+Después de aplicar los 3 cambios, correr build local y confirmar que compila
+sin errores antes de hacer commit. Repetir la prueba de "cómo funciona el
+trailing stop en Signal OS" en CHAT y confirmar que: (1) la respuesta la
+sintetiza Haiku sin pasar por Sonnet, (2) llega a leer también dónde se
+llama placeTrailingStop desde server.ts sin cortar por límite de pasos.
