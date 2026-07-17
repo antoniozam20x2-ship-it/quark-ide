@@ -846,7 +846,15 @@ async function runAgenticLoop(
       }),
     });
 
-    const data = await res.json() as { content: any[]; stop_reason: string };
+    const data = await res.json() as { type?: string; error?: { message: string }; content: any[]; stop_reason: string };
+    if (!res.ok || data.type === 'error') {
+      send('action', { text: `❌ Error de API en turno ${turn + 1}: ${data.error?.message ?? `HTTP ${res.status}`}` });
+      return {
+        files: Array.from(modifiedFiles.entries()).map(([path, content]) => ({ path, content })),
+        commitMessage,
+        incomplete: true,
+      };
+    }
     messages.push({ role: 'assistant', content: data.content });
 
     const toolUses = data.content.filter((b) => b.type === 'tool_use');
@@ -3016,7 +3024,11 @@ async function runHaikuTier(
       }),
     });
 
-    const data = await res.json() as { content: any[] };
+    const data = await res.json() as { type?: string; error?: { message: string }; content: any[] };
+    if (!res.ok || data.type === 'error') {
+      send('action', { text: `❌ Error de API: ${data.error?.message ?? `HTTP ${res.status}`}` });
+      return { resolved: false, messages, foundFiles: false };
+    }
     messages.push({ role: 'assistant', content: data.content });
 
     const textBlocks = data.content.filter((b: any) => b.type === 'text');
