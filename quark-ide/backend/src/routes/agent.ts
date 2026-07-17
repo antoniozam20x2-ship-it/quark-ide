@@ -2791,12 +2791,38 @@ function cleanForGitHubSearch(pattern: string): string {
 
 function generateSearchVariants(term: string): string[] {
   const variants = new Set<string>([term]);
-  const toSnake = term.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
-  if (toSnake !== term) variants.add(toSnake);
+
+  // Caso 1: término ya es camelCase/PascalCase → generar snake_case, guiones, sin separadores
+  const toSnakeFromCamel = term.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+  if (toSnakeFromCamel !== term) variants.add(toSnakeFromCamel);
   const underscored = term.replace(/-/g, '_');
   if (underscored !== term) variants.add(underscored);
-  const stripped = term.replace(/[-_]/g, '');
-  if (stripped !== term && stripped.length > 3) variants.add(stripped);
+  const strippedSeparators = term.replace(/[-_]/g, '');
+  if (strippedSeparators !== term && strippedSeparators.length > 3) variants.add(strippedSeparators);
+
+  // Caso 2: término tiene espacios (frase en lenguaje natural) → generar
+  // camelCase, snake_case, CONSTANT_CASE, PascalCase y sin espacios
+  if (/\s/.test(term)) {
+    const words = term.trim().split(/\s+/).filter(Boolean);
+    if (words.length >= 2) {
+      const camelCase = words[0].toLowerCase() +
+        words.slice(1).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join('');
+      variants.add(camelCase);
+
+      const snakeCase = words.map(w => w.toLowerCase()).join('_');
+      variants.add(snakeCase);
+
+      const constantCase = words.map(w => w.toUpperCase()).join('_');
+      variants.add(constantCase);
+
+      const pascalCase = words.map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join('');
+      variants.add(pascalCase);
+
+      const noSpaces = words.join('').toLowerCase();
+      if (noSpaces.length > 3) variants.add(noSpaces);
+    }
+  }
+
   return [...variants].filter(Boolean);
 }
 
@@ -2829,9 +2855,22 @@ async function unifiedGrepSearch(
   }
 
   // ── 2. ripgrep on local clone — primary search ────────────────────────────
-  console.log('[DIAGNOSTICO] repo recibido en unifiedGrepSearch:', JSON.stringify(repo));
   if (isCloned(repo)) {
-    const rgResults = await rgSearch(pattern, repo);
+    // Primer intento: patrón tal cual llega (ya puede tener múltiples términos con "|")
+    let rgResults = await rgSearch(pattern, repo);
+
+    if (rgResults.length === 0) {
+      // Sin resultados con el patrón literal — expandir cada término con variantes
+      // (camelCase/snake_case/CONSTANT_CASE) y reintentar en una sola llamada a rg
+      const expandedTerms = rawTerms.flatMap(t => generateSearchVariants(t));
+      const uniqueExpanded = [...new Set(expandedTerms)];
+      if (uniqueExpanded.length > rawTerms.length) {
+        console.log(`[unifiedGrepSearch] ripgrep sin resultados con patrón literal — reintentando con variantes: [${uniqueExpanded.join(', ')}]`);
+        const expandedPattern = uniqueExpanded.join('|');
+        rgResults = await rgSearch(expandedPattern, repo);
+      }
+    }
+
     if (rgResults.length > 0) {
       send('action', { text: `📍 ${rgResults.length} resultado(s) vía ripgrep local` });
       return rgResults.map(r => ({ path: r.path, line: r.line, text: r.text }));

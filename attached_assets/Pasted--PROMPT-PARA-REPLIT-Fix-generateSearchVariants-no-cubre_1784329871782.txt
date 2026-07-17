@@ -1,0 +1,168 @@
+# PROMPT PARA REPLIT — Fix: generateSearchVariants no cubre frases con espacios,
+# y ripgrep no usa variantes en absoluto
+
+## Contexto / causa raíz confirmada
+
+Ya confirmamos con el endpoint de diagnóstico que el clon de `Ahorar` en `/data/repos`
+está completo y que `placeTrailingStop` existe en
+`artifacts/api-server/src/lib/autonomousAgent.ts` (líneas 879, 3095). Sin embargo, al
+preguntar "cómo funciona el trailing stop en Signal OS", FAST mode devolvió:
+
+```
+⚠️ Sin resultados en índice local ni GitHub — usando árbol como fallback
+```
+
+**Causa raíz encontrada en `agent.ts`:**
+
+1. `generateSearchVariants(term)` solo convierte **camelCase → snake_case/guiones**.
+   No genera la conversión inversa: una frase con espacios ("trailing stop") →
+   camelCase ("trailingStop"), snake_case ("trailing_stop") o CONSTANT_CASE
+   ("TRAILING_STOP"). Como el usuario pregunta en lenguaje natural ("trailing stop",
+   con espacio), y el código usa `trailingStop` (camelCase), nunca coinciden.
+
+2. Peor aún: `generateSearchVariants` **solo se usa en el fallback de GitHub API**
+   (paso 3 de `unifiedGrepSearch`). El paso 2 (ripgrep en el clon local) llama a
+   `rgSearch(pattern, repo)` con el término **crudo, sin ninguna variante**, y si no
+   encuentra nada hace `return []` — nunca llega al paso 3 donde sí se generan
+   variantes. Antes de que arregláramos `REPOS_DIR`, esto pasaba desapercibido
+   porque `isCloned(repo)` daba `false` y todo caía directo al paso 3 (con
+   variantes). Ahora que el repo está bien clonado, ripgrep se ejecuta primero con
+   el término literal y falla silenciosamente sin generar variantes.
+
+## Fix — dos cambios en `agent.ts`
+
+### 1. Extender `generateSearchVariants` para cubrir frases con espacios
+
+Reemplazar la función actual:
+
+```typescript
+function generateSearchVariants(term: string): string[] {
+  const variants = new Set<string>([term]);
+  const toSnake = term.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+  if (toSnake !== term) variants.add(toSnake);
+  const underscored = term.replace(/-/g, '_');
+  if (underscored !== term) variants.add(underscored);
+  const stripped = term.replace(/[-_]/g, '');
+  if (stripped !== term && stripped.length > 3) variants.add(stripped);
+  return [...variants].filter(Boolean);
+}
+```
+
+Por una versión que también maneje términos con espacios (frases en lenguaje
+natural), generando camelCase, snake_case y CONSTANT_CASE a partir de las palabras:
+
+```typescript
+function generateSearchVariants(term: string): string[] {
+  const variants = new Set<string>([term]);
+
+  // Caso 1: término ya es camelCase/PascalCase → generar snake_case, guiones, sin separadores
+  // (comportamiento original, preservado)
+  const toSnakeFromCamel = term.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+  if (toSnakeFromCamel !== term) variants.add(toSnakeFromCamel);
+  const underscored = term.replace(/-/g, '_');
+  if (underscored !== term) variants.add(underscored);
+  const strippedSeparators = term.replace(/[-_]/g, '');
+  if (strippedSeparators !== term && strippedSeparators.length > 3) variants.add(strippedSeparators);
+
+  // Caso 2: término tiene espacios (frase en lenguaje natural) → generar
+  // camelCase, snake_case, CONSTANT_CASE, y sin espacios
+  if (/\s/.test(term)) {
+    const words = term.trim().split(/\s+/).filter(Boolean);
+    if (words.length >= 2) {
+      const camelCase = words[0].toLowerCase() +
+        words.slice(1).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join('');
+      variants.add(camelCase);
+
+      const snakeCase = words.map(w => w.toLowerCase()).join('_');
+      variants.add(snakeCase);
+
+      const constantCase = words.map(w => w.toUpperCase()).join('_');
+      variants.add(constantCase);
+
+      const pascalCase = words.map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join('');
+      variants.add(pascalCase);
+
+      const noSpaces = words.join('').toLowerCase();
+      if (noSpaces.length > 3) variants.add(noSpaces);
+    }
+  }
+
+  return [...variants].filter(Boolean);
+}
+```
+
+Ejemplo de output esperado para `generateSearchVariants("trailing stop")`:
+```
+["trailing stop", "trailingStop", "trailing_stop", "TRAILING_STOP", "TrailingStop", "trailingstop"]
+```
+
+### 2. Aplicar variantes también en el paso 2 (ripgrep), no solo en el fallback de GitHub
+
+En `unifiedGrepSearch`, el paso 2 actual es:
+
+```typescript
+// ── 2. ripgrep on local clone — primary search ────────────────────────────
+console.log('[DIAGNOSTICO] repo recibido en unifiedGrepSearch:', JSON.stringify(repo));
+if (isCloned(repo)) {
+  const rgResults = await rgSearch(pattern, repo);
+  if (rgResults.length > 0) {
+    send('action', { text: `📍 ${rgResults.length} resultado(s) vía ripgrep local` });
+    return rgResults.map(r => ({ path: r.path, line: r.line, text: r.text }));
+  }
+  return [];
+}
+```
+
+Reemplazarlo por una versión que, si el patrón crudo no encuentra nada, expanda
+cada término con `generateSearchVariants` y reintente con el patrón expandido
+(unido por `|`, igual que ya hace ripgrep con el pipe-separated pattern original):
+
+```typescript
+// ── 2. ripgrep on local clone — primary search ────────────────────────────
+if (isCloned(repo)) {
+  // Primer intento: patrón tal cual llega (ya puede tener múltiples términos con "|")
+  let rgResults = await rgSearch(pattern, repo);
+
+  if (rgResults.length === 0) {
+    // Sin resultados con el patrón literal — expandir cada término con variantes
+    // (camelCase/snake_case/CONSTANT_CASE) y reintentar en una sola llamada más a rg
+    const expandedTerms = rawTerms.flatMap(t => generateSearchVariants(t));
+    const uniqueExpanded = [...new Set(expandedTerms)];
+    if (uniqueExpanded.length > rawTerms.length) {
+      console.log(`[unifiedGrepSearch] ripgrep sin resultados con patrón literal — reintentando con variantes: [${uniqueExpanded.join(', ')}]`);
+      const expandedPattern = uniqueExpanded.join('|');
+      rgResults = await rgSearch(expandedPattern, repo);
+    }
+  }
+
+  if (rgResults.length > 0) {
+    send('action', { text: `📍 ${rgResults.length} resultado(s) vía ripgrep local` });
+    return rgResults.map(r => ({ path: r.path, line: r.line, text: r.text }));
+  }
+  return [];
+}
+```
+
+**Nota importante:** verificá que `rgSearch` trate el pattern pipe-separated como
+regex de alternancia (ripgrep con `|` sin flag `-F`/fixed-strings debería
+interpretarlo como regex por defecto, que es lo que ya se usaba en el pattern
+original de Haiku tipo `"trailingStop|TRAILING_STOP|trailing_stop"`) — si `rgSearch`
+usa `--fixed-strings` en algún punto, el pipe no funcionaría como alternancia y
+habría que ajustar eso también. Confirmá esto revisando la implementación de
+`rgSearch` en `services/localRepos.ts` antes de dar el fix por completo.
+
+## Testing después del fix
+
+1. Repetir en FAST: "cómo funciona el trailing stop en Signal OS" — debería
+   encontrar `placeTrailingStop` en `autonomousAgent.ts` vía ripgrep con la
+   variante expandida `trailingStop`, sin caer al fallback de árbol
+2. Confirmar que la respuesta menciona el fix conocido:
+   `TRAILING_BUFFER_MULT=1.5x` sobre `effectiveSlPct`
+3. Repetir con otra frase en lenguaje natural para confirmar que no es specific a
+   "trailing stop" — por ejemplo "cómo funciona el circuit breaker" (debería
+   encontrar `circuitBreaker`/`CIRCUIT_BREAKER_THRESHOLD_PCT`)
+4. Confirmar que CHAT y DEEP-agéntico siguen funcionando igual (usan la misma
+   `unifiedGrepSearch`, así que el fix aplica a los tres modos automáticamente)
+5. Revisar los logs para confirmar que la expansión de variantes solo se dispara
+   cuando el patrón literal no encuentra nada (no debería agregar latencia en el
+   caso común de que el término exacto ya matchee)
