@@ -624,59 +624,69 @@ async function searchAndLoadFiles(
 
   send('action', { text: `🔎 Buscando: [${searchTerms.join(', ')}]` });
 
-  for (const term of searchTerms) {
-    const results = await searchCodeInRepo(term, repo);
-    const codeFiles = results.filter((r) => isCodeFile(r.path));
-
-    if (codeFiles.length > 0) {
-      console.log(`[agent] Term "${term}" → ${codeFiles.length} files: ${codeFiles.map(r => r.path).join(', ')}`);
-      send('action', { text: `📂 Encontrado con "${term}" — leyendo ${Math.min(codeFiles.length, 3)} archivo(s)...` });
-
-      const loaded = await Promise.allSettled(
-        codeFiles.slice(0, 3).map(async (r) => {
-          const fullContent = await getFileContent(r.path, repo);
-          const lines = fullContent.split('\n');
-          
-          if (lines.length <= 300) {
-            return { path: r.path, content: fullContent, fullContent, lineRanges: undefined };
-          }
-
-          const hitTerm = searchTerms.find(t => 
-            fullContent.toLowerCase().includes(t.toLowerCase())
-          ) ?? searchTerms[0];
-          
-          const hitLine = lines.findIndex(l => 
-            l.toLowerCase().includes(hitTerm.toLowerCase())
-          );
-
-          if (hitLine === -1) {
-            return { path: r.path, content: lines.slice(0, 300).join('\n'), fullContent };
-          }
-
-          const start = Math.max(0, hitLine - 3);
-          const end = Math.min(lines.length, hitLine + 25);
-          const section = lines.slice(start, end).join('\n');
-          
-          console.log(`[agent] ${r.path}: extracting lines ${start}-${end} around "${hitTerm}" (hit at line ${hitLine})`);
-          
-          return { 
-            path: r.path, 
-            content: `// ... (líneas 1-${start} omitidas)\n\n${section}\n\n// ... (líneas ${end}-${lines.length} omitidas)`,
-            fullContent,
-            lineRanges: [{ start: start + 1, end, matchedTerm: hitTerm }],
-          };
-        })
-      );
-
-      return loaded
-        .filter((r): r is PromiseFulfilledResult<{ path: string; content: string; fullContent: string }> => r.status === 'fulfilled')
-        .map((r) => r.value);
-    }
-
-    console.log(`[agent] Term "${term}" → 0 code files, trying next...`);
+  // Un solo llamado con todos los términos unidos por "|" — aprovecha symbol_index + ripgrep de una vez
+  let allMatches: GrepMatch[] = [];
+  try {
+    allMatches = await unifiedGrepSearch(searchTerms.join('|'), repo, send);
+  } catch (e: any) {
+    if (e.message !== 'GITHUB_RATE_LIMIT') throw e;
+    // rate limit: caer al fallback de árbol
   }
 
-  send('action', { text: '⚠️ GitHub Code Search sin resultados — usando árbol como fallback' });
+  const codeMatches = allMatches.filter((m) => isCodeFile(m.path));
+
+  if (codeMatches.length > 0) {
+    const uniquePaths = [...new Map(codeMatches.map(m => [m.path, m])).values()];
+    send('action', { text: `📂 Encontrado — leyendo ${Math.min(uniquePaths.length, 3)} archivo(s)...` });
+    console.log(`[agent] unifiedGrepSearch → ${uniquePaths.length} archivos: ${uniquePaths.map(m => m.path).join(', ')}`);
+
+    const loaded = await Promise.allSettled(
+      uniquePaths.slice(0, 3).map(async (m) => {
+        const fullContent = await getFileContent(m.path, repo);
+        const lines = fullContent.split('\n');
+
+        if (lines.length <= 300) {
+          return { path: m.path, content: fullContent, fullContent, lineRanges: undefined };
+        }
+
+        // Preferir el número de línea del match si está disponible
+        let hitLine = m.line !== undefined ? m.line - 1 : -1;
+        let hitTerm = searchTerms[0];
+
+        if (hitLine === -1) {
+          hitTerm = searchTerms.find(t =>
+            fullContent.toLowerCase().includes(t.toLowerCase())
+          ) ?? searchTerms[0];
+          hitLine = lines.findIndex(l =>
+            l.toLowerCase().includes(hitTerm.toLowerCase())
+          );
+        }
+
+        if (hitLine === -1) {
+          return { path: m.path, content: lines.slice(0, 300).join('\n'), fullContent };
+        }
+
+        const start = Math.max(0, hitLine - 3);
+        const end = Math.min(lines.length, hitLine + 25);
+        const section = lines.slice(start, end).join('\n');
+
+        console.log(`[agent] ${m.path}: extracting lines ${start}-${end} around "${hitTerm}" (hit at line ${hitLine})`);
+
+        return {
+          path: m.path,
+          content: `// ... (líneas 1-${start} omitidas)\n\n${section}\n\n// ... (líneas ${end}-${lines.length} omitidas)`,
+          fullContent,
+          lineRanges: [{ start: start + 1, end, matchedTerm: hitTerm }],
+        };
+      })
+    );
+
+    return loaded
+      .filter((r): r is PromiseFulfilledResult<{ path: string; content: string; fullContent: string }> => r.status === 'fulfilled')
+      .map((r) => r.value);
+  }
+
+  send('action', { text: '⚠️ Sin resultados en índice local ni GitHub — usando árbol como fallback' });
   return [];
 }
 
@@ -888,32 +898,25 @@ async function runAgenticLoop(
 
       if (tool.name === 'grep_code') {
         send('action', { text: `🔎 Buscando "${tool.input.pattern}"` });
-        const agTerms = tool.input.pattern.split('|').map((t: string) => t.trim()).filter(Boolean);
-
-        // 1. Symbol index exact lookup
-        let agSymResult = '';
-        for (const term of agTerms) {
-          if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(term)) {
-            const sym = await lookupSymbol(term, repo);
-            if (sym) {
-              agSymResult = `${sym.filePath} — línea ${sym.lineNumber}: [${sym.symbolType}] "${term}"`;
-              break;
-            }
+        try {
+          const agMatches = await unifiedGrepSearch(tool.input.pattern, repo, send);
+          if (agMatches.length === 0) {
+            resultText = isCloned(repo)
+              ? `Sin resultados para "${tool.input.pattern}" en el clon local. El término puede no existir literalmente — revisá variantes o usá read_file en los archivos más probables.`
+              : `Sin resultados vía GitHub code search para "${tool.input.pattern}".`;
+          } else {
+            resultText = agMatches.map(m => {
+              if (m.symbolType) return `${m.path} — línea ${m.line}: [${m.symbolType}] "${m.text}"`;
+              if (m.line) return `${m.path} — línea ${m.lineApprox ? '~' : ''}${m.line}: "${m.text}"`;
+              return `${m.path} — "${m.text}"`;
+            }).join('\n');
           }
-        }
-
-        if (agSymResult) {
-          resultText = agSymResult;
-        } else if (isCloned(repo)) {
-          // 2. ripgrep on local clone
-          const rgResults = await rgSearch(tool.input.pattern, repo);
-          resultText = rgResults.length > 0
-            ? rgResults.map(r => `${r.path} — línea ${r.line}: "${r.text}"`).join('\n')
-            : `Sin resultados para "${tool.input.pattern}" en el clon local.`;
-        } else {
-          // 3. Fallback: GitHub API (repo not cloned yet)
-          const results = await searchCodeInRepo(tool.input.pattern, repo);
-          resultText = results.slice(0, 10).map((r: any) => r.path).join('\n') || 'Sin resultados';
+        } catch (e: any) {
+          if (e.message === 'GITHUB_RATE_LIMIT') {
+            resultText = `Error: GitHub code search rate limit alcanzado (10 req/min). Esperá ~1 min y reintentá, o usá read_file directamente en los archivos sospechosos.`;
+          } else {
+            throw e;
+          }
         }
       }
 
@@ -2797,6 +2800,104 @@ function generateSearchVariants(term: string): string[] {
   return [...variants].filter(Boolean);
 }
 
+interface GrepMatch {
+  path: string;
+  line?: number;
+  lineApprox?: boolean;
+  text?: string;
+  symbolType?: string;
+}
+
+async function unifiedGrepSearch(
+  pattern: string,
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+): Promise<GrepMatch[]> {
+  const rawTerms = pattern.split('|').map((t: string) => t.trim()).filter(Boolean);
+  console.log(`[unifiedGrepSearch] patrón: "${pattern}" → ${rawTerms.length} término(s): [${rawTerms.join(', ')}]`);
+
+  // ── 1. Symbol index — exact identifier lookup, O(1) ──────────────────────
+  for (const term of rawTerms) {
+    if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(term)) {
+      const sym = await lookupSymbol(term, repo);
+      if (sym) {
+        console.log(`[unifiedGrepSearch] symbol_index hit: ${term} → ${sym.filePath}:${sym.lineNumber}`);
+        send('action', { text: `⚡ Símbolo en índice: ${sym.filePath}:${sym.lineNumber}` });
+        return [{ path: sym.filePath, line: sym.lineNumber, text: term, symbolType: sym.symbolType }];
+      }
+    }
+  }
+
+  // ── 2. ripgrep on local clone — primary search ────────────────────────────
+  if (isCloned(repo)) {
+    const rgResults = await rgSearch(pattern, repo);
+    if (rgResults.length > 0) {
+      send('action', { text: `📍 ${rgResults.length} resultado(s) vía ripgrep local` });
+      return rgResults.map(r => ({ path: r.path, line: r.line, text: r.text }));
+    }
+    return [];
+  }
+
+  // ── 3. Fallback: GitHub Code Search API (repo no clonado aún) ─────────────
+  send('action', { text: `☁️ Repo no clonado aún — buscando vía GitHub API` });
+  const seen = new Set<string>();
+  const rawResults: { path: string; fragment: string }[] = [];
+  console.log(`[unifiedGrepSearch] fallback GitHub API para "${pattern}"`);
+  for (const rawTerm of rawTerms) {
+    if (rawResults.length >= 10) break;
+    const cleaned = cleanForGitHubSearch(rawTerm);
+    const termsToTry = generateSearchVariants(cleaned);
+    console.log(`[unifiedGrepSearch] término "${rawTerm}" → ${termsToTry.length} sub-búsqueda(s) vía generateSearchVariants: [${termsToTry.join(', ')}]`);
+    let foundWithVariant = false;
+    for (const term of termsToTry) {
+      if (rawResults.length >= 10) break;
+      try {
+        const results = await searchCodeInRepo(term, repo);
+        for (const r of results.slice(0, 10)) {
+          if (!seen.has(r.path)) {
+            seen.add(r.path);
+            rawResults.push({ path: r.path, fragment: r.fragments[0] ?? '' });
+          }
+        }
+        if (results.length > 0) { foundWithVariant = true; break; }
+      } catch (e: any) {
+        if (e.message === 'GITHUB_RATE_LIMIT') throw e;
+        console.warn(`[unifiedGrepSearch] término "${term}" falló:`, e.message);
+      }
+      if (termsToTry.length > 1) await new Promise(r => setTimeout(r, 300));
+    }
+    if (!foundWithVariant) {
+      console.log(`[unifiedGrepSearch] sin resultados para "${rawTerm}" (variantes probadas: ${termsToTry.join(', ')})`);
+    }
+    if (rawTerms.length > 1) await new Promise(r => setTimeout(r, 300));
+  }
+  if (rawResults.length === 0) return [];
+
+  // Resolve line numbers by fetching file content (top 3 only to limit API calls)
+  const toReturn = rawResults.slice(0, 10);
+  const resolved = await Promise.all(
+    toReturn.map(async ({ path, fragment }, idx) => {
+      if (!fragment) return { path } as GrepMatch;
+      if (idx < 3) {
+        try {
+          const fileContent = await getFileContent(path, repo);
+          const fragLine = fragment.split('\n').find(l => l.trim().length > 8) ?? fragment.slice(0, 60);
+          const charIdx = fileContent.indexOf(fragLine.trim());
+          if (charIdx !== -1) {
+            const lineNum = fileContent.slice(0, charIdx).split('\n').length;
+            console.log(`[unifiedGrepSearch] línea resuelta: ${path}:${lineNum}`);
+            return { path, line: lineNum, lineApprox: true, text: fragment.replace(/\n/g, ' ').slice(0, 100) } as GrepMatch;
+          }
+        } catch (e: any) {
+          console.warn(`[unifiedGrepSearch] no se pudo resolver línea para ${path}:`, e.message);
+        }
+      }
+      return { path, text: fragment.replace(/\n/g, ' ').slice(0, 120) } as GrepMatch;
+    })
+  );
+  return resolved;
+}
+
 async function executeChatTool(
   name: string,
   input: Record<string, any>,
@@ -2837,92 +2938,26 @@ async function executeChatTool(
     send('action', { text: `🔎 Buscando "${input.pattern}"` });
     const rawTerms = input.pattern.split('|').map((t: string) => t.trim()).filter(Boolean);
     console.log(`[grep_code] patrón recibido: "${input.pattern}" → ${rawTerms.length} término(s) pipe-separado(s): [${rawTerms.join(', ')}]`);
-
-    // ── 1. Symbol index — exact identifier lookup, O(1) ──────────────────────
-    for (const term of rawTerms) {
-      if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(term)) {
-        const sym = await lookupSymbol(term, repo);
-        if (sym) {
-          console.log(`[grep_code] symbol_index hit: ${term} → ${sym.filePath}:${sym.lineNumber}`);
-          send('action', { text: `⚡ Símbolo en índice: ${sym.filePath}:${sym.lineNumber}` });
-          return `${sym.filePath} — línea ${sym.lineNumber}: [${sym.symbolType}] "${term}"`;
-        }
+    let matches: GrepMatch[];
+    try {
+      matches = await unifiedGrepSearch(input.pattern, repo, send);
+    } catch (e: any) {
+      if (e.message === 'GITHUB_RATE_LIMIT') {
+        return `Error: GitHub code search rate limit alcanzado (10 req/min). Esperá ~1 min y reintentá, o usá read_file directamente en los archivos sospechosos.`;
       }
+      throw e;
     }
-
-    // ── 2. ripgrep on local clone — primary search ────────────────────────────
-    if (isCloned(repo)) {
-      const rgResults = await rgSearch(input.pattern, repo);
-      if (rgResults.length > 0) {
-        send('action', { text: `📍 ${rgResults.length} resultado(s) vía ripgrep local` });
-        return rgResults.map(r => `${r.path} — línea ${r.line}: "${r.text}"`).join('\n');
+    if (matches.length === 0) {
+      if (isCloned(repo)) {
+        return `Sin resultados para "${input.pattern}" en el clon local. El término puede no existir literalmente — revisá variantes o usá read_file en los archivos más probables.`;
       }
-      return `Sin resultados para "${input.pattern}" en el clon local. El término puede no existir literalmente — revisá variantes o usá read_file en los archivos más probables.`;
-    }
-
-    // ── 3. Fallback: GitHub Code Search API (repo no clonado aún) ─────────────
-    send('action', { text: `☁️ Repo no clonado aún — buscando vía GitHub API` });
-    const seen = new Set<string>();
-    const rawResults: { path: string; fragment: string }[] = [];
-    console.log(`[grep_code] fallback GitHub API para "${input.pattern}"`);
-    for (const rawTerm of rawTerms) {
-      if (rawResults.length >= 10) break;
-      const cleaned = cleanForGitHubSearch(rawTerm);
-      const termsToTry = generateSearchVariants(cleaned);
-      console.log(`[grep_code] término "${rawTerm}" → ${termsToTry.length} sub-búsqueda(s) vía generateSearchVariants: [${termsToTry.join(', ')}]`);
-      let foundWithVariant = false;
-      for (const term of termsToTry) {
-        if (rawResults.length >= 10) break;
-        try {
-          const results = await searchCodeInRepo(term, repo);
-          for (const r of results.slice(0, 10)) {
-            if (!seen.has(r.path)) {
-              seen.add(r.path);
-              rawResults.push({ path: r.path, fragment: r.fragments[0] ?? '' });
-            }
-          }
-          if (results.length > 0) { foundWithVariant = true; break; }
-        } catch (e: any) {
-          if (e.message === 'GITHUB_RATE_LIMIT') {
-            return `Error: GitHub code search rate limit alcanzado (10 req/min). Esperá ~1 min y reintentá, o usá read_file directamente en los archivos sospechosos.`;
-          }
-          console.warn(`[grep_code] término "${term}" falló:`, e.message);
-        }
-        if (termsToTry.length > 1) await new Promise(r => setTimeout(r, 300));
-      }
-      if (!foundWithVariant) {
-        console.log(`[grep_code] sin resultados para "${rawTerm}" (variantes probadas: ${termsToTry.join(', ')})`);
-      }
-      if (rawTerms.length > 1) await new Promise(r => setTimeout(r, 300));
-    }
-    if (rawResults.length === 0) {
       return `Sin resultados vía GitHub code search para "${input.pattern}". Causas posibles: delay de indexación de GitHub, rate limit silencioso, o caracteres especiales en el patrón (${input.pattern}). Si el término existe, usá read_file directamente en los archivos donde lo esperás encontrar, en vez de reintentar grep_code con el mismo término.`;
     }
-
-    // Resolve line numbers by fetching file content (top 3 only to limit API calls)
-    const toReturn = rawResults.slice(0, 10);
-    const resolved = await Promise.all(
-      toReturn.map(async ({ path, fragment }, idx) => {
-        if (!fragment) return path;
-        if (idx < 3) {
-          try {
-            const fileContent = await getFileContent(path, repo);
-            // Find the first distinctive line of the fragment in the file
-            const fragLine = fragment.split('\n').find(l => l.trim().length > 8) ?? fragment.slice(0, 60);
-            const charIdx = fileContent.indexOf(fragLine.trim());
-            if (charIdx !== -1) {
-              const lineNum = fileContent.slice(0, charIdx).split('\n').length;
-              console.log(`[grep_code] línea resuelta: ${path}:${lineNum}`);
-              return `${path} — línea ~${lineNum}: "${fragment.replace(/\n/g, ' ').slice(0, 100)}"`;
-            }
-          } catch (e: any) {
-            console.warn(`[grep_code] no se pudo resolver línea para ${path}:`, e.message);
-          }
-        }
-        return `${path} — "${fragment.replace(/\n/g, ' ').slice(0, 120)}"`;
-      })
-    );
-    return resolved.join('\n');
+    return matches.map(m => {
+      if (m.symbolType) return `${m.path} — línea ${m.line}: [${m.symbolType}] "${m.text}"`;
+      if (m.line) return `${m.path} — línea ${m.lineApprox ? '~' : ''}${m.line}: "${m.text}"`;
+      return `${m.path} — "${m.text}"`;
+    }).join('\n');
   }
   if (name === 'propose_patch') {
     send('patch_proposal', {

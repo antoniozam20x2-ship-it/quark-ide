@@ -1,0 +1,148 @@
+# PROMPT PARA REPLIT — Unificar búsqueda de código (FAST → pipeline symbol_index/ripgrep)
+
+## Contexto
+
+En `agent.ts` existen actualmente **tres implementaciones distintas** de búsqueda de código:
+
+1. **CHAT** (`executeChatTool`, caso `'grep_code'`) — pipeline completo y correcto:
+   symbol_index (`lookupSymbol`) → ripgrep local (`rgSearch`, si `isCloned(repo)`) →
+   GitHub Code Search API como último fallback, con generación de variantes
+   (`generateSearchVariants`) y resolución de número de línea.
+
+2. **DEEP-agéntico** (`runAgenticLoop`, caso `'grep_code'` dentro del loop de tools) —
+   una versión más simple del mismo pipeline: symbol_index → ripgrep → GitHub API,
+   pero sin generación de variantes ni resolución de línea tan robusta.
+
+3. **FAST** (`searchAndLoadFiles`, usada en el READ PATH de `/generate` cuando
+   `resolvedIntent === 'read'` y no hay `deepMode`) — **NO usa el pipeline nuevo en
+   absoluto**. Llama directo a `searchCodeInRepo` (API de GitHub), iterando término por
+   término hasta encontrar resultados. Esto quedó confirmado en producción: el log
+   muestra `"📖 Modo lectura — buscando en GitHub..."` en vez de usar el repo ya
+   clonado localmente en `/data/repos`.
+
+Los 5 repos ya están clonados localmente (`REPOS_DIR=/data/repos`, confirmado
+funcionando), así que FAST está pagando el costo de la API de GitHub sin necesidad.
+
+## Objetivo
+
+Unificar las tres rutas de búsqueda sobre **una sola función compartida**, evitando
+tener el pipeline symbol_index/ripgrep/API duplicado en tres lugares del mismo archivo.
+
+## Tareas
+
+### 1. Extraer una función compartida `unifiedGrepSearch`
+
+Crear una función nueva en `agent.ts` (cerca de `executeChatTool`, antes de su
+definición) que consolide la lógica ya probada del caso `'grep_code'` de
+`executeChatTool` (es la implementación más completa — usarla como base, no la de
+`runAgenticLoop`):
+
+```typescript
+interface GrepMatch {
+  path: string;
+  line?: number;
+  text?: string;       // fragmento/línea encontrada
+  symbolType?: string;  // solo si vino de symbol_index
+}
+
+async function unifiedGrepSearch(
+  pattern: string,        // puede venir con múltiples términos separados por "|"
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+): Promise<GrepMatch[]> {
+  // 1. Symbol index — lookup exacto por término, O(1)
+  //    (mover aquí el bloque que ya existe en executeChatTool)
+  // 2. ripgrep local si isCloned(repo)
+  //    (mover aquí el bloque rgSearch ya existente)
+  // 3. Fallback GitHub Code Search API con generateSearchVariants + resolución de línea
+  //    (mover aquí el bloque existente, incluyendo el manejo de GITHUB_RATE_LIMIT)
+  //
+  // Devuelve SIEMPRE un array de GrepMatch, nunca un string formateado —
+  // el formato final (texto para el modelo, o { path, content } para FAST)
+  // lo arma cada caller según su necesidad.
+}
+```
+
+**Importante:** no cambies el comportamiento de la lógica interna (símbolo → ripgrep →
+API con variantes), solo movela a esta función y hacé que devuelva datos estructurados
+en vez de un string ya formateado.
+
+### 2. Actualizar `executeChatTool` (caso `'grep_code'`)
+
+Reemplazar el cuerpo actual por una llamada a `unifiedGrepSearch(input.pattern, repo,
+send)`, y formatear el resultado exactamente igual a como se hace hoy (mismo formato de
+texto que recibe Haiku/Sonnet: `"${path} — línea ${line}: [${symbolType}] \"${term}\""`
+para symbol_index, `"${path} — línea ${line}: \"${text}\""` para ripgrep, etc.). Los
+mensajes `send('action', ...)` (⚡ Símbolo en índice, 📍 resultado vía ripgrep local, ☁️
+Repo no clonado) deben quedar en el mismo lugar (podés dejarlos dentro de
+`unifiedGrepSearch` mismo, ya que dependen del `send` que ya se pasa).
+
+### 3. Actualizar `runAgenticLoop` (caso `'grep_code'` dentro del loop de tools)
+
+Mismo reemplazo: llamar a `unifiedGrepSearch(tool.input.pattern, repo, send)` en vez de
+su implementación simplificada actual. Esto le da a DEEP-agéntico la generación de
+variantes y resolución de línea que hoy solo tiene CHAT.
+
+### 4. Actualizar `searchAndLoadFiles` (FAST)
+
+Este es el cambio de comportamiento real. Hoy `searchAndLoadFiles`:
+- Extrae keywords con `extractKeywordsForSearch(prompt, repo)`
+- Itera término por término llamando a `searchCodeInRepo(term, repo)` (API de GitHub)
+  hasta que uno devuelva resultados
+- Carga hasta 3 archivos, extrayendo ±3/+25 líneas alrededor del hit si el archivo
+  tiene más de 300 líneas
+
+Cambiar el paso de búsqueda para que use `unifiedGrepSearch` en vez de
+`searchCodeInRepo` directo:
+
+```typescript
+const keywords = await extractKeywordsForSearch(prompt, repo);
+const searchTerms = keywords.length > 0
+  ? keywords
+  : prompt.split(/\s+/).filter((w) => w.length > 5).slice(0, 3);
+
+send('action', { text: `🔎 Buscando: [${searchTerms.join(', ')}]` });
+
+// Un solo llamado con todos los términos unidos por "|" — igual que hace
+// HAIKU_SEARCH_SYSTEM en CHAT — para aprovechar symbol_index + ripgrep de una vez
+const matches = await unifiedGrepSearch(searchTerms.join('|'), repo, send);
+
+// Agrupar matches por path, filtrar con isCodeFile (mantener EXCLUDED_PATHS igual
+// que hoy), y cargar contenido de hasta 3 archivos únicos — reusar la misma lógica
+// de extracción de líneas alrededor del hit (±3/+25 en archivos >300 líneas) que ya
+// existe en la función actual.
+```
+
+**Mantené sin cambios:**
+- El filtro `EXCLUDED_PATHS` / `isCodeFile`
+- La lógica de truncamiento por archivo (líneas ≤300 → completo, >300 → sección
+  alrededor del hit con comentarios de "líneas omitidas")
+- El mensaje `send('action', { text: '⚠️ GitHub Code Search sin resultados...' })`
+  como fallback final si `unifiedGrepSearch` no devuelve nada (aunque ahora ya no es
+  estrictamente "GitHub Code Search" — actualizá el texto del mensaje a algo genérico
+  como `'⚠️ Sin resultados en índice local ni GitHub — usando árbol como fallback'`)
+
+### 5. No tocar
+
+- `identifyFilesToRead` (fallback del árbol completo) — queda igual
+- `extractKeywordsForSearch` — queda igual, sigue siendo el paso previo que genera los
+  términos de búsqueda
+- El resto del READ PATH después de `searchAndLoadFiles` (extracción quirúrgica de
+  función, análisis con `generateWithFallback`, guardado de `InvestigationFinding`,
+  etc.) — no cambia
+
+## Testing después del cambio
+
+1. Repetir en **FAST**: "cómo funciona el trailing stop en Signal OS" — el log ya NO
+   debería decir "buscando en GitHub", sino mostrar actividad de symbol_index o
+   ripgrep (revisar logs de servidor para confirmar, aunque el mensaje visible al
+   usuario puede seguir siendo genérico)
+2. Confirmar que la respuesta menciona el fix ya conocido: `callbackRatio` con
+   `TRAILING_BUFFER_MULT=1.5x` sobre `effectiveSlPct`
+3. Repetir la prueba de `setAgentActive`/`runCycle` en FAST
+4. Confirmar en **CHAT** y **DEEP** que grep_code sigue funcionando igual que antes
+   (no debería haber regresión — es la misma lógica, solo movida a una función común)
+5. Confirmar que las exclusiones de seguridad (`.env`, `SECRET`, `API_KEY`, paths de
+   riesgo en Ahorro/Trade-SnipeOS vía `isNoCacheFile`) siguen aplicando — estas viven
+   en `smartReadFile`, no en `unifiedGrepSearch`, así que no deberían verse afectadas,
+   pero confirmar igual con una búsqueda de prueba sobre esos paths
