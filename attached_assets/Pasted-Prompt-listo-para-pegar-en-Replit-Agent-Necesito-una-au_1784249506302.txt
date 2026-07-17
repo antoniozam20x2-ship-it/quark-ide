@@ -1,0 +1,67 @@
+Prompt listo para pegar en Replit Agent
+========================================
+
+Necesito una auditoría completa de DEEP mode antes de tocar nada. No cambies
+código todavía — solo investigá y reportá.
+
+Preguntas a responder, con rutas de archivo y fragmentos relevantes:
+
+1) ESTRUCTURA GENERAL
+
+- ¿Dónde vive el endpoint /agent/generate? Archivo y función exacta.
+- ¿Cuántos caminos distintos existen dentro de DEEP? (sé que hay al menos
+  DEEP-simple single-shot y runAgenticLoop agéntico — confirmar si son 2 o
+  más, y qué decide cuál se usa: tamaño de archivo, cantidad de archivos,
+  flag explícito del usuario, otra cosa)
+
+2) DEEP-SIMPLE (single-shot, sin tool-calling)
+
+- ¿Qué modelo llama generateWithFallback acá? Modelo primario y cadena de
+  fallback completa (igual que mapeamos para Architect/Designer/Critic en
+  Quark Studio)
+- ¿Qué recibe como input exacto? (brief/instrucción + contenido de archivo)
+- Confirmar el truncamiento por keyword-match en archivos >500 líneas: ¿en
+  qué función vive, cómo decide qué sección conservar, es case-sensitive,
+  busca un solo término o varios?
+- ¿Qué maneja de retry/reintentos si la llamada al modelo falla o el patch
+  generado no aplica?
+- ¿Hay algún chequeo de que el patch generado sea válido antes de
+  mostrárselo al usuario (ej. que el old_str exista literalmente en el
+  archivo)?
+
+3) DEEP-AGÉNTICO (runAgenticLoop)
+
+- Confirmar de nuevo (ya lo sabíamos, pero para el reporte completo): solo
+  modifica un Map en memoria, sin escritura directa a GitHub, sin
+  validateWithTsc, sin Bash/exec, sin rollback antes de aplicar el patch —
+  ¿sigue siendo así o cambió algo desde la última revisión?
+- ¿Qué modelo(s) usa este camino? ¿Mismo que DEEP-simple o distinto?
+- ¿Tiene tool-calling real (grep/read) o solo itera sobre un prompt fijo?
+- Máximo de turnos/pasos configurado, si aplica
+
+4) REGLAS ANTI-ALUCINACIÓN
+
+- Ya se agregaron reglas anti-alucinación a los prompts de DEEP en una
+  sesión anterior (anchoring-by-claim, distinción parcial-vs-definitivo,
+  escape hatch operations: []). Confirmar que siguen presentes tal cual, o
+  si algo cambió.
+- ¿Hay alguna verificación automática (no solo instrucción en el prompt) de
+  que las citas de línea/archivo que da el modelo sean reales?
+
+5) MANEJO DE ERRORES Y FALLAS
+
+- Si el modelo devuelve un patch inválido o incompleto, ¿qué pasa? ¿Hay
+  reintento automático, o se le muestra tal cual al usuario?
+- ¿Hay algún log o tabla (similar a smart_read_log) que registre intentos
+  fallidos de DEEP para poder auditar patrones después?
+
+6) COMPARACIÓN CON EL FIX YA APLICADO EN CHAT
+
+- Dado que en CHAT ya separamos "Haiku busca/explora" de "Sonnet genera
+  patch", ¿DEEP-simple o DEEP-agéntico tienen alguna separación similar, o
+  el mismo modelo hace todo (buscar contexto + truncar + generar) en una
+  sola llamada?
+
+No implementes ningún cambio en esta tarea — es solo mapeo. Al final,
+dame un resumen corto (máx 10 líneas) de los 2-3 problemas más urgentes que
+encontraste, en el mismo estilo que hicimos para Quark Studio.
