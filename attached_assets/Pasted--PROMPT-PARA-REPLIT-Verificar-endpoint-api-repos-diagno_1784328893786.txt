@@ -1,0 +1,54 @@
+# PROMPT PARA REPLIT — Verificar endpoint /api/repos/diagnose/:repo
+
+## Contexto
+
+Se deployó a Railway hace poco, pero cuando llamamos a:
+```
+GET https://backend-production-0d77.up.railway.app/api/repos/diagnose/Ahorar
+```
+
+Devuelve `Cannot GET /api/repos/diagnose/Ahorar` (404). Sin embargo, el deployment
+muestra "Deployment successful" y el mensaje menciona "Add agent route and attach
+diagnostic pro..." — así que probablemente el código está ahí, pero la ruta no está
+correctamente registrada o montada en el servidor principal.
+
+## Qué necesito que verifiques
+
+### 1. Confirmar que el endpoint existe en el código y está bien escrito
+- Dónde exactamente se agregó la función/ruta (archivo + línea)
+- La firma debe ser: `router.get('/repos/diagnose/:repo', ...)` (no `app.get`, debe ser
+  parte del `router` que ya existe)
+- Confirmar que el parámetro se captura como `req.params.repo`
+
+### 2. Confirmar que el router está montado en el servidor principal
+- En el archivo principal (probablemente `server.ts`, `index.ts`, `app.ts`, o similar),
+  verificar que existe algo como:
+  ```typescript
+  app.use('/api', router);  // o app.use('/api/agent', router), depende de la estructura
+  ```
+- O buscar donde se hace `app.use` con ese router — la ruta final tiene que ser
+  `/api/repos/diagnose/...`, así que el prefijo de `app.use` + la ruta de `router.get`
+  deben sumar `/api/repos/diagnose/...`
+
+### 3. Probar localmente ANTES de confiar en que Railway lo tiene
+- Arrancá el servidor local de Replit
+- Llamá: `curl http://localhost:3000/api/repos/diagnose/Ahorar` (ajusta el puerto si no
+  es 3000)
+- Debería devolver un JSON con: gitExists, rootEntries, autonomousAgentPaths,
+  trailingStopGrep, gitLog1, dfData
+- Si devuelve 404 en local también, el problema está en el código/registro de la ruta
+- Si funciona en local pero no en Railway, el problema está en cómo se deployó
+
+### 4. Si funciona localmente, capturá la respuesta JSON y pegámela
+- Eso nos da los 5 datos que necesitamos para diagnosticar el clon en `/data/repos`
+- No necesita estar en Railway si funciona en local de Replit
+
+### 5. Si no funciona ni localmente
+- Revisá que el archivo donde está el endpoint se importó/exportó correctamente
+- Confirmá que el servidor corrió sin errores de sintaxis (revisar los logs de
+  `npm run dev` o equivalente)
+- Mostrá el error exacto que aparece en la consola
+
+## NO apliques ningún fix todavía
+Solo verificá y pasame los resultados. Con eso decidimos si hace falta re-deployar,
+cambiar la ruta, o si el problema es otro.
