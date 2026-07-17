@@ -317,6 +317,7 @@ export async function rgSearch(pattern: string, repo: string): Promise<RgMatch[]
       'rg',
       [
         '--json',
+        '-i',                     // case-insensitive
         '--max-count=5',          // max 5 matches per file
         '--max-filesize=2M',
         '--no-heading',

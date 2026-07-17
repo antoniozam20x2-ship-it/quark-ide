@@ -2784,7 +2784,36 @@ async function smartReadFile(
   return { result: currentContent, decision: 'full' };
 }
 
-// ── Helpers para limpiar patrones antes de enviarlos a GitHub code search ────────────────────────
+/**
+ * Convierte un término de búsqueda (posiblemente una frase en lenguaje natural,
+ * como "trailing stop") en un patrón regex apto para ripgrep que matchea todas
+ * las variantes de casing/separador en una sola pasada, aprovechando -i.
+ *
+ * "trailing stop"   → "trailing[\s_-]*stop"
+ * "trailingStop"    → "trailingStop"  (devuelto tal cual; -i cubre TRAILINGSTOP etc.)
+ * "trailing_stop"   → "trailing[\s_-]*stop"
+ */
+function buildRipgrepPattern(term: string): string {
+  const trimmed = term.trim();
+  if (!trimmed) return trimmed;
+
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, (m) => `\\${m}`);
+
+  // Frase con espacios: insertar separador opcional entre palabras
+  if (/\s/.test(trimmed)) {
+    const words = trimmed.split(/\s+/).filter(Boolean).map(esc);
+    return words.join('[\\s_-]*');
+  }
+
+  // Término con guion/guion bajo: también permitir separador contrario y camelCase vía -i
+  if (/[-_]/.test(trimmed)) {
+    const parts = trimmed.split(/[-_]/).filter(Boolean).map(esc);
+    return parts.join('[\\s_-]*');
+  }
+
+  // Término simple sin separadores — escapar y devolver tal cual
+  return esc(trimmed);
+}
 function cleanForGitHubSearch(pattern: string): string {
   return pattern.replace(/[="(){}[\]<>]/g, ' ').replace(/\s+/g, ' ').trim();
 }
@@ -2856,21 +2885,13 @@ async function unifiedGrepSearch(
 
   // ── 2. ripgrep on local clone — primary search ────────────────────────────
   if (isCloned(repo)) {
-    // Primer intento: patrón tal cual llega (ya puede tener múltiples términos con "|")
-    let rgResults = await rgSearch(pattern, repo);
+    // Cada término se convierte en un patrón regex con separadores opcionales entre
+    // palabras, luego se unen con "|" — ripgrep los busca todos en una sola pasada
+    // con -i cubriendo el casing (trailing[\s_-]*stop matchea trailingStop, TRAILING_STOP, etc.)
+    const ripgrepPattern = rawTerms.map(t => buildRipgrepPattern(t)).join('|');
+    console.log(`[unifiedGrepSearch] patrón ripgrep construido: "${ripgrepPattern}" (desde: [${rawTerms.join(', ')}])`);
 
-    if (rgResults.length === 0) {
-      // Sin resultados con el patrón literal — expandir cada término con variantes
-      // (camelCase/snake_case/CONSTANT_CASE) y reintentar en una sola llamada a rg
-      const expandedTerms = rawTerms.flatMap(t => generateSearchVariants(t));
-      const uniqueExpanded = [...new Set(expandedTerms)];
-      if (uniqueExpanded.length > rawTerms.length) {
-        console.log(`[unifiedGrepSearch] ripgrep sin resultados con patrón literal — reintentando con variantes: [${uniqueExpanded.join(', ')}]`);
-        const expandedPattern = uniqueExpanded.join('|');
-        rgResults = await rgSearch(expandedPattern, repo);
-      }
-    }
-
+    const rgResults = await rgSearch(ripgrepPattern, repo);
     if (rgResults.length > 0) {
       send('action', { text: `📍 ${rgResults.length} resultado(s) vía ripgrep local` });
       return rgResults.map(r => ({ path: r.path, line: r.line, text: r.text }));

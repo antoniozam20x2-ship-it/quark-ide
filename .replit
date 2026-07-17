@@ -1,4 +1,4 @@
-modules = ["nodejs-20", "bash", "rust-stable"]
+modules = ["nodejs-20", "bash", "rust-stable", "python-base-3.13"]
 [agent]
 expertMode = true
 stack = "BEST_EFFORT_FALLBACK"
