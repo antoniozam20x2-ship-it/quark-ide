@@ -1,0 +1,34 @@
+Contexto: Se cerró una ronda extensa de QA sobre FAST/DEEP/CHAT mode (bugs 0-5, payload de CHAT, escalado a Sonnet, genéricos de FAST — todos resueltos y confirmados en producción). Quedan dos frentes sueltos, sin relación entre sí.
+
+1. Completar webhook + cron de sync (cortado por límite de cuota)
+
+Estado conocido antes del corte:
+
+	•	Route file del webhook: implementado.
+	•	WEBHOOK_SECRET: implementado.
+	•	Falta: registrar el router en index.ts (el propio Replit lo señaló como pendiente antes de cortarse).
+	•	Falta: agregar el cron horario de Railway como fallback (POST /api/repos/sync-all cada hora — no cada 30 min, el webhook cubre la inmediatez).
+
+Antes de tocar código, confirmame el estado real (no asumas que algo del intento anterior quedó bien):
+
+	•	¿El router del webhook ya está registrado en index.ts, o hay que hacerlo ahora?
+	•	¿WEBHOOK_SECRET está seteado como variable en Railway, o soy yo quien tiene que agregarlo?
+	•	Mostrame el contenido final del handler en /api/webhooks/github (validación de X-Hub-Signature-256, debounce de 30s por repo, filtro ref === 'refs/heads/main').
+
+Una vez confirmado y completo:
+
+	•	Decime la URL exacta a registrar en cada uno de los 5 repos de GitHub (Settings → Webhooks) y el evento a seleccionar (push).
+	•	Agregá el cron horario de Railway (sync-all) como red de seguridad.
+
+2. Ajuste de precisión en FAST mode — scope de la señal preguntada
+
+Con los Cambios 1/2/3 ya aplicados, FAST mejoró mucho (ahora dice “EMA de 10 períodos” correctamente para S6), pero la última prueba mezcló contexto de otras EMAs del mismo archivo (20, 34, 55) que probablemente pertenecen a otras señales, no a S6 específicamente. Comparado con una respuesta de referencia más quirúrgica (solo EMA10 + FVG + SuperTrend + Score + agotamiento, sin mencionar las otras EMAs), FAST está trayendo ruido de señales vecinas.
+
+	•	Revisar si readEnclosingFunction (ahora centrado en la definición del símbolo, por el Cambio 3) está de alguna manera incluyendo referencias a otras constantes/EMAs del archivo que no son parte del cuerpo de checkS6Bull en sí — o si el modelo está usando conocimiento de otras partes del prompt/contexto para completar con las EMAs 20/34/55.
+	•	Objetivo: que la respuesta de FAST para “cómo funciona X” se limite estrictamente a las condiciones dentro del cuerpo de la función/símbolo preguntado, sin traer indicadores de señales vecinas salvo que el fragmento inyectado (Cambio 1) los referencie directamente como dependencia real.
+
+Restricciones generales:
+
+	•	Frente 1 y 2 son independientes — podés resolverlos en cualquier orden o en paralelo.
+	•	Diff quirúrgico en ambos casos.
+	•	Antes de commitear el frente 2: mostrame el resultado de repetir “cómo funciona la señal S6” y confirmá que ya no menciona EMA20/34/55 salvo que realmente formen parte de la condición de S6.
