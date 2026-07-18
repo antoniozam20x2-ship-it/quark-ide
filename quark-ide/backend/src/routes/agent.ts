@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { getFileTree, getFileContent, getFileContentConditional, searchCodeInRepo, createOrUpdateFile } from '../services/github.js';
-import { lookupSymbol, rgSearch, isCloned } from '../services/localRepos.js';
+import { lookupSymbol, rgSearch, isCloned, REPOS_DIR } from '../services/localRepos.js';
 import { callAI } from '../lib/aiRouter.js';
 import { generateContent } from '../services/gemini.js';
 import pool from '../services/db.js';
@@ -13,6 +13,18 @@ import { runAutoMode, readChangedFileContents, cleanupWorkDir } from '../service
 import { createHash } from 'crypto';
 import { createPatch } from 'diff';
 import ts from 'typescript';
+
+// ── Entorno de ejecución ──────────────────────────────────────────────────────
+const QUARK_ENV: 'railway' | 'replit' | 'local' =
+  process.env.RAILWAY_ENVIRONMENT            ? 'railway'
+  : (process.env.REPL_ID || process.env.REPL_OWNER) ? 'replit'
+  : 'local';
+console.log(
+  `[ENV] Quark IDE modo ${QUARK_ENV.toUpperCase()} | REPOS_DIR=${REPOS_DIR}` +
+  (QUARK_ENV === 'railway'
+    ? ' | ripgrep: activo cuando repos estén clonados'
+    : ' | ripgrep: no disponible en dev — usando GitHub API como fallback'),
+);
 
 // ── Agent session persistence (reuses memory_entries table) ───────────────────
 
@@ -2861,6 +2873,46 @@ function generateSearchVariants(term: string): string[] {
   return [...variants].filter(Boolean);
 }
 
+/**
+ * Extrae un fragmento de código con contexto alrededor de un anchor.
+ *
+ * @param content    Contenido completo del archivo (string)
+ * @param anchor     Número de línea 1-based, o texto para buscar en el contenido
+ * @param contextLines Líneas de contexto antes/después del anchor (default: 25)
+ * @returns  { excerpt, startLine, endLine }  o null si no se encontró el anchor
+ *
+ * Permite dar al agente solo la sección relevante al match de búsqueda,
+ * sin necesitar cargar el archivo completo en el prompt.
+ */
+function smartReadSection(
+  content: string,
+  anchor: number | string,
+  contextLines = 25,
+): { excerpt: string; startLine: number; endLine: number } | null {
+  const lines = content.split('\n');
+  let center: number; // 0-indexed
+
+  if (typeof anchor === 'number') {
+    center = Math.max(0, anchor - 1);
+  } else {
+    // Buscar primera línea que contenga el texto del anchor (case-insensitive)
+    const needle = anchor.trim().toLowerCase();
+    const idx = lines.findIndex(l => l.toLowerCase().includes(needle));
+    if (idx === -1) return null;
+    center = idx;
+  }
+
+  const start = Math.max(0, center - contextLines);
+  const end   = Math.min(lines.length - 1, center + contextLines);
+
+  const excerpt = lines
+    .slice(start, end + 1)
+    .map((l, i) => `${start + i + 1}: ${l}`)
+    .join('\n');
+
+  return { excerpt, startLine: start + 1, endLine: end + 1 };
+}
+
 interface GrepMatch {
   path: string;
   line?: number;
@@ -2940,26 +2992,35 @@ async function unifiedGrepSearch(
   }
   if (rawResults.length === 0) return [];
 
-  // Resolve line numbers by fetching file content (top 3 only to limit API calls)
+  // Resolve line numbers + extraer sección con contexto (top 5, paralelo)
   const toReturn = rawResults.slice(0, 10);
   const resolved = await Promise.all(
     toReturn.map(async ({ path, fragment }, idx) => {
       if (!fragment) return { path } as GrepMatch;
-      if (idx < 3) {
+      if (idx < 5) {
         try {
           const fileContent = await getFileContent(path, repo);
+          // Encontrar la línea más representativa del fragmento
           const fragLine = fragment.split('\n').find(l => l.trim().length > 8) ?? fragment.slice(0, 60);
           const charIdx = fileContent.indexOf(fragLine.trim());
           if (charIdx !== -1) {
             const lineNum = fileContent.slice(0, charIdx).split('\n').length;
-            console.log(`[unifiedGrepSearch] línea resuelta: ${path}:${lineNum}`);
-            return { path, line: lineNum, lineApprox: true, text: fragment.replace(/\n/g, ' ').slice(0, 100) } as GrepMatch;
+            // Extraer sección con contexto en lugar de devolver sólo el fragmento raw
+            const section = smartReadSection(fileContent, lineNum, 20);
+            console.log(`[unifiedGrepSearch] ${path}:${lineNum} → sección L${section?.startLine ?? '?'}-L${section?.endLine ?? '?'}`);
+            return {
+              path,
+              line: lineNum,
+              lineApprox: true,
+              text: section ? section.excerpt : fragment.replace(/\n/g, ' ').slice(0, 200),
+            } as GrepMatch;
           }
         } catch (e: any) {
           console.warn(`[unifiedGrepSearch] no se pudo resolver línea para ${path}:`, e.message);
         }
       }
-      return { path, text: fragment.replace(/\n/g, ' ').slice(0, 120) } as GrepMatch;
+      // Para resultados sin resolución de línea: devolver fragmento limpio
+      return { path, text: fragment.replace(/\n/g, ' ').slice(0, 200) } as GrepMatch;
     })
   );
   return resolved;
