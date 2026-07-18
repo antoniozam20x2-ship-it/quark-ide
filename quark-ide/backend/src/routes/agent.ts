@@ -3160,7 +3160,11 @@ function readEnclosingFunction(
     }
   }
 
-  // Escanear hacia adelante desde funcStart para encontrar el } de cierre
+  // Escanear hacia adelante desde funcStart para encontrar el } de cierre.
+  // IMPORTANTE: sólo aceptar el cierre si ya pasamos la línea ancla.
+  // Si cerramos una función ANTES del ancla (e.g. checkS5EarlyBull cuando
+  // buscamos checkS6Bull), eso es una función hermana anterior — reseteamos
+  // y seguimos adelante hasta encontrar el bloque que realmente contiene el ancla.
   depth = 0;
   let started = false;
   let funcEnd = Math.min(lines.length - 1, funcStart + 299);
@@ -3168,7 +3172,17 @@ function readEnclosingFunction(
     const n = netBraces(lines[i]);
     depth += n;
     if (n > 0) started = true;
-    if (started && depth === 0) { funcEnd = i; break; }
+    if (started && depth === 0) {
+      if (i >= anchor) {
+        // Hemos cerrado un bloque que cubre o supera la línea ancla → es el correcto.
+        funcEnd = i;
+        break;
+      }
+      // Cerramos un bloque que termina ANTES del ancla → era una función anterior,
+      // no la que buscamos. Seguir escaneando.
+      started = false;
+      depth = 0;
+    }
   }
 
   // Si no encontramos cierre o la función es demasiado grande, retornar null
