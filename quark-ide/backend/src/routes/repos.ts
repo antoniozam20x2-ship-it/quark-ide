@@ -64,7 +64,15 @@ router.post('/sync-all', async (_req, res) => {
   res.json(results);
 });
 
-// GET /api/repos/diagnose/:repo — diagnóstico temporal del estado del clon local
+// GET /api/repos/diagnose/:repo — diagnóstico del estado del clon local.
+//
+// Query params opcionales:
+//   ?file=<relPath>   — agrega git log -10 y git diff HEAD~1 para ese archivo
+//                       (útil para confirmar si el symbol_index está desactualizado
+//                        respecto a un archivo específico sin necesidad de hacer sync)
+//   ?lines=<n>        — cuántas líneas del diff mostrar (default: 80)
+//
+// Ejemplo: GET /api/repos/diagnose/Trade-SnipeOS?file=src/logic/tradingLogic.ts
 router.get('/diagnose/:repo', (req, res) => {
   const { repo } = req.params;
   const ALLOWED = ['quark-ide', 'Ahorar', 'Trade-SnipeOS', 'NEXUS-OS-app', 'Code-Coretest'];
@@ -75,9 +83,11 @@ router.get('/diagnose/:repo', (req, res) => {
 
   const repoPath = path.join(REPOS_DIR, repo);
   const gitPath  = path.join(repoPath, '.git');
+  const targetFile = typeof req.query.file === 'string' ? req.query.file : null;
+  const diffLines  = Number(req.query.lines ?? 80);
 
   const run = (cmd: string, cwd?: string): string => {
-    try { return execSync(cmd, { cwd, encoding: 'utf8', timeout: 10000 }).trim(); }
+    try { return execSync(cmd, { cwd, encoding: 'utf8', timeout: 15000 }).trim(); }
     catch (e: any) { return `ERROR: ${e.message?.split('\n')[0] ?? String(e)}`; }
   };
 
@@ -107,11 +117,43 @@ router.get('/diagnose/:repo', (req, res) => {
     result.trailingStopGrep = run(`grep -n "trailingStop\\|placeTrailingStop" "${firstPath}"`);
   }
 
-  // 4. git log -1 (último commit)
+  // 4. git log -1 (último commit del clon)
   result.gitLog1 = run('git log -1 --format="%H %ai %s"', repoPath);
 
   // 5. Espacio en /data
   result.dfData = run('df -h /data');
+
+  // 6. [Opción A] Auditoría por archivo: git log + git diff — solo si ?file= está presente.
+  //    Permite confirmar sin adivinar si un archivo tiene commits no sincronizados en el índice.
+  if (targetFile) {
+    // Sanitize: solo rutas relativas, sin .. ni caracteres peligrosos
+    const safePath = targetFile.replace(/\.\./g, '').replace(/[`$;|&]/g, '');
+    const absFile  = path.join(repoPath, safePath);
+
+    result.fileAudit = {
+      file: safePath,
+      // Últimos 10 commits que tocaron este archivo
+      gitLog10: run(`git log --oneline -10 -- "${safePath}"`, repoPath),
+      // Diff del último commit que tocó este archivo vs su commit anterior
+      gitDiffLastCommit: run(
+        `git log --oneline -1 -- "${safePath}"`,
+        repoPath
+      ).startsWith('ERROR')
+        ? '(sin commits para este archivo en el clon local)'
+        : run(
+            `git diff HEAD~1 HEAD -- "${safePath}" | head -${diffLines}`,
+            repoPath
+          ),
+      // ¿El archivo existe en el clon actualmente?
+      fileExists: fs.existsSync(absFile),
+      // Cuántas líneas tiene actualmente
+      lineCount: fs.existsSync(absFile)
+        ? run(`wc -l < "${absFile}"`, repoPath)
+        : 'N/A',
+      // ¿Está en el symbol_index? (cuántos símbolos indexados para este archivo)
+      symbolIndexNote: `Consultá SELECT count(*) FROM symbol_index WHERE repo='${repo}' AND file_path LIKE '%${path.basename(safePath)}%' para ver cuántos símbolos están indexados.`,
+    };
+  }
 
   res.json(result);
 });
