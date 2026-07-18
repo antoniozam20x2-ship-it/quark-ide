@@ -19,12 +19,28 @@ const QUARK_ENV: 'railway' | 'replit' | 'local' =
   process.env.RAILWAY_ENVIRONMENT            ? 'railway'
   : (process.env.REPL_ID || process.env.REPL_OWNER) ? 'replit'
   : 'local';
+
+// Verificación real de herramientas — no asume que nixpacks.toml funcionó
+function probeBinary(bin: string): string {
+  try {
+    const out = execSync(`${bin} --version`, { timeout: 5000, stdio: 'pipe' })
+      .toString().split('\n')[0].trim();
+    return `✅ ${out}`;
+  } catch {
+    return `❌ no encontrado`;
+  }
+}
+const rgStatus    = probeBinary('rg');
+const ctagsStatus = probeBinary('ctags');
+
 console.log(
-  `[ENV] Quark IDE modo ${QUARK_ENV.toUpperCase()} | REPOS_DIR=${REPOS_DIR}` +
-  (QUARK_ENV === 'railway'
-    ? ' | ripgrep: activo cuando repos estén clonados'
-    : ' | ripgrep: no disponible en dev — usando GitHub API como fallback'),
+  `[ENV] Quark IDE modo ${QUARK_ENV.toUpperCase()} | REPOS_DIR=${REPOS_DIR}\n` +
+  `[ENV]   rg:    ${rgStatus}\n` +
+  `[ENV]   ctags: ${ctagsStatus}`,
 );
+if (QUARK_ENV === 'railway' && (rgStatus.startsWith('❌') || ctagsStatus.startsWith('❌'))) {
+  console.warn('[ENV] ⚠️  Una o más herramientas faltan — rgSearch devolverá [] en silencio hasta que estén instaladas. Verificá nixpacks.toml y que no haya un Dockerfile que lo sobreescriba.');
+}
 
 // ── Agent session persistence (reuses memory_entries table) ───────────────────
 
