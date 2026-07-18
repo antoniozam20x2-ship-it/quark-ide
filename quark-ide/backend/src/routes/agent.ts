@@ -642,7 +642,7 @@ async function searchAndLoadFiles(
     allMatches = await unifiedGrepSearch(searchTerms.join('|'), repo, send);
   } catch (e: any) {
     if (e.message !== 'GITHUB_RATE_LIMIT') throw e;
-    // rate limit: caer al fallback de árbol
+    send('action', { text: '⚠️ GitHub rate limit alcanzado durante el fallback — usando resultados parciales o árbol de archivos' });
   }
 
   const codeMatches = allMatches.filter((m) => isCodeFile(m.path));
@@ -2919,7 +2919,11 @@ function generateSearchVariants(term: string): string[] {
     }
   }
 
-  return [...variants].filter(Boolean);
+  // Cap a 3 variantes por término — el fallback a GitHub tiene rate limit de 10 req/min.
+  // Con ripgrep local como ruta primaria este fallback debe ser raro, pero cuando se activa
+  // no debe quemar el límite completo en una sola búsqueda.
+  const MAX_VARIANTS = 3;
+  return [...variants].filter(Boolean).slice(0, MAX_VARIANTS);
 }
 
 /**
@@ -3041,13 +3045,13 @@ async function unifiedGrepSearch(
         if (e.message === 'GITHUB_RATE_LIMIT') throw e;
         console.warn(`[unifiedGrepSearch] término "${term}" falló:`, e.message);
       }
-      if (termsToTry.length > 1) await new Promise(r => setTimeout(r, 300));
+      if (termsToTry.length > 1) await new Promise(r => setTimeout(r, 600));
     }
     if (!foundWithVariant) {
       console.log(`[unifiedGrepSearch] sin resultados para "${rawTerm}" (variantes probadas: ${termsToTry.join(', ')})`);
       send('action', { text: `⬜ Sin resultados para "${rawTerm}" (probadas: ${termsToTry.join(', ')})` });
     }
-    if (rawTerms.length > 1) await new Promise(r => setTimeout(r, 300));
+    if (rawTerms.length > 1) await new Promise(r => setTimeout(r, 600));
   }
   if (rawResults.length === 0) return [];
 

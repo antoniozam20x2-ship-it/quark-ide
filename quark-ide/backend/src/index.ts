@@ -12,6 +12,7 @@ import agentRouter from './routes/agent.js';
 import { getCosts } from './services/costTracker.js';
 import { initDb } from './services/db.js';
 import { seedOnce } from './services/rufloMemory.js';
+import { syncRepo } from './services/localRepos.js';
 import { getFileTree, getFileContent, createOrUpdateFile, deleteFile, commitMultipleFiles } from './services/github.js';
 import { runDebugger } from './services/debugger.js';
 import previewRouter from './routes/preview.js';
@@ -177,6 +178,25 @@ if (process.env.DATABASE_URL) {
   initDb()
     .then(() => seedOnce())
     .catch((err) => console.error('⚠ DB init failed:', err));
+}
+
+// ── Sync automático al arrancar en Railway ────────────────────────────────────
+// Solo se ejecuta cuando RAILWAY_ENVIRONMENT está presente. No bloquea el arranque:
+// si un repo falla, el proceso continúa y el fallback a GitHub API sigue activo.
+if (process.env.RAILWAY_ENVIRONMENT) {
+  const STARTUP_REPOS = ['quark-ide', 'Ahorar', 'Trade-SnipeOS', 'NEXUS-OS-app', 'Code-Coretest'];
+  (async () => {
+    console.log('[startup-sync] Iniciando sync de repos en Railway…');
+    for (const repo of STARTUP_REPOS) {
+      try {
+        const r = await syncRepo(repo);
+        console.log(`[startup-sync] ${repo}:`, JSON.stringify(r));
+      } catch (e: any) {
+        console.warn(`[startup-sync] ${repo} falló:`, e.message);
+      }
+    }
+    console.log('[startup-sync] Sync completo.');
+  })();
 }
 
 process.on('uncaughtException', (err) => {

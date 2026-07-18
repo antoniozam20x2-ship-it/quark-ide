@@ -1,0 +1,201 @@
+# PROMPT PARA REPLIT — Clonar repos en Railway + activar ripgrep local + endurecer fallback a GitHub
+
+## Objetivo
+
+Activar el pipeline de `localRepos.ts` que ya existe pero nunca se ejecuta en producción, para que
+`unifiedGrepSearch` use ripgrep local como ruta primaria en vez de GitHub Code Search API.
+
+El fallback a GitHub API **NO se elimina** — se mantiene como red de seguridad para emergencias
+(clon corrupto, repo recién agregado sin sincronizar, etc.), pero se endurece para que no falle
+silenciosamente por rate limit cuando se active.
+
+No se genera código nuevo de búsqueda — `rgSearch`, `resolveRepoDir`, `syncRepo` en `localRepos.ts`
+ya están escritos y probados. Falta: (a) que el contenedor tenga `rg` y `ctags` instalados,
+(b) un volumen persistente, (c) algo que dispare el clonado al arrancar, (d) mejor manejo de
+rate limit en el fallback.
+
+---
+
+## 1. Dockerfile / nixpacks — instalar ripgrep y universal-ctags
+
+**Si el proyecto usa Dockerfile**, agregar antes del build:
+
+```dockerfile
+RUN apt-get update && apt-get install -y ripgrep universal-ctags git && rm -rf /var/lib/apt/lists/*
+```
+
+**Si usa Nixpacks** (más común en Railway sin Dockerfile), crear/editar `nixpacks.toml` en la raíz:
+
+```toml
+[phases.setup]
+nixPkgs = ["ripgrep", "universal-ctags", "git"]
+```
+
+Verificar después del deploy con `rg --version` y `ctags --version` en la shell de Railway.
+Si fallan, nada más de este prompt va a funcionar — es el primer chequeo.
+
+---
+
+## 2. Variables de entorno en Railway (Settings → Variables)
+
+```
+REPOS_DIR=/data/repos
+GITHUB_TOKEN=<el token existente>
+GITHUB_OWNER=<el owner existente>
+```
+
+---
+
+## 3. Railway Volume
+
+Railway → el servicio → Settings → Volumes → crear un volumen y montarlo en `/data`.
+
+Sin esto, el clon se borra en cada redeploy y el sistema vuelve a fallback cada vez, incluso
+después de que todo lo demás esté bien configurado.
+
+---
+
+## 4. Endpoint de sync manual + sync automático al arrancar
+
+Agregar en `agent.ts` (o un archivo nuevo `routes/sync.ts` importado en el router principal):
+
+```typescript
+import { syncRepo } from '../services/localRepos.js';
+
+router.post('/sync-repos', async (_req, res) => {
+  const results: Record<string, any> = {};
+  for (const repo of ['quark-ide', 'Ahorar', 'Trade-SnipeOS', 'NEXUS-OS-app', 'Code-Coretest']) {
+    try {
+      results[repo] = await syncRepo(repo);
+    } catch (e: any) {
+      results[repo] = { error: e.message };
+    }
+  }
+  res.json(results);
+});
+```
+
+Y en el arranque del server (`server.ts` o `index.ts`, después de que la DB esté conectada),
+disparar el sync sin bloquear el arranque:
+
+```typescript
+import { syncRepo } from './services/localRepos.js';
+
+if (process.env.RAILWAY_ENVIRONMENT) {
+  (async () => {
+    for (const repo of ['quark-ide', 'Ahorar', 'Trade-SnipeOS', 'NEXUS-OS-app', 'Code-Coretest']) {
+      try {
+        const r = await syncRepo(repo);
+        console.log(`[startup-sync] ${repo}:`, r);
+      } catch (e: any) {
+        console.warn(`[startup-sync] ${repo} falló:`, e.message);
+      }
+    }
+  })();
+}
+```
+
+---
+
+## 5. Endurecer el fallback a GitHub API (se mantiene, pero deja de fallar en silencio)
+
+Este paso es importante precisamente PORQUE el fallback se conserva: una vez que ripgrep local sea
+la ruta normal, el fallback va a activarse rara vez — pero cuando se active (emergencia real), tiene
+que dar una señal clara al usuario en vez de reportar "sin resultados" genérico como en el log original.
+
+**5a. En `searchAndLoadFiles`, dentro de `agent.ts`:**
+
+Ubicar este bloque:
+
+```typescript
+let allMatches: GrepMatch[] = [];
+try {
+  allMatches = await unifiedGrepSearch(searchTerms.join('|'), repo, send);
+} catch (e: any) {
+  if (e.message !== 'GITHUB_RATE_LIMIT') throw e;
+  // rate limit: caer al fallback de árbol
+}
+```
+
+Reemplazar el comentario silencioso por un aviso explícito al usuario:
+
+```typescript
+let allMatches: GrepMatch[] = [];
+try {
+  allMatches = await unifiedGrepSearch(searchTerms.join('|'), repo, send);
+} catch (e: any) {
+  if (e.message !== 'GITHUB_RATE_LIMIT') throw e;
+  send('action', { text: '⚠️ GitHub rate limit alcanzado durante el fallback — usando resultados parciales o árbol de archivos' });
+}
+```
+
+**5b. En `generateSearchVariants`, dentro de `agent.ts`:**
+
+Esta función hoy puede generar 5-7+ variantes por término cuando el input es una frase con espacios
+(camelCase, snake_case, CONSTANT_CASE, PascalCase, sin espacios, acrónimo). Multiplicado por 3 términos
+típicos de una búsqueda, eso son fácilmente 15-20 llamadas a `searchCodeInRepo` en segundos — suficiente
+para agotar el límite de 10 req/min de GitHub Code Search de una sola vez.
+
+Ubicar el final de la función:
+
+```typescript
+  return [...variants].filter(Boolean);
+}
+```
+
+Reemplazar por una versión que capa el total de variantes devueltas:
+
+```typescript
+  // Cap a 3 variantes por término — el fallback a GitHub tiene rate limit de 10 req/min,
+  // y con ripgrep local como ruta primaria este fallback debe ser raro pero no debe
+  // quemar el límite completo en una sola búsqueda cuando se activa.
+  const MAX_VARIANTS = 3;
+  return [...variants].filter(Boolean).slice(0, MAX_VARIANTS);
+}
+```
+
+**5c. (Opcional pero recomendado) — aumentar el delay entre llamadas dentro del fallback**
+
+En `unifiedGrepSearch`, dentro del loop de fallback a GitHub, ubicar:
+
+```typescript
+if (termsToTry.length > 1) await new Promise(r => setTimeout(r, 300));
+```
+
+Y:
+
+```typescript
+if (rawTerms.length > 1) await new Promise(r => setTimeout(r, 300));
+```
+
+Subir ambos a `600` ms — reduce el riesgo de rate limit sin cambiar la lógica, a costa de que el
+fallback (ya excepcional) tarde un poco más.
+
+---
+
+## 6. Verificación — con evidencia real, no supuestos
+
+Después del deploy, pegar el output real de estos 4 puntos (no describir "debería funcionar"):
+
+1. **Log de arranque** debe mostrar:
+   `[ENV] Quark IDE modo RAILWAY | REPOS_DIR=/data/repos | ripgrep: activo cuando repos estén clonados`
+
+2. **Log de sync automático** debe mostrar, para cada uno de los 5 repos:
+   `[startup-sync] Ahorar: { cloned: true, changedFiles: 0, symbolsIndexed: N }`
+   (o `cloned: false` si ya estaba clonado de un run anterior, pero sin `error`)
+
+3. **En la shell de Railway:**
+   ```
+   ls /data/repos
+   ```
+   Debe listar las 5 carpetas con el nombre exacto: `quark-ide`, `Ahorar`, `Trade-SnipeOS`,
+   `NEXUS-OS-app`, `Code-Coretest`.
+
+4. **Repetir la búsqueda `checkS6Bull` en QUARK Agent** (mismo prompt que generó el log original).
+   El log debe mostrar:
+   `🔬 Paso 2 — ripgrep local: ...`
+   en vez de:
+   `☁️ Paso 2 — repo no clonado → GitHub Code Search API`
+
+No marcar esto como resuelto sin pegar el output real de los 4 puntos — en particular el `ls /data/repos`
+y el log de la búsqueda repetida.

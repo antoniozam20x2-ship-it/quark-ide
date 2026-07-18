@@ -50,6 +50,20 @@ router.get('/status', async (_req, res) => {
   }
 });
 
+// POST /api/repos/sync-all — sincroniza los 5 repos en secuencia (Railway manual trigger)
+router.post('/sync-all', async (_req, res) => {
+  const REPOS = ['quark-ide', 'Ahorar', 'Trade-SnipeOS', 'NEXUS-OS-app', 'Code-Coretest'];
+  const results: Record<string, unknown> = {};
+  for (const repo of REPOS) {
+    try {
+      results[repo] = await syncRepo(repo);
+    } catch (e: any) {
+      results[repo] = { error: e.message };
+    }
+  }
+  res.json(results);
+});
+
 // GET /api/repos/diagnose/:repo — diagnóstico temporal del estado del clon local
 router.get('/diagnose/:repo', (req, res) => {
   const { repo } = req.params;
