@@ -1312,8 +1312,11 @@ router.post('/generate', async (req, res) => {
         try {
           const fullContent = await getFileContent(best.path, repo);
           const section = best.line
-            ? smartReadSection(fullContent, best.line, 20)
-            : smartReadSection(fullContent, best.text ?? '', 20);
+            // BUG 4 fix: read the full enclosing function so conditions near the
+            // bottom of a function body (e.g. RSI 46-54 check) are not cut off.
+            // Falls back to smartReadSection ±60 lines if brace-matching fails.
+            ? (readEnclosingFunction(fullContent, best.line) ?? smartReadSection(fullContent, best.line, 60))
+            : smartReadSection(fullContent, best.text ?? '', 60);
           if (section) {
             sectionText = section.excerpt;
             sectionStart = section.startLine;
@@ -1337,14 +1340,20 @@ router.post('/generate', async (req, res) => {
             `Eres un experto analista de código respondiendo en FAST mode.
 
 REGLA ABSOLUTA DE FORMATO — sin excepciones, no negociable:
-- PROHIBIDO emitir bloques de código delimitados por triple backtick (\`\`\`). Ni uno solo, bajo ningún concepto.
-- PROHIBIDO emitir líneas que consistan solo en código (líneas sin prosa acompañante en la misma oración).
-- SOLO prosa en lenguaje natural. Para citar un nombre técnico o fragmento corto, usá backtick simple (\`así\`) dentro de la oración.
+- PROHIBIDO: bloques de código delimitados por triple backtick (\`\`\`). Ni uno solo.
+- PROHIBIDO: nombres de variables o funciones literales tal como aparecen en el código \
+(identificadores camelCase, snake_case, CONSTANT_CASE, expresiones con operadores como \
+===, >=, <=, !, &&, ||, acceso a arrays como arr[i], multiplicaciones como x * 0.3). \
+Traducí todo a lenguaje natural: en vez de "agotCnt >= 3", escribí "el contador supera el umbral"; \
+en vez de "stDirArr[i] === -1", escribí "la dirección del período actual es bajista".
+- PROHIBIDO: líneas que sean código suelto sin prosa alrededor.
+- PERMITIDO: mencionar el nombre propio de una función o clase si es relevante para responder \
+(ej. "la función checkS6Bull"), siempre dentro de una oración en prosa, nunca sola.
 - Máximo 8 oraciones en total.
 
 ESTRUCTURA DE RESPUESTA:
-1. Qué hace este código (1-2 oraciones)
-2. Cómo funciona (2-3 oraciones, citando nombres clave con backtick simple dentro de la prosa)
+1. Qué hace este código (1-2 oraciones en español natural)
+2. Cómo funciona (2-3 oraciones describiendo la lógica en prosa, sin transcribir código)
 3. Cuándo o dónde se activa (1-2 oraciones)
 
 REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está explícitamente en el fragmento dado. Si el fragmento no es suficiente para responder la pregunta completa, decilo en 1 oración y sugerí usar DEEP mode para exploración más amplia.`,
@@ -1355,16 +1364,23 @@ REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está explícitamente en el fragmen
             send('action', { text: `💡 ${line}` });
           }
 
+          // BUG 5 fix: confidence level derives from match origin, not hardcoded 'medium'.
+          // symbol_index hit (symbolType set) = exact lookup → HIGH.
+          // fuzzy-match / ripgrep hit = approximate location → MEDIUM.
+          const fastConfidence: 'high' | 'medium' = best.symbolType ? 'high' : 'medium';
+
           const fastFindingId = await saveInvestigationFinding({
             repo,
             files: [{ path: best.path, lineRanges: best.line ? [{ start: sectionStart, end: sectionEnd, matchedTerm: fastPattern }] : [] }],
             diagnosis: fastAnalysis,
-            confidence: 'medium',
+            confidence: fastConfidence,
           }).catch(() => null);
 
           send('confidence', {
-            level: 'medium',
-            reason: 'FAST mode — contexto mínimo (~20-40 líneas), sin exploración de dependencias',
+            level: fastConfidence,
+            reason: fastConfidence === 'high'
+              ? 'FAST mode — símbolo ubicado por symbol_index (lookup exacto)'
+              : 'FAST mode — símbolo ubicado por fuzzy-match/ripgrep (posición aproximada)',
             suggestedAction: 'deep',
             files: [best.path],
             diagnosis: fastAnalysis,
@@ -1468,9 +1484,24 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
         try {
           const fc = await getFileContent(match.path, repo);
           const section = match.line
-            ? smartReadSection(fc, match.line, 20)
-            : (match.text ? smartReadSection(fc, match.text, 20) : null);
+            // BUG 4 fix: read full enclosing function, not a fixed ±20-line window.
+            ? (readEnclosingFunction(fc, match.line) ?? smartReadSection(fc, match.line, 60))
+            : (match.text ? smartReadSection(fc, match.text, 60) : null);
           if (!section) continue;
+
+          // BUG 2 fix: validate the extracted fragment actually contains the
+          // searched symbol literally. symbol_index can point to a stale line
+          // number if the file changed since last indexing — if the symbol name
+          // doesn't appear in the window we read, skip this match so we don't
+          // falsely report it as HIGH-CONFIDENCE evidence of that symbol.
+          const symbolTerms = deepKeywords.length > 0 ? deepKeywords : deepPattern.split('|').map(t => t.trim()).filter(Boolean);
+          const fragmentLower = section.excerpt.toLowerCase();
+          const symbolFound = symbolTerms.some(t => t.length > 2 && fragmentLower.includes(t.toLowerCase()));
+          if (!symbolFound) {
+            send('action', { text: `⚠️ ${match.path}:${match.line} — fragmento no contiene el símbolo buscado [${symbolTerms.slice(0, 2).join(', ')}], descartado` });
+            continue;
+          }
+
           deepEvidence.push({ path: match.path, line: section.startLine, fragment: section.excerpt });
           send('action', { text: `📌 ${match.path}:${section.startLine}-${section.endLine}` });
           const preview = section.excerpt.split('\n').slice(0, 8);
@@ -3078,6 +3109,76 @@ function smartReadSection(
   return { excerpt, startLine: start + 1, endLine: end + 1 };
 }
 
+/**
+ * BUG 4 fix — lee la función completa que contiene la línea ancla, siguiendo
+ * el balance de llaves. Evita cortes en el medio de un bloque de condiciones.
+ * Cap de seguridad: 300 líneas por función.
+ * Si el balance no cierra dentro del cap, retorna null → el llamador cae a
+ * smartReadSection con un ventana más amplia (±60 líneas).
+ */
+function readEnclosingFunction(
+  content: string,
+  anchorLine: number, // 1-indexed
+): { excerpt: string; startLine: number; endLine: number } | null {
+  const lines = content.split('\n');
+  const anchor = Math.max(0, anchorLine - 1); // convertir a 0-indexed
+
+  // Cuenta llaves netas en una línea (ignorando strings de forma aproximada)
+  function netBraces(line: string): number {
+    let n = 0, inStr = false, strChar = '';
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inStr) {
+        if (c === strChar && line[i - 1] !== '\\') inStr = false;
+      } else if (c === '"' || c === "'" || c === '`') {
+        inStr = true; strChar = c;
+      } else if (c === '{') n++;
+      else if (c === '}') n--;
+    }
+    return n;
+  }
+
+  // Escanear hacia atrás desde anchor para encontrar el { de apertura del bloque
+  // que nos contiene, y luego la declaración de función asociada.
+  let depth = 0;
+  let funcStart = anchor;
+  for (let i = anchor; i >= 0; i--) {
+    depth -= netBraces(lines[i]); // yendo hacia atrás: { suma depth
+    if (depth > 0) {
+      // Estamos dentro de un bloque que abre en línea i o antes.
+      // Buscar hasta 5 líneas más atrás la declaración de función.
+      funcStart = i;
+      for (let j = Math.max(0, i - 4); j <= i; j++) {
+        if (/\b(function|const|let|var|async)\b|\)\s*[\{:]/.test(lines[j])) {
+          funcStart = j;
+        }
+      }
+      break;
+    }
+  }
+
+  // Escanear hacia adelante desde funcStart para encontrar el } de cierre
+  depth = 0;
+  let started = false;
+  let funcEnd = Math.min(lines.length - 1, funcStart + 299);
+  for (let i = funcStart; i < lines.length && i <= funcStart + 299; i++) {
+    const n = netBraces(lines[i]);
+    depth += n;
+    if (n > 0) started = true;
+    if (started && depth === 0) { funcEnd = i; break; }
+  }
+
+  // Si no encontramos cierre o la función es demasiado grande, retornar null
+  if (!started) return null;
+
+  const excerpt = lines
+    .slice(funcStart, funcEnd + 1)
+    .map((l, idx) => `${funcStart + idx + 1}: ${l}`)
+    .join('\n');
+
+  return { excerpt, startLine: funcStart + 1, endLine: funcEnd + 1 };
+}
+
 interface GrepMatch {
   path: string;
   line?: number;
@@ -3379,6 +3480,14 @@ relevante que identifiques de esa estructura. No más de dos llamadas por archiv
 Una vez que encontraste los archivos relevantes, leelos con read_file y respondé la pregunta citando \
 fragmentos exactos del código. No inferás lo que no leíste.
 
+ROL ESTRICTO DE HAIKU — límites que no podés cruzar:
+Tu único rol es LOCALIZAR y CITAR código — nunca emitir juicio sobre él.
+PROHIBIDO: emitir diagnóstico de causa raíz, proponer cambios, sugerir un patch, escribir \
+old_str/new_str, ni concluir "el bug está en X" o "la solución es Y". Si encontrás código \
+relevante, citá el fragmento literal y describí QUÉ hace (mecánica), no POR QUÉ falla ni \
+CÓMO arreglarlo. Esa decisión la toma Sonnet en el paso siguiente.
+Si el historial incluye "EVIDENCIA VERIFICADA (DEEP mode)", usála directamente — no la re-analices.
+
 EVIDENCIA PREVIA CONFIRMADA (DEEP mode):
 Si el historial de conversación contiene una sección "EVIDENCIA CONFIRMADA (DEEP mode)", esas citas de \
 archivo:línea ya fueron verificadas por lectura directa del código — son hechos, no suposiciones. NO las \
@@ -3574,12 +3683,14 @@ async function runChatTurn(
   //   'generate' → Haiku searches/reads, then Sonnet writes the patch
   const intent = classifyIntent(userMessage);
   {
-    // For 'generate' queries, strip propose_patch from Haiku's tools so it cannot
-    // short-circuit into writing the patch itself — that's Sonnet's job.
+    // Haiku NEVER gets propose_patch — that tool is exclusively for Sonnet.
+    // BUG 0 fix: allowPatch was accidentally set to `intent === 'explain'` (true for
+    // informational queries), which let Haiku generate patches for read-only questions.
+    // Now it is always false: Haiku only searches and reads, Sonnet proposes patches.
     const haikuResult = await runHaikuTier(
       messages, repo, send, sessionId,
       12,                          // maxSteps
-      intent === 'explain',        // allowPatch: explain queries may patch; generate queries must not
+      false,                       // allowPatch: ALWAYS false — Haiku never proposes patches
     );
     if (haikuResult.resolved) {
       await saveChatHistory(sessionId, haikuResult.messages);

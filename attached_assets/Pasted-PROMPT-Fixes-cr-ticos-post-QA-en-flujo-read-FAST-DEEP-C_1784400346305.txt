@@ -1,0 +1,41 @@
+PROMPT — Fixes críticos post-QA en flujo read (FAST/DEEP/CHAT)
+
+Contexto: Se probó en producción la separación FAST/DEEP/CHAT recién implementada para resolvedIntent === 'read'. Se encontraron 6 bugs, uno de ellos crítico. Corregir en este orden de prioridad.
+
+BUG 0 — CRÍTICO — BLOQUEANTE: pregunta de lectura genera patch y botón de commit
+Al preguntar “cómo funciona la señal S6” (pregunta puramente informativa), el pipeline de CHAT (Haiku, en el paso 2 de 3) generó diagnóstico de causa raíz, un patch concreto (agotCnt >= 3 → agotCnt >= 4) y expuso el botón “✅ Aprobar y commitear 1 patch(es)” — sin que el usuario pidiera ningún cambio.
+
+	•	Auditar dónde se decide resolvedIntent para esta conversación: verificar si se está evaluando una sola vez al inicio o si algún paso intermedio (Haiku explorando dependencias) está re-triggereando lógica de modify.
+	•	Regla dura: mientras resolvedIntent === 'read', NINGÚN paso de la cadena (Groq, Haiku, Sonnet) puede generar old_str/new_str, proponer patch, ni mostrar el botón de aprobar/commitear. Esa capacidad debe estar físicamente deshabilitada a nivel de código para esta rama, no solo evitada por prompt.
+	•	Signal OS es producción crítica sobre Bitget — esto no puede depender solo de que el modelo “decida no hacerlo”.
+
+BUG 1 — Haiku se excede de su rol
+Haiku hizo diagnóstico de causa raíz completo y propuso patch con verificación de old_str — eso es tarea exclusiva de Sonnet según la arquitectura acordada. El rol de Haiku en CHAT es únicamente ampliar exploración cuando la evidencia de DEEP tiene huecos, nunca emitir juicio ni proponer cambios.
+
+	•	Restringir el prompt/tools de Haiku en este flujo para que no pueda generar bloques de patch ni conclusiones de causa raíz — solo debe devolver hallazgos adicionales (ubicación + cita) para que Sonnet los evalúe.
+
+BUG 2 — DEEP cita la función equivocada
+Con confianza HIGH, DEEP reportó rango tradingLogic.ts:650-690 como evidencia de checkS6Bull (línea 670), pero el contenido mostrado corresponde a checkS5EarlyBull (líneas 650-657) — nunca llegó a leer la 670. Se repitió en dos pruebas distintas, no es aislado.
+
+	•	Verificar que smartReadSection/lectura por rango en DEEP efectivamente centra el rango alrededor de la línea reportada por symbol_index, y no de otro punto de referencia desactualizado.
+	•	Antes de marcar HIGH CONFIDENCE, validar que el fragmento citado contiene literalmente el nombre del símbolo buscado (ej. el string checkS6Bull) — si no aparece en el rango extraído, no debe citarse como evidencia de ese símbolo.
+
+BUG 3 — FAST filtra identificadores y expresiones literales del código
+La regla actual solo prohíbe bloques de código (```), pero el modelo copia nombres de variables y expresiones sueltas (acelBull, `stDirArr[i] === -1`, `dyn_ti * 0.3`) en medio de la prosa. Esto contradice el pedido original de “explicar sin meter código”.
+
+	•	Endurecer la regla de FAST: prohibido también nombres de variables/identificadores literales y operadores de comparación tal cual aparecen en el archivo. Traducir siempre a lenguaje natural.
+
+BUG 4 — Lectura incompleta: falta condición de RSI 46-54
+Tanto FAST como el caché que usa CHAT (paso Groq) omiten que S6 también valida que el RSI esté fuera del rango 46-54, además de EMA10 y FVG. Posible corte prematuro en smartReadSection antes de llegar a esa condición.
+
+	•	Ampliar o hacer dinámico el rango de lectura de smartReadSection para que cubra la función completa del símbolo encontrado, no un número fijo de líneas.
+	•	Confirmar que el fix se propaga al caché que lee CHAT/Groq, ya que hoy hereda la lectura incompleta.
+
+BUG 5 — Confianza MEDIUM pese a match exacto por symbol_index (bug ya conocido)
+Sigue activo: FAST reporta MEDIUM CONFIDENCE aunque el símbolo se ubicó por symbol_index (lookup exacto). Pasar metadata de symbolType/origen del match al prompt de análisis para distinguir ubicación confiable vs. fragmento adivinado, tal como estaba pendiente de antes.
+
+Restricciones generales:
+
+	•	Corregir BUG 0 primero y de forma aislada — es el único que representa riesgo real sobre producción.
+	•	Diff quirúrgico por cada bug, no reescritura de archivos completos.
+	•	Antes de commitear cualquier fix, mostrame evidencia real: para BUG 0, una prueba donde una pregunta de lectura NO genere botón de commit; para BUG 2, una prueba donde el fragmento citado contenga el símbolo buscado.
