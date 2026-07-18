@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { getFileTree, getFileContent, getFileContentConditional, searchCodeInRepo, createOrUpdateFile } from '../services/github.js';
-import { lookupSymbol, rgSearch, isCloned, REPOS_DIR } from '../services/localRepos.js';
+import { lookupSymbol, rgSearch, isCloned, REPOS_DIR, getRepoSymbolNames, SymbolMatch } from '../services/localRepos.js';
 import { callAI } from '../lib/aiRouter.js';
 import { generateContent } from '../services/gemini.js';
 import pool from '../services/db.js';
@@ -2990,6 +2990,29 @@ interface GrepMatch {
   symbolType?: string;
 }
 
+function normalizeForMatch(s: string): string {
+  return s.toLowerCase().replace(/[\s_-]/g, '');
+}
+
+/**
+ * Busca símbolos reales del repo cuyo nombre normalizado contenga el término
+ * candidato normalizado. Reemplaza la necesidad de una lista de stopwords:
+ * un término que no matchea nada real (ej. "funciona") simplemente no
+ * devuelve candidatos, sin mantenimiento manual.
+ *
+ * Ordena por longitud ascendente — el símbolo más corto/específico que
+ * contiene el término suele ser el match más relevante.
+ */
+function findRealSymbolMatches(term: string, symbolNames: string[], maxResults = 3): string[] {
+  const normTerm = normalizeForMatch(term);
+  if (normTerm.length < 3) return []; // términos muy cortos son ambiguos, no forzar match
+
+  return symbolNames
+    .filter(sym => normalizeForMatch(sym).includes(normTerm))
+    .sort((a, b) => a.length - b.length)
+    .slice(0, maxResults);
+}
+
 async function unifiedGrepSearch(
   pattern: string,
   repo: string,
@@ -3000,15 +3023,47 @@ async function unifiedGrepSearch(
   send('action', { text: `🧠 Paso 1 — buscando en índice de símbolos: [${rawTerms.join(', ')}]` });
 
   // ── 1. Symbol index — exact identifier lookup, O(1) ──────────────────────
+  const symbolMatches: { term: string; sym: SymbolMatch }[] = [];
   for (const term of rawTerms) {
     if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(term)) {
       const sym = await lookupSymbol(term, repo);
-      if (sym) {
-        console.log(`[unifiedGrepSearch] symbol_index hit: ${term} → ${sym.filePath}:${sym.lineNumber}`);
-        send('action', { text: `⚡ Símbolo "${term}" en índice → ${sym.filePath}:${sym.lineNumber}` });
-        return [{ path: sym.filePath, line: sym.lineNumber, text: term, symbolType: sym.symbolType }];
+      if (sym) symbolMatches.push({ term, sym });
+    }
+  }
+  if (symbolMatches.length > 0) {
+    console.log(`[unifiedGrepSearch] symbol_index hits exactos: [${symbolMatches.map(m => m.term).join(', ')}]`);
+  }
+
+  // ── 1.5. Fuzzy match contra símbolos reales del repo ──────────────────────
+  // Solo se activa si el paso 1 (match exacto) no encontró nada. Consulta la
+  // lista real de símbolos indexados (cacheada) y busca cuáles contienen el
+  // término candidato. Esto reemplaza la necesidad de generar variantes a
+  // ciegas o de mantener una lista de stopwords: un término genérico como
+  // "funciona" simplemente no matchea ningún símbolo real y se descarta solo.
+  if (symbolMatches.length === 0) {
+    const realSymbolNames = await getRepoSymbolNames(repo);
+    if (realSymbolNames.length > 0) {
+      for (const term of rawTerms) {
+        const fuzzyCandidates = findRealSymbolMatches(term, realSymbolNames);
+        if (fuzzyCandidates.length > 0) {
+          console.log(`[unifiedGrepSearch] fuzzy match: "${term}" → símbolos reales [${fuzzyCandidates.join(', ')}]`);
+        }
+        for (const symName of fuzzyCandidates) {
+          const sym = await lookupSymbol(symName, repo);
+          if (sym) symbolMatches.push({ term: symName, sym });
+        }
       }
     }
+  }
+
+  if (symbolMatches.length > 0) {
+    // Preferir el término/símbolo más largo — términos cortos y genéricos que
+    // igual lograron matchear (ej. tipos comunes) suelen ser menos específicos
+    // que nombres técnicos largos como "trailingStop" o "checkS1Bull".
+    symbolMatches.sort((a, b) => b.term.length - a.term.length);
+    const best = symbolMatches[0];
+    send('action', { text: `⚡ Símbolo en índice: ${best.sym.filePath}:${best.sym.lineNumber} (término: "${best.term}")` });
+    return [{ path: best.sym.filePath, line: best.sym.lineNumber, text: best.term, symbolType: best.sym.symbolType }];
   }
   send('action', { text: `⬜ Paso 1 — no en índice` });
 

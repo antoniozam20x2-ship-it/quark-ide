@@ -1,0 +1,192 @@
+# PROMPT PARA REPLIT — Validar términos de búsqueda contra símbolos reales del
+# repo (elimina la necesidad de listas de stopwords) + fix del corte prematuro
+# en symbol_index
+
+## Contexto — por qué este enfoque en vez de más stopwords
+
+Ya confirmamos dos bugs con pruebas reales:
+
+**Bug A:** en `unifiedGrepSearch`, el paso 1 (symbol_index) corta en el primer
+match de `rawTerms`, sin importar si es genérico. Con `["funciona", "trailing",
+"Signal"]`, "Signal" (un tipo/interfaz genérico) ganó y tapó "trailing" (el
+término realmente relevante).
+
+**Bug de fondo:** `extractKeywordsForSearch` le pide a Groq que "adivine"
+palabras clave sin mostrarle qué identificadores existen realmente en el repo.
+Por eso devuelve basura como "funciona" — no es un problema de prompt engineering
+que se resuelva con una lista de stopwords cada vez más larga (esa lista nunca
+termina: cada proyecto nuevo tiene sus propias palabras genéricas del dominio).
+
+## La solución: validar contra `symbol_index` real, no contra una lista negra
+
+La tabla `symbol_index` (poblada por ctags en cada sync) ya tiene el nombre real
+de cada función/clase/variable del repo. En vez de mantener una lista de
+palabras prohibidas, vamos a **consultar qué símbolos existen de verdad** y
+usar eso como filtro: si un término candidato no se parece a ningún símbolo
+real del código, se descarta solo — sin mantenimiento, sin lista que ampliar
+proyecto por proyecto.
+
+## Cambio 1 — `services/localRepos.ts`: nueva función `getRepoSymbolNames`
+
+Agregar, cerca de `lookupSymbol`, una función que trae (con cache en memoria de
+5 minutos, para no pegarle a la DB en cada búsqueda) todos los nombres de
+símbolo distintos indexados para un repo:
+
+```typescript
+// ── Cache de nombres de símbolos por repo (para fuzzy-match de keywords) ──────
+const SYMBOL_NAMES_CACHE = new Map<string, { names: string[]; cachedAt: number }>();
+const SYMBOL_NAMES_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Devuelve todos los symbol_name distintos indexados para un repo.
+ * Cacheado 5 minutos en memoria — se usa para validar si un término de
+ * búsqueda candidato corresponde a algo real del código, en vez de adivinar.
+ */
+export async function getRepoSymbolNames(repo: string): Promise<string[]> {
+  const cached = SYMBOL_NAMES_CACHE.get(repo);
+  if (cached && Date.now() - cached.cachedAt < SYMBOL_NAMES_TTL_MS) return cached.names;
+  try {
+    const r = await pool.query<{ symbol_name: string }>(
+      'SELECT DISTINCT symbol_name FROM symbol_index WHERE repo = $1',
+      [repo],
+    );
+    const names = r.rows.map(row => row.symbol_name);
+    SYMBOL_NAMES_CACHE.set(repo, { names, cachedAt: Date.now() });
+    return names;
+  } catch (e: any) {
+    console.warn(`[localRepos] getRepoSymbolNames falló para ${repo}:`, e.message);
+    return cached?.names ?? [];
+  }
+}
+```
+
+Exportarla junto a las demás funciones que ya se importan en `agent.ts`.
+
+## Cambio 2 — `agent.ts`: importar la nueva función
+
+Actualizar el import existente:
+
+```typescript
+import { lookupSymbol, rgSearch, isCloned, REPOS_DIR, getRepoSymbolNames } from '../services/localRepos.js';
+```
+
+## Cambio 3 — `agent.ts`: helper de fuzzy-match contra símbolos reales
+
+Agregar cerca de `unifiedGrepSearch`:
+
+```typescript
+function normalizeForMatch(s: string): string {
+  return s.toLowerCase().replace(/[\s_-]/g, '');
+}
+
+/**
+ * Busca símbolos reales del repo cuyo nombre normalizado contenga el término
+ * candidato normalizado. Reemplaza la necesidad de una lista de stopwords:
+ * un término que no matchea nada real (ej. "funciona") simplemente no
+ * devuelve candidatos, sin mantenimiento manual.
+ *
+ * Ordena por longitud ascendente — el símbolo más corto/específico que
+ * contiene el término suele ser el match más relevante.
+ */
+function findRealSymbolMatches(term: string, symbolNames: string[], maxResults = 3): string[] {
+  const normTerm = normalizeForMatch(term);
+  if (normTerm.length < 3) return []; // términos muy cortos son ambiguos, no forzar match
+
+  return symbolNames
+    .filter(sym => normalizeForMatch(sym).includes(normTerm))
+    .sort((a, b) => a.length - b.length)
+    .slice(0, maxResults);
+}
+```
+
+## Cambio 4 — `agent.ts`: reescribir el paso 1 de `unifiedGrepSearch`
+
+Reemplazar el paso 1 actual (el que corta en el primer match — Bug A) por esta
+versión, que además agrega el fuzzy-match como paso 1.5 antes de caer a
+ripgrep:
+
+```typescript
+// ── 1. Symbol index — exact identifier lookup, O(1) ──────────────────────
+const symbolMatches: { term: string; sym: SymbolMatch }[] = [];
+for (const term of rawTerms) {
+  if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(term)) {
+    const sym = await lookupSymbol(term, repo);
+    if (sym) symbolMatches.push({ term, sym });
+  }
+}
+if (symbolMatches.length > 0) {
+  console.log(`[unifiedGrepSearch] symbol_index hits exactos: [${symbolMatches.map(m => m.term).join(', ')}]`);
+}
+
+// ── 1.5. Fuzzy match contra símbolos reales del repo ──────────────────────
+// Solo se activa si el paso 1 (match exacto) no encontró nada. Consulta la
+// lista real de símbolos indexados (cacheada) y busca cuáles contienen el
+// término candidato. Esto reemplaza la necesidad de generar variantes a
+// ciegas o de mantener una lista de stopwords: un término genérico como
+// "funciona" simplemente no matchea ningún símbolo real y se descarta solo.
+if (symbolMatches.length === 0) {
+  const realSymbolNames = await getRepoSymbolNames(repo);
+  if (realSymbolNames.length > 0) {
+    for (const term of rawTerms) {
+      const fuzzyCandidates = findRealSymbolMatches(term, realSymbolNames);
+      if (fuzzyCandidates.length > 0) {
+        console.log(`[unifiedGrepSearch] fuzzy match: "${term}" → símbolos reales [${fuzzyCandidates.join(', ')}]`);
+      }
+      for (const symName of fuzzyCandidates) {
+        const sym = await lookupSymbol(symName, repo);
+        if (sym) symbolMatches.push({ term: symName, sym });
+      }
+    }
+  }
+}
+
+if (symbolMatches.length > 0) {
+  // Preferir el término/símbolo más largo — términos cortos y genéricos que
+  // igual lograron matchear (ej. tipos comunes) suelen ser menos específicos
+  // que nombres técnicos largos como "trailingStop" o "checkS1Bull".
+  symbolMatches.sort((a, b) => b.term.length - a.term.length);
+  const best = symbolMatches[0];
+  send('action', { text: `⚡ Símbolo en índice: ${best.sym.filePath}:${best.sym.lineNumber} (término: "${best.term}")` });
+  return [{ path: best.sym.filePath, line: best.sym.lineNumber, text: best.term, symbolType: best.sym.symbolType }];
+}
+```
+
+**Importante:** ajustá el tipo `SymbolMatch` al nombre real que ya usa
+`lookupSymbol` en el archivo — no lo inventes si difiere.
+
+## Qué NO tocar
+
+- El paso 2 (ripgrep con `buildRipgrepPattern`) queda igual — sigue siendo el
+  fallback correcto para búsquedas que no son de un símbolo con nombre (ej.
+  buscar un valor de configuración, un string literal, un comentario)
+- El paso 3 (fallback GitHub API con `generateSearchVariants`) queda igual
+- `extractKeywordsForSearch` queda igual — no hace falta tocar su prompt ni
+  agregarle una lista de stopwords, porque el fuzzy-match downstream ya filtra
+  lo que no corresponde a código real
+
+## Testing después del cambio
+
+1. Repetir "cómo funciona el trailing stop en Signal OS" (repo Ahorar). Con
+   `["funciona", "trailing", "Signal"]`:
+   - "funciona" no debería matchear ningún símbolo real → se descarta
+   - "trailing" debería fuzzy-matchear contra `placeTrailingStop` (o similar)
+     vía `findRealSymbolMatches` → resuelto directo por symbol_index, sin pasar
+     por ripgrep
+   - "Signal" puede seguir matcheando algo genérico, pero ya no gana porque
+     "placeTrailingStop"/"trailingStop" es más largo/específico en el
+     ordenamiento final
+2. Confirmar en los logs que aparece: `fuzzy match: "trailing" → símbolos
+   reales [...]`
+3. Confirmar que la respuesta cita `placeTrailingStop` y
+   `TRAILING_BUFFER_MULT=1.5x` sobre `effectiveSlPct`
+4. Probar con otro repo (Quark IDE mismo, o Sniper OS) con una pregunta en
+   lenguaje natural para confirmar que el fuzzy-match generaliza sin necesitar
+   ninguna traducción manual por proyecto (a diferencia de la capa
+   `signalOSLayer` hardcodeada que existe hoy en `extractKeywordsForSearch`
+   solo para el repo Ahorar — ese hardcodeo ya no debería ser necesario para
+   los casos que este fuzzy-match cubre, aunque no hace falta borrarlo todavía)
+5. Confirmar que CHAT y DEEP-agéntico (que llaman a la misma
+   `unifiedGrepSearch`) heredan la mejora automáticamente
+6. Revisar que la consulta a `getRepoSymbolNames` no agregue latencia
+   perceptible — debería ser rápida por el cache de 5 minutos, pero confirmar
+   el tiempo de la primera consulta (sin cache) para un repo grande como Ahorar

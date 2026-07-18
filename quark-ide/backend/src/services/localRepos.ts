@@ -412,6 +412,32 @@ export async function lookupSymbol(symbolName: string, repo: string): Promise<Sy
   }
 }
 
+// ── Cache de nombres de símbolos por repo (para fuzzy-match de keywords) ──────
+const SYMBOL_NAMES_CACHE = new Map<string, { names: string[]; cachedAt: number }>();
+const SYMBOL_NAMES_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Devuelve todos los symbol_name distintos indexados para un repo.
+ * Cacheado 5 minutos en memoria — se usa para validar si un término de
+ * búsqueda candidato corresponde a algo real del código, en vez de adivinar.
+ */
+export async function getRepoSymbolNames(repo: string): Promise<string[]> {
+  const cached = SYMBOL_NAMES_CACHE.get(repo);
+  if (cached && Date.now() - cached.cachedAt < SYMBOL_NAMES_TTL_MS) return cached.names;
+  try {
+    const r = await pool.query<{ symbol_name: string }>(
+      'SELECT DISTINCT symbol_name FROM symbol_index WHERE repo = $1',
+      [repo],
+    );
+    const names = r.rows.map(row => row.symbol_name);
+    SYMBOL_NAMES_CACHE.set(repo, { names, cachedAt: Date.now() });
+    return names;
+  } catch (e: any) {
+    console.warn(`[localRepos] getRepoSymbolNames falló para ${repo}:`, e.message);
+    return cached?.names ?? [];
+  }
+}
+
 // ── ripgrep search ────────────────────────────────────────────────────────────
 
 export interface RgMatch {
