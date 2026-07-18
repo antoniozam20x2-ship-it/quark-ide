@@ -1346,6 +1346,33 @@ router.post('/generate', async (req, res) => {
             sectionText = firstLines.map((l, i) => `${i + 1}: ${l}`).join('\n');
             sectionEnd = firstLines.length;
           }
+
+          // Cambio 1: inyectar constantes UPPER_CASE referenciadas en el fragmento
+          // pero definidas fuera de él (en el mismo archivo, ya cargado en memoria).
+          // Costo: cero red — fullContent ya está en memoria, es un scan O(n) de strings.
+          if (sectionText) {
+            const rawExcerpt = sectionText.replace(/^\d+:\s*/mg, ''); // quitar prefijos de línea
+            const allConstNames = [...rawExcerpt.matchAll(/\b([A-Z][A-Z0-9_]{3,})\b/g)].map(m => m[1]);
+            const uniqueConsts = [...new Set(allConstNames)]
+              .filter(c => !new RegExp(`\\b${c}\\s*[=:]`).test(rawExcerpt)); // no definidas en el fragmento
+            if (uniqueConsts.length > 0) {
+              const fileLines = fullContent.split('\n');
+              const constDefs: string[] = [];
+              for (const constName of uniqueConsts.slice(0, 10)) {
+                const lineIdx = fileLines.findIndex(
+                  l => /\b(const|let|var|export)\b/.test(l) && l.includes(constName) && l.includes('=')
+                );
+                if (lineIdx !== -1 && (lineIdx + 1 < sectionStart || lineIdx + 1 > sectionEnd)) {
+                  constDefs.push(`${lineIdx + 1}: ${fileLines[lineIdx].trimEnd()}`);
+                }
+              }
+              if (constDefs.length > 0) {
+                const header = `// Constantes referenciadas (definidas fuera del fragmento):\n${constDefs.join('\n')}\n`;
+                sectionText = header + '\n' + sectionText;
+                send('action', { text: `📎 +${constDefs.length} constante(s): ${uniqueConsts.slice(0, 4).join(', ')}` });
+              }
+            }
+          }
         } catch {
           send('action', { text: '⚠️ No se pudo leer el contexto del símbolo.' });
           send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
