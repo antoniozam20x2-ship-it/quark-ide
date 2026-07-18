@@ -1595,7 +1595,14 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               {/* CHAT button */}
               <button
                 onClick={() => {
-                  const chatText = `Continuemos el diagnóstico de FAST mode. Archivos ya revisados: ${confidencePayload.files.join(', ')}. Diagnóstico parcial: ${confidencePayload.diagnosis}. Verifica si hay dependencias externas (timers, funciones que llaman a esto, loops que podrían apagar la condición) antes de proponer un fix.`;
+                  const originalPrompt = currentPromptRef.current;
+                  const isDeep = confidencePayload.suggestedAction === 'chat';
+                  const hasEvidence = confidencePayload.files.length > 0;
+                  const chatText = isDeep
+                    ? hasEvidence
+                      ? `La pregunta original fue: ${originalPrompt}\n\nDEEP encontró evidencia en: ${confidencePayload.files.join(', ')}. El findingId ya está cargado con los fragmentos literales y citas file:line exactas — analizá desde esa evidencia sin repetir la búsqueda.`
+                      : `La pregunta original fue: ${originalPrompt}\n\nDEEP no pudo confirmar evidencia literal para este símbolo. El índice puede estar desactualizado o el símbolo puede tener un nombre diferente en el código. Explorá el codebase para ubicarlo antes de proponer un fix.`
+                    : `La pregunta original fue: ${originalPrompt}\n\nFAST encontró contexto parcial en: ${confidencePayload.files.join(', ')}. Diagnóstico inicial: ${confidencePayload.diagnosis}. Verificá dependencias externas (timers, funciones que llaman a esto, loops que podrían apagar la condición) antes de proponer un fix.`;
                   pendingAutoSendRef.current = chatText;
                   setMode('chat');
                   setPrompt(chatText);

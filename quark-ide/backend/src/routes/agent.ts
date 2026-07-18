@@ -1534,6 +1534,9 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
         suggestedAction: 'chat',
         files: deepEvidence.map(e => e.path),
         findingId: deepFindingId ?? undefined,
+        diagnosis: deepEvidence.length > 0
+          ? deepEvidenceSummary
+          : 'DEEP mode no pudo confirmar evidencia literal para este símbolo. El índice puede estar desactualizado o el símbolo puede tener un nombre diferente en el código fuente.',
       });
 
       await saveContextSummary(repo, deepEvidenceSummary || 'DEEP read — sin evidencia', 'agent', deepEvidence.map(e => e.path))
