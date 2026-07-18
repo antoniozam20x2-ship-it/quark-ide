@@ -164,7 +164,8 @@ interface InvestigationFinding {
   id: string;
   repo: string;
   files: { path: string; lineRanges?: { start: number; end: number; matchedTerm: string }[] }[];
-  diagnosis: string;
+  diagnosis: string; // FAST mode: AI prose summary; DEEP mode: raw citation text (no interpretation)
+  evidence?: { path: string; line: number; fragment: string }[]; // DEEP mode: structured raw file:line citations
   confidence: 'high' | 'medium' | 'low';
   savedAt: number;
 }
@@ -1249,184 +1250,210 @@ router.post('/generate', async (req, res) => {
       .map((f) => f.path)
       .join('\n');
 
-    // ── READ PATH — no Gemini generation, just fetch real file content ────────
+    // ── READ PATH — FAST or DEEP based on deepMode toggle ───────────────────
     if (resolvedIntent === 'read') {
-      send('action', { text: '📖 Modo lectura — buscando en GitHub...' });
 
-      let readFiles: { path: string; content: string; fullContent?: string; startLine?: number; endLine?: number; lineRanges?: { start: number; end: number; matchedTerm: string }[] }[] = [];
+      // ── FAST READ (deepMode === false) ──────────────────────────────────────
+      // One pass: symbol_index + fuzzy-match → smartReadSection (~20-40 lines).
+      // Groq output: prose only — ZERO code blocks or bare code lines.
+      // If the first pass finds nothing: say so and stop. No retry.
+      if (!deepMode) {
+        send('action', { text: '⚡ FAST — localizando símbolo...' });
 
-      // Buscar con GitHub Code Search primero
-      const searchedFiles = await searchAndLoadFiles(prompt, repo, send);
+        const fastKeywords = await extractKeywordsForSearch(prompt, repo);
+        const fastPattern = fastKeywords.length > 0
+          ? fastKeywords.join('|')
+          : prompt.split(/\s+/).filter(w => w.length > 4).slice(0, 3).join('|');
 
-      if (searchedFiles.length > 0) {
-        readFiles = searchedFiles;
-      } else {
-        // Fallback: identifyFilesToRead con el árbol
-        send('action', { text: '🔄 Fallback — seleccionando del árbol...' });
-        const pathsToRead = await identifyFilesToRead(prompt, filePaths);
-        if (!pathsToRead.length) {
-          send('action', { text: '⚠️ No se encontraron archivos relevantes.' });
+        const fastMatches = await unifiedGrepSearch(fastPattern, repo, send);
+
+        if (fastMatches.length === 0) {
+          send('action', { text: '❌ No encontré referencias directas a esos términos. Reformulá con el nombre exacto de la función o variable, o usá DEEP mode para una búsqueda extensiva.' });
           send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
-          await new Promise((r) => setTimeout(r, 100));
+          await new Promise(r => setTimeout(r, 100));
           res.end();
           return;
         }
-        const results = await Promise.allSettled(
-          pathsToRead.map(async (filePath) => {
-            send('file', { path: filePath });
-            const content = await getFileContent(filePath, repo);
-            return { path: filePath, content, fullContent: content };
-          })
-        );
-        readFiles = results
-          .filter((r): r is PromiseFulfilledResult<{ path: string; content: string; fullContent: string }> => r.status === 'fulfilled')
-          .map((r) => r.value);
-      }
 
-      // Extracción quirúrgica de función si aplica
-      const functionName = extractFunctionNameFromPrompt(prompt);
-      if (functionName) {
-        send('action', { text: `🎯 Función detectada: ${functionName} — búsqueda quirúrgica` });
-        for (const f of readFiles) {
-          const extracted = extractFunctionBlock(f.content, functionName);
-          if (extracted) {
-            send('action', { text: `✂️ Extrayendo ${functionName} (líneas ${extracted.startLine + 1}-${extracted.endLine + 1})` });
-            f.content = extracted.block;
-            f.startLine = extracted.startLine;
-            f.endLine = extracted.endLine;
-            break;
-          }
-        }
-      }
+        const best = fastMatches[0];
+        send('action', { text: `📍 Símbolo encontrado: ${best.path}${best.line ? `:${best.line}` : ''}` });
 
-      // ── AI analysis of read content ─────────────────────────────────────────
-      if (readFiles.length > 0) {
-        send('action', { text: '🔍 Analizando contenido...' });
+        let sectionText = '';
+        let sectionStart = 0;
+        let sectionEnd = 0;
         try {
-          const fileContext = (await Promise.all(readFiles.map(async (f) => {
-            const lines = f.content.split('\n');
-            // Limitar contexto al AI — máximo 80 líneas por archivo
-            const maxLines = 80;
-            const truncated = lines.length > maxLines
-              ? lines.slice(0, maxLines).join('\n') + `\n// ... (${lines.length - maxLines} líneas más omitidas)`
-              : f.content;
-            return `--- ${f.path} (${lines.length} líneas totales, mostrando ${Math.min(lines.length, maxLines)}) ---\n${truncated}`;
-          }))).join('\n\n');
+          const fullContent = await getFileContent(best.path, repo);
+          const section = best.line
+            ? smartReadSection(fullContent, best.line, 20)
+            : smartReadSection(fullContent, best.text ?? '', 20);
+          if (section) {
+            sectionText = section.excerpt;
+            sectionStart = section.startLine;
+            sectionEnd = section.endLine;
+          } else {
+            const firstLines = fullContent.split('\n').slice(0, 40);
+            sectionText = firstLines.map((l, i) => `${i + 1}: ${l}`).join('\n');
+            sectionEnd = firstLines.length;
+          }
+        } catch {
+          send('action', { text: '⚠️ No se pudo leer el contexto del símbolo.' });
+          send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+          await new Promise(r => setTimeout(r, 100));
+          res.end();
+          return;
+        }
 
-          const analysis = await generateWithFallback(
-            `El usuario preguntó: "${prompt}"\n\nContenido de los archivos leídos:\n${fileContext}`,
-            `Eres un experto analista de código senior que explica sistemas complejos de forma clara.
+        try {
+          const fastAnalysis = await generateWithFallback(
+            `El usuario pregunta: "${prompt}"\n\nFragmento del código en ${best.path} (líneas ${sectionStart}-${sectionEnd}):\n${sectionText}`,
+            `Eres un experto analista de código respondiendo en FAST mode.
 
-DETECTA LA INTENCIÓN DEL USUARIO:
+REGLA ABSOLUTA DE FORMATO — sin excepciones, no negociable:
+- PROHIBIDO emitir bloques de código delimitados por triple backtick (\`\`\`). Ni uno solo, bajo ningún concepto.
+- PROHIBIDO emitir líneas que consistan solo en código (líneas sin prosa acompañante en la misma oración).
+- SOLO prosa en lenguaje natural. Para citar un nombre técnico o fragmento corto, usá backtick simple (\`así\`) dentro de la oración.
+- Máximo 8 oraciones en total.
 
-1. Si pide EXPLICACIÓN ("cómo funciona", "qué hace", "explícame", "qué es"):
-   - Responde en lenguaje natural como un senior explicando a un colega
-   - Estructura: QUÉ HACE → CÓMO FUNCIONA → CUÁNDO SE ACTIVA → POR QUÉ IMPORTA
-   - Máximo 8 líneas de texto
-   - CERO código crudo salvo que sea indispensable para ilustrar (máximo 3 líneas)
+ESTRUCTURA DE RESPUESTA:
+1. Qué hace este código (1-2 oraciones)
+2. Cómo funciona (2-3 oraciones, citando nombres clave con backtick simple dentro de la prosa)
+3. Cuándo o dónde se activa (1-2 oraciones)
 
-2. Si pide VER CÓDIGO ("muéstrame", "dame el código", "cómo está implementado", "muestra la función"):
-   - Muestra el fragmento EXACTO y relevante del archivo
-   - Incluye el nombre del archivo y líneas
-   - Máximo 30 líneas de código
-   - Acompaña con 2-3 líneas de explicación de qué hace ese bloque
-
-3. Si pide DIAGNÓSTICO ("por qué falla", "qué está mal", "error", "bug"):
-   - Formato:
-     CAUSA: [1 línea exacta]
-     DÓNDE: [archivo:función]
-     POR QUÉ: [2-3 líneas]
-     SOLUCIÓN: [descripción sin código]
-
-REGLAS GENERALES:
-- NUNCA muestres archivos completos
-- NUNCA dumpees más de 30 líneas de código
-- Si la respuesta requiere más contexto → pídelo explícitamente
-- Sin headers con # ni listas con guiones — solo prosa continua y fragmentos de código
-- USA MARKDOWN DE FORMA SISTEMÁTICA: pon en **negrita** todo nombre de función, variable, archivo o conclusión principal. Pon entre backticks (comillas invertidas) cualquier fragmento de código, condición, valor literal o nombre técnico citado del código real. Esto es obligatorio, no opcional.
-
-REGLA DE AUTOEVALUACIÓN — SIEMPRE al final de tu respuesta, agrega esta línea exacta:
-CONFIDENCE: [high|medium|low] | REASON: [una razón breve]
-
-Usa estos criterios:
-- "high": el problema está contenido en un solo archivo, sin dependencias de otras funciones/timers/loops externos a lo ya leído.
-- "medium": el problema probablemente involucra otras funciones o archivos no leídos todavía.
-- "low": la búsqueda solo tocó 1 término o 1 archivo, o el diagnóstico es parcial/no concluyente.
-
-Si detectás que el código depende de un flujo de control (setInterval, funciones que se llaman entre sí, banderas de estado compartidas entre múltiples archivos), NUNCA marques "high" aunque el fragmento que viste parezca suficiente.
-
-REGLA ANTI-ALUCINACIÓN — ES LA MÁS IMPORTANTE:
-Si el contenido de los archivos leídos NO menciona específicamente lo que el usuario pregunta (el término, componente, función o concepto exacto que buscaba), decilo con claridad y detenete ahí. Ejemplo: "No encontré referencias a [lo que preguntó] en los archivos revisados ([lista de archivos]). Puede estar en otro módulo o bajo un nombre distinto."
-NUNCA completes la respuesta con una definición genérica de programación o IA disfrazada de respuesta específica del proyecto. Si los archivos leídos no tienen la respuesta, la respuesta correcta es admitirlo — no inventar una explicación plausible.
-RESULTADO PARCIAL vs. CONCLUSIÓN DEFINITIVA: si tu conclusión de "no encontrado" se basa en UN solo archivo revisado o una sola búsqueda, NO la presentes como definitiva. Usá lenguaje parcial: "La búsqueda inicial no encontró esto en [archivo/término buscado] — podría estar bajo otro nombre, decime si querés que busque de otra forma." Reservá el lenguaje definitivo ("no encontré referencias a X en el proyecto") solo cuando ya revisaste más de una fuente relacionada o probaste más de un término sin resultado.
-REGLA DE ANCLAJE POR AFIRMACIÓN:
-Cada afirmación específica sobre el comportamiento del código (qué activa algo, qué condición dispara qué, cómo se relacionan dos variables) debe ir acompañada del fragmento de código exacto que la sustenta — no solo el nombre del archivo.
-Formato: la afirmación, seguida de la línea o condición literal entre backticks que la prueba.
-Ejemplo malo: "checkS1Bull se activa en tendencia alcista. Está en tradingLogic.ts."
-Ejemplo bueno: "checkS1Bull se activa en tendencia alcista — la condición \`stDirArr[i] === -1\` (que corresponde a stBull) es parte del retorno de la función."
-Si no podés citar el fragmento exacto que sustenta una afirmación, no la incluyas — es señal de que estás infiriendo en vez de leyendo.
-Si el código tiene dos funciones o ramas similares y opuestas (ej. una versión "Bull"/"alcista" y otra "Bear"/"bajista", o un "if" y su "else" equivalente), tratalas por separado — no mezcles las condiciones de ambas en un mismo párrafo. Indicá explícitamente qué condición pertenece a cuál.`,
+REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está explícitamente en el fragmento dado. Si el fragmento no es suficiente para responder la pregunta completa, decilo en 1 oración y sugerí usar DEEP mode para exploración más amplia.`,
           );
 
-          // Parse confidence metadata from model response
-          const confMatch = analysis.match(/CONFIDENCE:\s*(high|medium|low)\s*\|\s*REASON:\s*(.+)/i);
-          const confidence = confMatch?.[1]?.toLowerCase() ?? 'medium';
-          const confidenceReason = confMatch?.[2]?.trim() ?? '';
-          const cleanAnalysis = analysis.replace(/CONFIDENCE:.*$/im, '').trim();
-
-          // Stream each non-empty line as its own action event
-          const analysisLines = cleanAnalysis.split('\n').map((l) => l.trim()).filter(Boolean);
-          for (const line of analysisLines) {
+          const fastLines = fastAnalysis.split('\n').map(l => l.trim()).filter(Boolean);
+          for (const line of fastLines) {
             send('action', { text: `💡 ${line}` });
           }
 
-          const suggestedAction = confidence === 'high' ? 'deep' : 'chat';
-
-          // Persistir hallazgo para que DEEP/CHAT lo reutilice sin re-exploración
           const fastFindingId = await saveInvestigationFinding({
             repo,
-            files: readFiles.map(f => ({ path: f.path, lineRanges: f.lineRanges })),
-            diagnosis: cleanAnalysis,
-            confidence: confidence as 'high' | 'medium' | 'low',
+            files: [{ path: best.path, lineRanges: best.line ? [{ start: sectionStart, end: sectionEnd, matchedTerm: fastPattern }] : [] }],
+            diagnosis: fastAnalysis,
+            confidence: 'medium',
           }).catch(() => null);
 
           send('confidence', {
-            level: confidence,
-            reason: confidenceReason,
-            suggestedAction,
-            files: readFiles.map(f => f.path),
-            diagnosis: cleanAnalysis,
+            level: 'medium',
+            reason: 'FAST mode — contexto mínimo (~20-40 líneas), sin exploración de dependencias',
+            suggestedAction: 'deep',
+            files: [best.path],
+            diagnosis: fastAnalysis,
             findingId: fastFindingId ?? undefined,
           });
 
-          // Guardar en contexto compartido para otras superficies
-          const sharedSummary = await summarizeForSharedContext(cleanAnalysis);
-          const sharedSummaryText = sharedSummary || `Archivos analizados: ${readFiles.map(f => f.path).join(', ')}`;
-          await saveContextSummary(repo, sharedSummaryText, 'agent', readFiles.map(f => f.path))
-            .catch(err => console.warn('[shared-context] READ PATH save failed:', err instanceof Error ? err.message : err));
+          const fastSharedSummary = await summarizeForSharedContext(fastAnalysis);
+          await saveContextSummary(repo, fastSharedSummary || `FAST read: ${best.path}`, 'agent', [best.path])
+            .catch(() => {});
         } catch {
-          send('action', { text: '⚠️ Análisis no disponible — revisa el contenido directamente' });
+          send('action', { text: '⚠️ Análisis no disponible — intenta reformular la pregunta' });
         }
+
+        send('done', { files: [], commitMessage: '', mainComponent: best.path, mainContent: '', repo, branch });
+        await new Promise(r => setTimeout(r, 100));
+        res.end();
+        return;
       }
 
-      // Guardar contexto para que DEEP mode lo reutilice
-      const fnNameForCtx = extractFunctionNameFromPrompt(prompt)
-      const ctxSummary = await summarizeForCache(readFiles).catch(() => '');
+      // ── DEEP READ (deepMode === true) ───────────────────────────────────────
+      // Step 1: generateStructuralSkeleton on top repo files to locate relevant code.
+      // Step 2: symbol_index + fuzzy-match + ripgrep — stops at first confirmed hit.
+      // Step 3: extract literal fragments with exact file:line citations.
+      // Output: raw evidence only — NO interpretation, NO diagnosis, NO "probablemente".
+      send('action', { text: '🔭 DEEP — explorando estructura del repo...' });
+
+      const topFilePaths = filePaths.split('\n').filter(Boolean).slice(0, 6);
+      const skeletonParts: string[] = [];
+      for (const fp of topFilePaths) {
+        try {
+          const fc = await getFileContent(fp, repo);
+          const sk = generateStructuralSkeleton(fc, fp);
+          if (sk && sk !== fc) {
+            skeletonParts.push(`--- skeleton: ${fp} ---\n${sk.split('\n').slice(0, 25).join('\n')}`);
+          }
+        } catch { /* skip */ }
+      }
+      if (skeletonParts.length > 0) {
+        send('action', { text: `🦴 Skeleton generado (${skeletonParts.length} archivos clave identificados)` });
+      }
+
+      const deepKeywords = await extractKeywordsForSearch(prompt, repo);
+      const deepPattern = deepKeywords.length > 0
+        ? deepKeywords.join('|')
+        : prompt.split(/\s+/).filter(w => w.length > 4).slice(0, 4).join('|');
+
+      send('action', { text: `🔍 DEEP — buscando: [${deepPattern}]` });
+      const deepMatches = await unifiedGrepSearch(deepPattern, repo, send);
+
+      if (deepMatches.length === 0) {
+        send('action', { text: '❌ Sin resultados confirmados en symbol_index ni ripgrep. Reformulá con el nombre exacto de la función o variable.' });
+        send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+        await new Promise(r => setTimeout(r, 100));
+        res.end();
+        return;
+      }
+
+      // Extract literal fragments — no AI, no interpretation
+      const deepEvidence: { path: string; line: number; fragment: string }[] = [];
+      for (const match of deepMatches.slice(0, 5)) {
+        try {
+          const fc = await getFileContent(match.path, repo);
+          const section = match.line
+            ? smartReadSection(fc, match.line, 20)
+            : (match.text ? smartReadSection(fc, match.text, 20) : null);
+          if (!section) continue;
+          deepEvidence.push({ path: match.path, line: section.startLine, fragment: section.excerpt });
+          send('action', { text: `📌 ${match.path}:${section.startLine}-${section.endLine}` });
+          const preview = section.excerpt.split('\n').slice(0, 8);
+          for (const fl of preview) {
+            send('action', { text: fl });
+          }
+        } catch { /* skip unfetchable files */ }
+      }
+
+      if (deepEvidence.length === 0) {
+        send('action', { text: '⚠️ Match encontrado en índice pero no se pudo leer el fragmento del archivo.' });
+      }
+
+      // Persist raw evidence — diagnosis field holds citation text, not AI summary
+      const deepEvidenceSummary = deepEvidence
+        .map(e => `${e.path}:${e.line}\n${e.fragment.split('\n').slice(0, 6).join('\n')}`)
+        .join('\n\n');
+
+      const deepFindingId = await saveInvestigationFinding({
+        repo,
+        files: deepEvidence.map(e => ({ path: e.path, lineRanges: [{ start: e.line, end: e.line + 40, matchedTerm: deepPattern }] })),
+        diagnosis: deepEvidenceSummary,
+        evidence: deepEvidence,
+        confidence: deepEvidence.length > 0 ? 'high' : 'low',
+      }).catch(() => null);
+
+      send('confidence', {
+        level: deepEvidence.length > 0 ? 'high' : 'low',
+        reason: 'DEEP mode — fragmentos literales con citas file:line exactas, sin interpretación',
+        suggestedAction: 'chat',
+        files: deepEvidence.map(e => e.path),
+        findingId: deepFindingId ?? undefined,
+      });
+
+      await saveContextSummary(repo, deepEvidenceSummary || 'DEEP read — sin evidencia', 'agent', deepEvidence.map(e => e.path))
+        .catch(() => {});
+
+      // Persist agent context so follow-up CHAT/DEEP turns can reuse file list
       await saveAgentContext({
-        preloadedFiles: readFiles,
-        functionName: fnNameForCtx,
+        preloadedFiles: deepEvidence.map(e => ({ path: e.path, content: '' })),
+        functionName: extractFunctionNameFromPrompt(prompt),
         prompt,
         repo,
-        summary: ctxSummary,
-      }).catch(() => {/* no bloquear si falla */})
+        summary: deepEvidenceSummary.slice(0, 500),
+      }).catch(() => {});
       cacheNotifications.emit('cache-update', { type: 'cache-update', repo, source: 'agent', timestamp: new Date().toISOString() });
 
-      // done with real file content — no commitMessage (read-only)
-      const firstFile = readFiles[0];
       send('done', {
-        files:         [], // No mostrar archivos en modo lectura — solo el análisis
+        files:         [],
         commitMessage: '',
-        mainComponent: firstFile?.path ?? '',
+        mainComponent: deepEvidence[0]?.path ?? '',
         mainContent:   '',
         repo,
         branch,
@@ -2533,7 +2560,8 @@ REGLA DE ANCLAJE POR AFIRMACIÓN:
 Cada afirmación específica sobre el comportamiento del código (qué activa algo, qué condición dispara qué, cómo se relacionan dos variables) debe ir acompañada del fragmento de código exacto del resumen o contexto que la sustenta — no solo el nombre del archivo.
 Formato: la afirmación, seguida de la línea o condición literal entre backticks que la prueba.
 Si no podés citar el fragmento exacto que sustenta una afirmación, no la incluyas — es señal de que estás infiriendo en vez de leyendo.
-Si el código tiene dos funciones o ramas similares y opuestas (ej. una versión "Bull"/"alcista" y otra "Bear"/"bajista", o un "if" y su "else" equivalente), tratalas por separado — no mezcles las condiciones de ambas en un mismo párrafo. Indicá explícitamente qué condición pertenece a cuál.`;
+Si el código tiene dos funciones o ramas similares y opuestas (ej. una versión "Bull"/"alcista" y otra "Bear"/"bajista", o un "if" y su "else" equivalente), tratalas por separado — no mezcles las condiciones de ambas en un mismo párrafo. Indicá explícitamente qué condición pertenece a cuál.
+SOBRE EVIDENCIA DEEP MODE: si el contexto contiene una sección "EVIDENCIA VERIFICADA (DEEP mode)", esas citas de archivo:línea son lecturas reales del código fuente — tratálas como hechos confirmados. No agregues frases como "probablemente", "podría ser" ni cuestiones la veracidad de lo citado. Usá esa evidencia directamente en tu respuesta sin rodearte de disclaimers.`;
 }
 
 router.post('/apply-patch', async (req, res) => {
@@ -3281,7 +3309,14 @@ estructura general del archivo, luego UNA segunda llamada dirigida a la sección
 relevante que identifiques de esa estructura. No más de dos llamadas por archivo.
 
 Una vez que encontraste los archivos relevantes, leelos con read_file y respondé la pregunta citando \
-fragmentos exactos del código. No inferás lo que no leíste.`;
+fragmentos exactos del código. No inferás lo que no leíste.
+
+EVIDENCIA PREVIA CONFIRMADA (DEEP mode):
+Si el historial de conversación contiene una sección "EVIDENCIA CONFIRMADA (DEEP mode)", esas citas de \
+archivo:línea ya fueron verificadas por lectura directa del código — son hechos, no suposiciones. NO las \
+cuestiones, NO las valides de nuevo con grep_code ni read_file. Solo ampliá la búsqueda si la evidencia \
+tiene huecos explícitos: por ejemplo, cita un símbolo pero no muestra el flujo completo que lo llama, o \
+la pregunta pide algo que la evidencia existente no cubre directamente.`;
 
 // Tools available for Sonnet synthesis turn — no search tools, only read + patch
 // Sonnet only gets propose_patch — it must not re-investigate with search tools.
@@ -3388,8 +3423,11 @@ async function runChatTurn(
           : '';
         return `${f.path}${rangeStr}`;
       }).join(', ');
-      send('action', { text: `📎 Hallazgo previo cargado (FAST→CHAT) — archivos priorizados: ${findingFilesSummary}` });
-      fastFindingContext = `\n\nINVESTIGACIÓN PREVIA (FAST mode, confianza ${fastFinding.confidence.toUpperCase()}) — usa esto como punto de partida, no repitas la exploración desde cero salvo que necesites más detalle:\n${fastFinding.diagnosis}\nArchivos identificados: ${findingFilesWithRanges}`;
+      const isDeepEvidence = (fastFinding.evidence?.length ?? 0) > 0;
+      send('action', { text: `📎 ${isDeepEvidence ? 'Evidencia DEEP' : 'Hallazgo FAST'} cargado — archivos priorizados: ${findingFilesSummary}` });
+      fastFindingContext = isDeepEvidence
+        ? `\n\nEVIDENCIA CONFIRMADA (DEEP mode — lectura real del código fuente con citas file:línea exactas). Tratá cada fragmento citado como hecho verificado: NO lo cuestiones, NO lo reinterpretes, NO pidas confirmación adicional. Solo ampliá la búsqueda si hay huecos explícitos en la evidencia (ej: cita un símbolo pero no muestra el flujo que lo llama, o la pregunta cubre algo que la evidencia no tiene):\n${fastFinding.diagnosis}\nArchivos con evidencia: ${findingFilesWithRanges}`
+        : `\n\nINVESTIGACIÓN PREVIA (FAST mode, confianza ${fastFinding.confidence.toUpperCase()}) — usa esto como punto de partida, no repitas la exploración desde cero salvo que necesites más detalle:\n${fastFinding.diagnosis}\nArchivos identificados: ${findingFilesWithRanges}`;
     }
   }
 
@@ -3425,7 +3463,10 @@ async function runChatTurn(
         : '';
       return `${f.path}${rangeStr}`;
     }).join(', ');
-    const findingHint = `HALLAZGO PREVIO DE FAST MODE (confianza ${fastFinding.confidence.toUpperCase()}, investigación real del repo):\n${fastFinding.diagnosis.slice(0, 500)}\nArchivos identificados: ${findingFilesWithRangesHint}\nSi este hallazgo responde la pregunta directamente, úsalo sin pedir herramientas.`;
+    const isDeepEvidenceHint = (fastFinding.evidence?.length ?? 0) > 0;
+    const findingHint = isDeepEvidenceHint
+      ? `EVIDENCIA VERIFICADA (DEEP mode — lectura real del código fuente):\n${fastFinding.diagnosis.slice(0, 800)}\nArchivos con citas exactas: ${findingFilesWithRangesHint}\nEsta evidencia es HECHO CONFIRMADO — no la cuestiones, no agregues "probablemente" ni pidas verificación adicional. Si responde la pregunta, úsala directamente sin invocar herramientas de búsqueda.`
+      : `HALLAZGO PREVIO DE FAST MODE (confianza ${fastFinding.confidence.toUpperCase()}, investigación real del repo):\n${fastFinding.diagnosis.slice(0, 500)}\nArchivos identificados: ${findingFilesWithRangesHint}\nSi este hallazgo responde la pregunta directamente, úsalo sin pedir herramientas.`;
     cacheHint = findingHint + (cacheHint ? '\n\n' + cacheHint : '');
   }
 

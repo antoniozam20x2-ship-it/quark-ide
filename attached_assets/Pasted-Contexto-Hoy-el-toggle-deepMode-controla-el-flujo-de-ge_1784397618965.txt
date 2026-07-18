@@ -1,0 +1,23 @@
+Contexto: Hoy el toggle deepMode controla el flujo de generación de patches (cirugía vs loop agéntico) cuando resolvedIntent === 'modify'. Esta tarea NO toca ese comportamiento. Es exclusivamente para separar, dentro de resolvedIntent === 'read', dos ramas según el mismo toggle deepMode, que hoy no existen como ramas diferenciadas.
+
+Objetivo: que FAST y DEEP tengan roles estrictamente distintos, y que CHAT trate la evidencia de DEEP como hecho verificado, no como opinión a filtrar.
+
+1. FAST mode (deepMode === false, resolvedIntent === 'read')
+
+	•	Localiza el símbolo con symbol_index + fuzzy-match, una sola pasada (no reintentar).
+	•	Lee contexto mínimo con smartReadSection (~20-40 líneas alrededor del símbolo).
+	•	Genera explicación en lenguaje natural con Groq. Regla dura: el output nunca debe contener bloques de código (```), ni líneas de código sueltas. Reemplazar la regla actual de “no más de 30 líneas” por prohibición total de código en el output — solo prosa.
+	•	Si la primera pasada no encuentra nada: decirlo explícitamente y sugerir reformular la pregunta. No reintentar con más rondas de búsqueda; eso es responsabilidad de DEEP.
+
+2. DEEP mode (deepMode === true, resolvedIntent === 'read')
+
+	•	Primer paso: generateStructuralSkeleton (ya existe, actualmente sin usar en este flujo) para ubicar archivos relevantes antes de buscar.
+	•	Búsqueda extensiva con criterio de corte: recorre symbol_index + fuzzy-match + ripgrep en los archivos marcados por el skeleton, y se detiene en cuanto obtiene un match confirmado por symbol_index, o al agotar fuzzy-match + ripgrep en esos archivos — lo que ocurra primero. No recorrer el repo completo sin límite.
+	•	Por cada hallazgo: extraer fragmento literal con cita exacta archivo:línea. Prohibido: “probablemente”, causa raíz, diagnóstico, cualquier lenguaje interpretativo.
+	•	El objeto InvestigationFinding pasa a contener evidencia cruda (cita + ubicación), no un resumen interpretado. Actualizar su construcción para eliminar cualquier campo o texto que hoy mezcle confianza/interpretación con el hallazgo.
+
+3. CHAT mode
+
+	•	Recibe la evidencia de DEEP (vía fastFindingContext o el mecanismo equivalente) como hecho confirmado. Reforzar el prompt de Haiku/Groq para que no cuestione ni reinterprete lo que DEEP ya citó con archivo:línea.
+	•	Haiku solo amplía la búsqueda si la evidencia de DEEP tiene huecos evidentes (ej. cita un símbolo pero no el flujo que lo llama).
+	•	Sonnet es el único nivel que emite juicio: diagnóstico de causa raíz y propuesta de patch. Esto no cambia el flujo de modify existente, solo aplica cuando el resultado de lectura escala a un patch.
