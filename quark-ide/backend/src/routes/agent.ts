@@ -1306,16 +1306,36 @@ router.post('/generate', async (req, res) => {
         const best = fastMatches[0];
         send('action', { text: `📍 Símbolo encontrado: ${best.path}${best.line ? `:${best.line}` : ''}` });
 
+        // Cambio 3: si el hit viene de ripgrep (sin symbolType), intentar resolver
+        // la definición real del símbolo en symbol_index antes de leer el fragmento.
+        // Evita que readEnclosingFunction lea la función LLAMADORA en vez del cuerpo
+        // del símbolo buscado cuando ripgrep retornó un call site en vez de la definición.
+        let readPath = best.path;
+        let readLine  = best.line;
+        if (!best.symbolType && fastKeywords.length > 0) {
+          for (const kw of fastKeywords) {
+            if (/^[a-zA-Z_$][a-zA-Z0-9_$]+$/.test(kw)) {
+              const sym = await lookupSymbol(kw, repo);
+              if (sym?.symbolType === 'function') {
+                readPath = sym.filePath;
+                readLine  = sym.lineNumber;
+                send('action', { text: `🎯 Definición en índice: ${sym.filePath}:${sym.lineNumber}` });
+                break;
+              }
+            }
+          }
+        }
+
         let sectionText = '';
         let sectionStart = 0;
         let sectionEnd = 0;
         try {
-          const fullContent = await getFileContent(best.path, repo);
-          const section = best.line
+          const fullContent = await getFileContent(readPath, repo);
+          const section = readLine
             // BUG 4 fix: read the full enclosing function so conditions near the
             // bottom of a function body (e.g. RSI 46-54 check) are not cut off.
             // Falls back to smartReadSection ±60 lines if brace-matching fails.
-            ? (readEnclosingFunction(fullContent, best.line) ?? smartReadSection(fullContent, best.line, 60))
+            ? (readEnclosingFunction(fullContent, readLine) ?? smartReadSection(fullContent, readLine, 60))
             : smartReadSection(fullContent, best.text ?? '', 60);
           if (section) {
             sectionText = section.excerpt;
@@ -1341,19 +1361,18 @@ router.post('/generate', async (req, res) => {
 
 REGLA ABSOLUTA DE FORMATO — sin excepciones, no negociable:
 - PROHIBIDO: bloques de código delimitados por triple backtick (\`\`\`). Ni uno solo.
-- PROHIBIDO: nombres de variables o funciones literales tal como aparecen en el código \
-(identificadores camelCase, snake_case, CONSTANT_CASE, expresiones con operadores como \
-===, >=, <=, !, &&, ||, acceso a arrays como arr[i], multiplicaciones como x * 0.3). \
-Traducí todo a lenguaje natural: en vez de "agotCnt >= 3", escribí "el contador supera el umbral"; \
-en vez de "stDirArr[i] === -1", escribí "la dirección del período actual es bajista".
-- PROHIBIDO: líneas que sean código suelto sin prosa alrededor.
-- PERMITIDO: mencionar el nombre propio de una función o clase si es relevante para responder \
-(ej. "la función checkS6Bull"), siempre dentro de una oración en prosa, nunca sola.
+- PROHIBIDO: líneas de código suelto sin prosa alrededor (ej: una línea que solo diga \`x = arr[i] * 0.3\` sin explicación en prosa).
+- PROHIBIDO: expresiones con operadores escritas en crudo sin contexto (===, &&, ||, arr[i], acceso a propiedades encadenadas).
+- PERMITIDO y REQUERIDO cuando el fragmento lo contiene: valores numéricos concretos que responden la pregunta \
+directamente. Si el código dice 10, decí "10 períodos" — NO lo conviertas en "un parámetro configurable". \
+Ejemplos correctos: "usa una EMA de 10 períodos", "el umbral son 3 velas", "el multiplicador es 0.3".
+- PERMITIDO: nombre propio de una función, clase o constante si es relevante para la respuesta \
+(ej. "la función checkS6Bull", "la constante EMA_FAST_PERIOD"), siempre dentro de una oración en prosa.
 - Máximo 8 oraciones en total.
 
 ESTRUCTURA DE RESPUESTA:
 1. Qué hace este código (1-2 oraciones en español natural)
-2. Cómo funciona (2-3 oraciones describiendo la lógica en prosa, sin transcribir código)
+2. Cómo funciona (2-3 oraciones describiendo la lógica, mencionando períodos/umbrales/valores concretos si los hay)
 3. Cuándo o dónde se activa (1-2 oraciones)
 
 REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está explícitamente en el fragmento dado. Si el fragmento no es suficiente para responder la pregunta completa, decilo en 1 oración y sugerí usar DEEP mode para exploración más amplia.`,
