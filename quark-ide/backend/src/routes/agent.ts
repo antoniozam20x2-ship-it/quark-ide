@@ -1656,6 +1656,14 @@ Responde en máximo 150 palabras. Solo el razonamiento, sin código.`,
 
 ROL: Leer, diagnosticar, explicar. NUNCA modificar código.
 
+RAZONAMIENTO PASO A PASO (OBLIGATORIO):
+Antes de responder, razona visiblemente en este orden:
+1. ¿Qué término/función exacto busco?
+2. ¿En qué archivo/línea lo encontré?
+3. ¿Qué hace exactamente ese código?
+4. ¿Cómo responde a la pregunta del usuario?
+Si no encontraste el término, dilo explícitamente y sugerí variantes a buscar.
+
 CONTEXTO DISPONIBLE:
 Repo: ${projectName ?? repo} (${repo})
 
@@ -1680,7 +1688,8 @@ REGLAS:
 - Si el problema es simple → respuesta corta (3-5 líneas)
 - Si requiere profundidad → máximo 12 líneas de explicación
 - NUNCA generes archivos ni código modificado
-- Si necesitas más contexto → pídelo explícitamente`;
+- Si necesitas más contexto → pídelo explícitamente
+- Si no encontrás algo → decilo claramente y sugerí próximos pasos concretos`;
 
       try {
         const analysis = await generateWithFallback(
@@ -2800,38 +2809,62 @@ async function smartReadFile(
  * Convierte un término de búsqueda en un patrón regex para ripgrep.
  *
  * Con -i (case-insensitive):
- *   "trailing stop"   → \btrailing[\s_-]*stop\b
+ *   "fair value gap"  → \bfair[\s_-]*value[\s_-]*gap\b
  *   "trailing_stop"   → \btrailing[\s_-]*stop\b
  *   "trailingStop"    → \b(?:trailingStop|trailing_stop|TRAILINGSTOP)\b
- *   "signal"          → \bsignal\b
+ *   "checkS6Bull"     → \b(?:checkS6Bull|check_s6bull|CHECKS6BULL|checkS\d+Bull)\b
+ *   "FVG"             → \b(?:FVG|fvg)\b
  */
 function buildRipgrepPattern(term: string): string {
   const trimmed = term.trim();
   if (!trimmed) return trimmed;
 
+  // Escapa chars especiales de regex (deja dígitos sin tocar, los reemplazamos luego)
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-  // Frase en lenguaje natural (con espacios) → palabras unidas con separador opcional
+  // ── Frase en lenguaje natural (con espacios) ─────────────────────────────
+  // "fair value gap" → \bfair[\s_-]*value[\s_-]*gap\b  (matchea fairValueGap, fair_value_gap, etc.)
   if (/\s/.test(trimmed)) {
     const words = trimmed.split(/\s+/).filter(Boolean).map(esc);
     return `\\b${words.join('[\\s_-]*')}\\b`;
   }
 
-  // Con separadores existentes (guion o guion bajo)
+  // ── Separadores explícitos (guion / guion_bajo) ───────────────────────────
+  // "trailing-stop" → \btrailing[\s_-]*stop\b
   if (/[-_]/.test(trimmed)) {
     const parts = trimmed.split(/[-_]/).filter(Boolean).map(esc);
     return `\\b${parts.join('[\\s_-]*')}\\b`;
   }
 
-  // camelCase / PascalCase → generar alternación con snake_case y UPPER_CASE
-  let pattern = esc(trimmed);
+  // ── Término sin espacios ni separadores ──────────────────────────────────
+  const alternatives: string[] = [esc(trimmed)];
+
+  // camelCase / PascalCase → añadir snake_case y UPPER_CASE
+  // "trailingStop" → trailingStop|trailing_stop|TRAILINGSTOP
   if (/[a-z][A-Z]/.test(trimmed)) {
     const snake = trimmed.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
-    pattern = `(?:${pattern}|${esc(snake)}|${esc(trimmed.toUpperCase())})`;
+    alternatives.push(esc(snake));
+    alternatives.push(esc(trimmed.toUpperCase()));
   }
 
-  return `\\b${pattern}\\b`;
+  // Dígito embebido en camelCase: checkS6Bull, S6Bull, ATR14, etc.
+  // → variante con dígito wildcard: checkS\d+Bull  (matchea checkS1Bull…checkS9Bull)
+  if (/[A-Za-z]\d+[A-Za-z]/.test(trimmed)) {
+    const digitWild = esc(trimmed).replace(/\d+/g, '\\d+');
+    if (digitWild !== esc(trimmed)) alternatives.push(digitWild);
+  }
+
+  // Acrónimo en MAYÚSCULAS puro (FVG, ATR, RSI)
+  // Con -i ya matchea fvg/Fvg; añadir lowercase por si el código usa minúsculas
+  if (/^[A-Z]{2,}$/.test(trimmed)) {
+    alternatives.push(esc(trimmed.toLowerCase()));
+  }
+
+  const deduped = [...new Set(alternatives)];
+  if (deduped.length === 1) return `\\b${deduped[0]}\\b`;
+  return `\\b(?:${deduped.join('|')})\\b`;
 }
+
 function cleanForGitHubSearch(pattern: string): string {
   return pattern.replace(/[="(){}[\]<>]/g, ' ').replace(/\s+/g, ' ').trim();
 }
@@ -2839,7 +2872,7 @@ function cleanForGitHubSearch(pattern: string): string {
 function generateSearchVariants(term: string): string[] {
   const variants = new Set<string>([term]);
 
-  // Caso 1: término ya es camelCase/PascalCase → generar snake_case, guiones, sin separadores
+  // ── camelCase / PascalCase → snake_case ──────────────────────────────────
   const toSnakeFromCamel = term.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
   if (toSnakeFromCamel !== term) variants.add(toSnakeFromCamel);
   const underscored = term.replace(/-/g, '_');
@@ -2847,8 +2880,20 @@ function generateSearchVariants(term: string): string[] {
   const strippedSeparators = term.replace(/[-_]/g, '');
   if (strippedSeparators !== term && strippedSeparators.length > 3) variants.add(strippedSeparators);
 
-  // Caso 2: término tiene espacios (frase en lenguaje natural) → generar
-  // camelCase, snake_case, CONSTANT_CASE, PascalCase y sin espacios
+  // ── Acrónimo ALL_CAPS (FVG, ATR, RSI) → añadir versión en minúsculas ────
+  // GitHub Code Search es case-sensitive por defecto; fvg puede aparecer como variable
+  if (/^[A-Z]{2,}(\d*)$/.test(term)) {
+    variants.add(term.toLowerCase());
+  }
+
+  // ── Término con dígito embebido (checkS6Bull) → añadir prefijo sin dígito ─
+  // GitHub no soporta regex; buscar el prefijo hasta el primer dígito como fallback
+  if (/[A-Za-z]\d+[A-Z]/.test(term)) {
+    const prefixOnly = term.split(/\d/)[0];  // "checkS" de "checkS6Bull"
+    if (prefixOnly.length >= 4) variants.add(prefixOnly);
+  }
+
+  // ── Frase en lenguaje natural → todas las variantes de código ────────────
   if (/\s/.test(term)) {
     const words = term.trim().split(/\s+/).filter(Boolean);
     if (words.length >= 2) {
@@ -2867,6 +2912,10 @@ function generateSearchVariants(term: string): string[] {
 
       const noSpaces = words.join('').toLowerCase();
       if (noSpaces.length > 3) variants.add(noSpaces);
+
+      // Acrónimo de las iniciales ("fair value gap" → FVG)
+      const acronym = words.map(w => w[0].toUpperCase()).join('');
+      if (acronym.length >= 2) variants.add(acronym);
     }
   }
 
@@ -2928,6 +2977,7 @@ async function unifiedGrepSearch(
 ): Promise<GrepMatch[]> {
   const rawTerms = pattern.split('|').map((t: string) => t.trim()).filter(Boolean);
   console.log(`[unifiedGrepSearch] patrón: "${pattern}" → ${rawTerms.length} término(s): [${rawTerms.join(', ')}]`);
+  send('action', { text: `🧠 Paso 1 — buscando en índice de símbolos: [${rawTerms.join(', ')}]` });
 
   // ── 1. Symbol index — exact identifier lookup, O(1) ──────────────────────
   for (const term of rawTerms) {
@@ -2935,11 +2985,12 @@ async function unifiedGrepSearch(
       const sym = await lookupSymbol(term, repo);
       if (sym) {
         console.log(`[unifiedGrepSearch] symbol_index hit: ${term} → ${sym.filePath}:${sym.lineNumber}`);
-        send('action', { text: `⚡ Símbolo en índice: ${sym.filePath}:${sym.lineNumber}` });
+        send('action', { text: `⚡ Símbolo "${term}" en índice → ${sym.filePath}:${sym.lineNumber}` });
         return [{ path: sym.filePath, line: sym.lineNumber, text: term, symbolType: sym.symbolType }];
       }
     }
   }
+  send('action', { text: `⬜ Paso 1 — no en índice` });
 
   // ── 2. ripgrep on local clone — primary search ────────────────────────────
   if (isCloned(repo)) {
@@ -2948,17 +2999,19 @@ async function unifiedGrepSearch(
     // con -i cubriendo el casing (trailing[\s_-]*stop matchea trailingStop, TRAILING_STOP, etc.)
     const ripgrepPattern = rawTerms.map(t => buildRipgrepPattern(t)).join('|');
     console.log(`[unifiedGrepSearch] patrón ripgrep construido: "${ripgrepPattern}" (desde: [${rawTerms.join(', ')}])`);
+    send('action', { text: `🔬 Paso 2 — ripgrep local: \`${ripgrepPattern}\`` });
 
     const rgResults = await rgSearch(ripgrepPattern, repo);
     if (rgResults.length > 0) {
-      send('action', { text: `📍 ${rgResults.length} resultado(s) vía ripgrep local` });
+      send('action', { text: `✅ Paso 2 — ${rgResults.length} resultado(s) vía ripgrep local` });
       return rgResults.map(r => ({ path: r.path, line: r.line, text: r.text }));
     }
+    send('action', { text: `⬜ Paso 2 — sin resultados en ripgrep` });
     return [];
   }
 
   // ── 3. Fallback: GitHub Code Search API (repo no clonado aún) ─────────────
-  send('action', { text: `☁️ Repo no clonado aún — buscando vía GitHub API` });
+  send('action', { text: `☁️ Paso 2 — repo no clonado → GitHub Code Search API` });
   const seen = new Set<string>();
   const rawResults: { path: string; fragment: string }[] = [];
   console.log(`[unifiedGrepSearch] fallback GitHub API para "${pattern}"`);
@@ -2967,6 +3020,7 @@ async function unifiedGrepSearch(
     const cleaned = cleanForGitHubSearch(rawTerm);
     const termsToTry = generateSearchVariants(cleaned);
     console.log(`[unifiedGrepSearch] término "${rawTerm}" → ${termsToTry.length} sub-búsqueda(s) vía generateSearchVariants: [${termsToTry.join(', ')}]`);
+    send('action', { text: `🔀 "${rawTerm}" → variantes: [${termsToTry.join(', ')}]` });
     let foundWithVariant = false;
     for (const term of termsToTry) {
       if (rawResults.length >= 10) break;
@@ -2978,7 +3032,11 @@ async function unifiedGrepSearch(
             rawResults.push({ path: r.path, fragment: r.fragments[0] ?? '' });
           }
         }
-        if (results.length > 0) { foundWithVariant = true; break; }
+        if (results.length > 0) {
+          send('action', { text: `✅ GitHub encontró ${results.length} resultado(s) con "${term}"` });
+          foundWithVariant = true;
+          break;
+        }
       } catch (e: any) {
         if (e.message === 'GITHUB_RATE_LIMIT') throw e;
         console.warn(`[unifiedGrepSearch] término "${term}" falló:`, e.message);
@@ -2987,6 +3045,7 @@ async function unifiedGrepSearch(
     }
     if (!foundWithVariant) {
       console.log(`[unifiedGrepSearch] sin resultados para "${rawTerm}" (variantes probadas: ${termsToTry.join(', ')})`);
+      send('action', { text: `⬜ Sin resultados para "${rawTerm}" (probadas: ${termsToTry.join(', ')})` });
     }
     if (rawTerms.length > 1) await new Promise(r => setTimeout(r, 300));
   }
@@ -3386,6 +3445,12 @@ async function runChatTurn(
 Haiku 4.5 ya investigó el codebase y el contexto relevante está en el historial de esta conversación.
 
 TAREA: generá el patch de código solicitado usando propose_patch. No hagas otra cosa.
+
+RAZONAMIENTO PASO A PASO (obligatorio antes de proponer cualquier patch):
+1. ¿Cuál es la causa raíz exacta del problema? Citá la línea/condición literal del contexto.
+2. ¿Cuál es el mínimo cambio que la resuelve?
+3. ¿Existe old_str que coincida literalmente en el fragmento de código ya leído?
+Si no encontraste el símbolo o función buscada, decilo explícitamente y sugerí qué buscar a continuación.
 
 REGLAS:
 - Antes de proponer un patch, verificá que el old_str que usarás en propose_patch exista literalmente \
