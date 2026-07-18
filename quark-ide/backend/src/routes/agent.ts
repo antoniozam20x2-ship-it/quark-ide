@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { getFileTree, getFileContent, getFileContentConditional, searchCodeInRepo, createOrUpdateFile } from '../services/github.js';
 import { lookupSymbol, rgSearch, isCloned, REPOS_DIR, getRepoSymbolNames, SymbolMatch } from '../services/localRepos.js';
 import { callAI } from '../lib/aiRouter.js';
-import { generateContent } from '../services/gemini.js';
+import { generateContent, generateContentWithRotation } from '../services/gemini.js';
 import pool from '../services/db.js';
 import { cacheNotifications } from '../lib/cacheNotifications.js';
 import { execSync } from 'child_process';
@@ -345,6 +345,34 @@ async function generateWithFallback(
     } catch (err) {
       lastErr = err instanceof Error ? err : new Error(String(err))
       console.warn(`[agent] ${label} failed: ${lastErr.message}`)
+      onFail?.(label, lastErr.message)
+    }
+  }
+  throw lastErr
+}
+
+/**
+ * DEEP mode fallback chain: Gemini Flash-Lite primary (large context, key rotation)
+ * → DeepSeek → Groq. Inverted from FAST because DEEP sends skeleton + multiple files
+ * in a single pass where Gemini's context window is the real advantage.
+ */
+async function generateWithFallbackDeep(
+  prompt: string,
+  system: string,
+  onFail?: (label: string, msg: string) => void,
+): Promise<string> {
+  const providers = [
+    { label: 'Gemini',   fn: () => generateContentWithRotation(prompt, system, 8192, '/api/agent/deep') },
+    { label: 'DeepSeek', fn: () => callDeepSeekAgent(prompt, system, 4096) },
+    { label: 'Groq',     fn: () => callGroqAgent(prompt, system, 4096) },
+  ]
+  let lastErr: Error = new Error('All providers failed')
+  for (const { label, fn } of providers) {
+    try {
+      return await fn()
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err))
+      console.warn(`[agent/deep] ${label} failed: ${lastErr.message}`)
       onFail?.(label, lastErr.message)
     }
   }
@@ -1363,28 +1391,68 @@ REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está explícitamente en el fragmen
       // Output: raw evidence only — NO interpretation, NO diagnosis, NO "probablemente".
       send('action', { text: '🔭 DEEP — explorando estructura del repo...' });
 
-      const topFilePaths = filePaths.split('\n').filter(Boolean).slice(0, 6);
+      // Step 1: generate structural skeletons of the top repo files (sorted by
+      // PRIORITY_PATTERNS already applied to filePaths above). Skeletons are
+      // sent to Gemini Flash-Lite in one pass — large context is the reason
+      // Gemini is the primary model here, not Groq.
+      const topFilePaths = filePaths.split('\n').filter(Boolean).slice(0, 8);
       const skeletonParts: string[] = [];
-      for (const fp of topFilePaths) {
+      await Promise.allSettled(topFilePaths.map(async fp => {
         try {
           const fc = await getFileContent(fp, repo);
           const sk = generateStructuralSkeleton(fc, fp);
           if (sk && sk !== fc) {
-            skeletonParts.push(`--- skeleton: ${fp} ---\n${sk.split('\n').slice(0, 25).join('\n')}`);
+            skeletonParts.push(`--- skeleton: ${fp} ---\n${sk.split('\n').slice(0, 30).join('\n')}`);
           }
-        } catch { /* skip */ }
-      }
+        } catch { /* skip unfetchable */ }
+      }));
       if (skeletonParts.length > 0) {
-        send('action', { text: `🦴 Skeleton generado (${skeletonParts.length} archivos clave identificados)` });
+        send('action', { text: `🦴 Skeleton generado (${skeletonParts.length} archivos) — Gemini identificando targets...` });
       }
 
+      // Step 2: Gemini Flash-Lite (primary, large context) reads all skeletons
+      // in one call and returns the files most likely to contain the answer.
+      // Falls back to the full skeleton list if Gemini fails or returns garbage.
+      let targetFilePaths: string[] = topFilePaths;
+      if (skeletonParts.length > 0) {
+        try {
+          const filePickRaw = await generateWithFallbackDeep(
+            `PREGUNTA DEL USUARIO: ${prompt}\n\nSKELETON DE ARCHIVOS DEL REPO:\n${skeletonParts.join('\n\n')}`,
+            `Eres un experto en localización de código. Dado el skeleton de los archivos y la pregunta del usuario, identificá qué archivos contienen el código relevante.
+Respondé ÚNICAMENTE con un JSON array de strings con los paths exactos (tal como aparecen en los skeletons, incluyendo directorios). Máximo 4 archivos.
+Ejemplo de respuesta válida: ["src/services/trading.ts", "src/lib/signals.ts"]
+Sin explicación, sin texto adicional — solo el JSON array.`,
+          );
+          const picked = JSON.parse(filePickRaw.trim().replace(/^```json\s*/i, '').replace(/\s*```$/, '')) as unknown;
+          if (Array.isArray(picked) && picked.length > 0 && picked.every((p: unknown) => typeof p === 'string')) {
+            targetFilePaths = (picked as string[]).filter(p => p.length > 0);
+            send('action', { text: `🎯 Gemini → ${targetFilePaths.length} archivo(s): ${targetFilePaths.map(p => p.split('/').pop()).join(', ')}` });
+          }
+        } catch {
+          // Gemini failed or returned non-JSON — fall back to full skeleton file list
+          send('action', { text: '⚠️ Gemini file-pick falló — buscando en todos los archivos skeleton' });
+        }
+      }
+
+      // Step 3: extract keywords and search. unifiedGrepSearch stops at the first
+      // confirmed symbol_index hit (O(1)), then ripgrep, then GitHub API fallback.
+      // Results are filtered to prefer Gemini-identified target files.
       const deepKeywords = await extractKeywordsForSearch(prompt, repo);
       const deepPattern = deepKeywords.length > 0
         ? deepKeywords.join('|')
         : prompt.split(/\s+/).filter(w => w.length > 4).slice(0, 4).join('|');
 
       send('action', { text: `🔍 DEEP — buscando: [${deepPattern}]` });
-      const deepMatches = await unifiedGrepSearch(deepPattern, repo, send);
+      const allDeepMatches = await unifiedGrepSearch(deepPattern, repo, send);
+
+      // Prioritise matches in Gemini-identified files; fall back to full results
+      const targetSet = new Set(targetFilePaths);
+      const deepMatches = allDeepMatches.length > 0
+        ? [
+            ...allDeepMatches.filter(m => targetSet.has(m.path)),
+            ...allDeepMatches.filter(m => !targetSet.has(m.path)),
+          ]
+        : [];
 
       if (deepMatches.length === 0) {
         send('action', { text: '❌ Sin resultados confirmados en symbol_index ni ripgrep. Reformulá con el nombre exacto de la función o variable.' });

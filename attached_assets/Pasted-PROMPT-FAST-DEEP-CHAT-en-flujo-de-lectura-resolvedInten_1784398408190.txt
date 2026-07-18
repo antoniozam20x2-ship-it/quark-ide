@@ -1,0 +1,33 @@
+PROMPT — FAST/DEEP/CHAT en flujo de lectura (resolvedIntent === 'read') + reasignación de modelo en DEEP
+
+Contexto: El toggle deepMode hoy controla el flujo de generación de patches (cirugía vs loop agéntico) cuando resolvedIntent === 'modify'. Esta tarea NO toca ese comportamiento. Es exclusivamente para: (1) separar, dentro de resolvedIntent === 'read', dos ramas según el mismo toggle, que hoy no existen como ramas diferenciadas; y (2) asignar el modelo correcto a cada rama según su función real.
+
+1. FAST mode (deepMode === false, resolvedIntent === 'read')
+
+	•	Sin cambios en la cadena de modelos: Groq primero (LPU = latencia mínima, es la razón de ser del modo), DeepSeek y Gemini 3.1 Flash-Lite como fallback, en el orden actual.
+	•	Localiza el símbolo con symbol_index + fuzzy-match, una sola pasada (no reintentar).
+	•	Lee contexto mínimo con smartReadSection (~20-40 líneas alrededor del símbolo).
+	•	Output: prosa pura, cero bloques de código, cero código suelto. Reemplazar la regla actual de “no más de 30 líneas” por prohibición total de código en el output.
+	•	Si la primera pasada no encuentra nada: decirlo y sugerir reformular. No reintentar con más rondas; eso es trabajo de DEEP.
+
+2. DEEP mode (deepMode === true, resolvedIntent === 'read')
+
+	•	Modelo primario: Gemini 3.1 Flash-Lite (usar GEMINI_API_KEY, rotar a GEMINI_API_KEY_2 en rate limit). Razón: DEEP manda skeleton + múltiples archivos en la misma pasada, y ahí el contexto grande de Gemini sí es una ventaja real — a diferencia de FAST, que no lo necesita.
+	•	Fallback: DeepSeek → Groq, en ese orden, si Gemini falla o agota ambas keys.
+	•	Primer paso: generateStructuralSkeleton (ya existe, sin usar en este flujo) para ubicar archivos relevantes antes de buscar.
+	•	Búsqueda extensiva con criterio de corte explícito: recorre symbol_index + fuzzy-match + ripgrep en los archivos marcados por el skeleton, y se detiene en cuanto obtiene un match confirmado por symbol_index, o al agotar fuzzy-match + ripgrep en esos archivos — lo que ocurra primero. No recorrer el repo completo sin límite.
+	•	Por cada hallazgo: extraer fragmento literal con cita exacta archivo:línea. Prohibido: “probablemente”, causa raíz, diagnóstico, cualquier lenguaje interpretativo.
+	•	El objeto InvestigationFinding pasa a contener evidencia cruda (cita + ubicación), no un resumen interpretado. Actualizar su construcción para eliminar cualquier campo que hoy mezcle confianza/interpretación con el hallazgo.
+
+3. CHAT mode
+
+	•	Recibe la evidencia de DEEP (vía fastFindingContext o equivalente) como hecho confirmado. Reforzar el prompt de Haiku/Groq para que no cuestione ni reinterprete lo que DEEP ya citó con archivo:línea.
+	•	Haiku solo amplía la búsqueda si la evidencia de DEEP tiene huecos evidentes (ej. cita un símbolo pero no el flujo que lo llama).
+	•	Sonnet 5 es el único nivel que emite juicio: diagnóstico de causa raíz y propuesta de patch. No cambia el flujo de modify existente, solo aplica cuando la lectura escala a un patch.
+
+Restricciones generales:
+
+	•	Diff quirúrgico, no reescritura de archivo completo.
+	•	No modificar el toggle deepMode para resolvedIntent === 'modify'.
+	•	No agregar proveedores nuevos (Grok/xAI) — usar solo las keys ya configuradas en Railway.
+	•	Antes de commitear, mostrame el diff completo con evidencia real (no estimaciones) de: (a) FAST no emite código en ningún output de prueba, (b) DEEP se detiene con el criterio de corte definido, (c) DEEP efectivamente está llamando a Gemini como primario y no cayendo a fallback sin motivo.
