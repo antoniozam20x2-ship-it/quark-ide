@@ -1402,6 +1402,9 @@ ESTRUCTURA DE RESPUESTA:
 2. Cómo funciona (2-3 oraciones describiendo la lógica, mencionando períodos/umbrales/valores concretos si los hay)
 3. Cuándo o dónde se activa (1-2 oraciones)
 
+REGLA DE SCOPE — crítica para preguntas sobre una señal o función específica:
+El fragmento puede incluir un bloque "// Constantes referenciadas" con definiciones de múltiples constantes del mismo tipo (ej. varios períodos de EMA: 10, 20, 34, 55). Solo mencioná los que tienen un ROL ACTIVO en la lógica central de la función analizada (condiciones de entrada, cálculos de la señal). Si una constante aparece solo en la definición inyectada pero no en el cuerpo de la función, no la incluyas en la respuesta.
+
 REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está explícitamente en el fragmento dado. Si el fragmento no es suficiente para responder la pregunta completa, decilo en 1 oración y sugerí usar DEEP mode para exploración más amplia.`,
           );
 

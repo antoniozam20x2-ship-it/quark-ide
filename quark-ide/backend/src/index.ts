@@ -21,6 +21,7 @@ import studioRouter from './routes/studio.js';
 import healthRouter from './routes/health.js';
 import auditRouter from './routes/audit.js';
 import reposRouter from './routes/repos.js';
+import webhooksRouter from './routes/webhooks.js';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3001);
@@ -29,6 +30,12 @@ app.use(cors({
   origin: true,
   credentials: true,
 }));
+
+// IMPORTANTE: el webhook router se monta ANTES de express.json() porque necesita
+// el raw body para validar X-Hub-Signature-256 con HMAC-SHA256.
+// El router aplica express.raw() internamente solo sobre su ruta.
+app.use('/api/webhooks/github', webhooksRouter);
+
 app.use(express.json({ limit: '2mb' }));
 
 app.get('/health', (_req, res) => {
