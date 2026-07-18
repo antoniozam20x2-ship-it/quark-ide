@@ -58,22 +58,43 @@ export function isExcludedPath(filePath: string, repo: string): boolean {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * Returns true if `dir` looks like a valid git checkout we can ripgrep.
- *   • Normal clone → has  <dir>/.git  (directory or file for worktrees)
- *   • Bare clone   → has  <dir>/HEAD  + <dir>/objects  at root
+ * Returns true if `dir` looks like a valid directory we can ripgrep.
+ *
+ * Acepta tres casos:
+ *   a) Clon normal   → tiene  <dir>/.git  (subdir o archivo para worktrees)
+ *   b) Clon bare     → tiene  <dir>/HEAD  + <dir>/objects  en root
+ *   c) Dev/artifacts → cualquier directorio con más de 8 entradas
+ *      (cubre repos sin .git disponibles localmente en workspace)
  */
 function looksLikeGitDir(dir: string): boolean {
   try {
     if (!fs.existsSync(dir)) return false;
+
     // Normal clone
-    if (fs.existsSync(path.join(dir, '.git'))) return true;
+    if (fs.existsSync(path.join(dir, '.git'))) {
+      console.log(`[looksLikeGitDir] ✅ Git clone normal: ${dir}`);
+      return true;
+    }
+
     // Bare clone
     if (
       fs.existsSync(path.join(dir, 'HEAD')) &&
       fs.existsSync(path.join(dir, 'objects'))
-    ) return true;
+    ) {
+      console.log(`[looksLikeGitDir] ✅ Bare clone: ${dir}`);
+      return true;
+    }
+
+    // MODO DESARROLLO / ARTIFACTS — aceptar cualquier carpeta con código
+    const entries = fs.readdirSync(dir);
+    if (entries.length > 8) {
+      console.log(`[looksLikeGitDir] ✅ Modo artifacts/dev detectado: ${dir} (${entries.length} entradas)`);
+      return true;
+    }
+
     return false;
-  } catch {
+  } catch (e) {
+    console.warn(`[looksLikeGitDir] Error checking ${dir}:`, e);
     return false;
   }
 }
