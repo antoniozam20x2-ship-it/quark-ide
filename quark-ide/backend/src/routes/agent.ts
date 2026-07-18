@@ -2785,34 +2785,40 @@ async function smartReadFile(
 }
 
 /**
- * Convierte un término de búsqueda (posiblemente una frase en lenguaje natural,
- * como "trailing stop") en un patrón regex apto para ripgrep que matchea todas
- * las variantes de casing/separador en una sola pasada, aprovechando -i.
+ * Convierte un término de búsqueda en un patrón regex para ripgrep.
  *
- * "trailing stop"   → "trailing[\s_-]*stop"
- * "trailingStop"    → "trailingStop"  (devuelto tal cual; -i cubre TRAILINGSTOP etc.)
- * "trailing_stop"   → "trailing[\s_-]*stop"
+ * Con -i (case-insensitive):
+ *   "trailing stop"   → \btrailing[\s_-]*stop\b
+ *   "trailing_stop"   → \btrailing[\s_-]*stop\b
+ *   "trailingStop"    → \b(?:trailingStop|trailing_stop|TRAILINGSTOP)\b
+ *   "signal"          → \bsignal\b
  */
 function buildRipgrepPattern(term: string): string {
   const trimmed = term.trim();
   if (!trimmed) return trimmed;
 
-  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, (m) => `\\${m}`);
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-  // Frase con espacios: insertar separador opcional entre palabras
+  // Frase en lenguaje natural (con espacios) → palabras unidas con separador opcional
   if (/\s/.test(trimmed)) {
     const words = trimmed.split(/\s+/).filter(Boolean).map(esc);
-    return words.join('[\\s_-]*');
+    return `\\b${words.join('[\\s_-]*')}\\b`;
   }
 
-  // Término con guion/guion bajo: también permitir separador contrario y camelCase vía -i
+  // Con separadores existentes (guion o guion bajo)
   if (/[-_]/.test(trimmed)) {
     const parts = trimmed.split(/[-_]/).filter(Boolean).map(esc);
-    return parts.join('[\\s_-]*');
+    return `\\b${parts.join('[\\s_-]*')}\\b`;
   }
 
-  // Término simple sin separadores — escapar y devolver tal cual
-  return esc(trimmed);
+  // camelCase / PascalCase → generar alternación con snake_case y UPPER_CASE
+  let pattern = esc(trimmed);
+  if (/[a-z][A-Z]/.test(trimmed)) {
+    const snake = trimmed.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+    pattern = `(?:${pattern}|${esc(snake)}|${esc(trimmed.toUpperCase())})`;
+  }
+
+  return `\\b${pattern}\\b`;
 }
 function cleanForGitHubSearch(pattern: string): string {
   return pattern.replace(/[="(){}[\]<>]/g, ' ').replace(/\s+/g, ' ').trim();
