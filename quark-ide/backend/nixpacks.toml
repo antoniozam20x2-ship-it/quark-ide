@@ -1,2 +1,2 @@
 [phases.setup]
-nixPkgs = ["ripgrep", "universal-ctags", "git"]
+nixPkgs = ["nodejs_20", "ripgrep", "universal-ctags", "git"]
