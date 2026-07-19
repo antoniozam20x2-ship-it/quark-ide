@@ -1,0 +1,15 @@
+PROMPT — Cierre final: rango completo en DEEP, corregir SAR→SuperTrend, Haiku no debe releer si DEEP ya cubrió
+
+1. DEEP corta el fragmento en la línea 677 sin llegar al cierre de la función
+La cita de DEEP para checkS6Bull (línea 670) se corta en la línea 677, sin mostrar el resto del cuerpo (condición de FVG, SuperTrend, Score≥50, sin agotamiento, cierre };). Confirmá si es solo un límite de cuántas líneas se muestran en el mensaje visible al usuario, o si el fragmento que efectivamente recibe el modelo también se corta ahí. Si es lo segundo, es grave: significa que DEEP está sintetizando con información incompleta pese al fix del backward-scan. Ajustar para que el rango mostrado/leído llegue hasta el cierre real de la función (};), no un número fijo de líneas.
+
+2. Nombre incorrecto: dice “SAR” (Parabolic SAR), es SuperTrend
+En la síntesis de Haiku, stDirArr se identificó como “SAR” (Parabolic SAR) — es un indicador distinto al que realmente se usa, que es SuperTrend. Confirmá el nombre real de la variable/indicador en el código (revisar si st en stDirArr/sa/sb viene de “SuperTrend”) y corregir el prompt de síntesis para que use el nombre correcto, sin ambigüedad. Si el nombre de la variable en sí es genérico y puede confundir al modelo, considerá agregar un comentario aclaratorio en el código o una nota en el prompt del sistema que fije explícitamente “stDirArr = dirección del SuperTrend, no Parabolic SAR”.
+
+3. Haiku sigue releyendo aunque DEEP ya cubrió la pregunta
+Pese al PASO 0 (“si la evidencia de DEEP cubre la pregunta, sintetizá directo, no releas”), Haiku volvió a hacer 📖 Leyendo líneas 670–710 cuando DEEP ya había citado 670-681 con fórmulas exactas. El trabajo pesado de lectura/extracción debe quedar concentrado en DEEP — Haiku solo debe sintetizar sobre esa evidencia, y únicamente buscar información adicional si detecta un hueco real que la evidencia de DEEP no cubre (ej. si necesita ver checkS6Bear y DEEP no lo trajo). Revisar por qué el PASO 0 no se respetó en este caso — ¿la evidencia llegó incompleta (por el bug del punto 1) y por eso Haiku sintió que tenía que releer?
+
+Restricciones generales:
+
+	•	El punto 1 puede ser la causa raíz del punto 3 (si a Haiku le llega evidencia cortada en 677, tiene sentido que releyera para completarla) — arreglalo primero y volvé a probar el punto 3 antes de tocar el prompt de Haiku.
+	•	Antes de commitear: mostrame el log completo de una nueva corrida de “cómo funciona S6” en DEEP (rango completo hasta el cierre) y CHAT (sin relectura si DEEP ya alcanza, con “SuperTrend” en vez de “SAR”).
