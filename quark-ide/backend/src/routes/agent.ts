@@ -1535,7 +1535,7 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
       }
 
       // Extract literal fragments — no AI, no interpretation
-      const deepEvidence: { path: string; line: number; fragment: string }[] = [];
+      const deepEvidence: { path: string; line: number; endLine: number; fragment: string }[] = [];
       for (const match of deepMatches.slice(0, 5)) {
         try {
           const fc = await getFileContent(match.path, repo);
@@ -1573,9 +1573,9 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
             continue;
           }
 
-          deepEvidence.push({ path: match.path, line: section.startLine, fragment: section.excerpt });
+          deepEvidence.push({ path: match.path, line: section.startLine, endLine: section.endLine, fragment: section.excerpt });
           send('action', { text: `📌 ${match.path}:${section.startLine}-${section.endLine}` });
-          const preview = section.excerpt.split('\n').slice(0, 8);
+          const preview = section.excerpt.split('\n').slice(0, 20);
           for (const fl of preview) {
             send('action', { text: fl });
           }
@@ -1586,14 +1586,15 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
         send('action', { text: '⚠️ Match encontrado en índice pero no se pudo leer el fragmento del archivo.' });
       }
 
-      // Persist raw evidence — diagnosis field holds citation text, not AI summary
+      // Persist raw evidence — diagnosis field holds the FULL function fragment so
+      // CHAT/Haiku receives the complete body, not a truncated preview.
       const deepEvidenceSummary = deepEvidence
-        .map(e => `${e.path}:${e.line}\n${e.fragment.split('\n').slice(0, 6).join('\n')}`)
+        .map(e => `${e.path}:${e.line}\n${e.fragment}`)
         .join('\n\n');
 
       const deepFindingId = await saveInvestigationFinding({
         repo,
-        files: deepEvidence.map(e => ({ path: e.path, lineRanges: [{ start: e.line, end: e.line + 40, matchedTerm: deepPattern }] })),
+        files: deepEvidence.map(e => ({ path: e.path, lineRanges: [{ start: e.line, end: (e as any).endLine ?? e.line + 40, matchedTerm: deepPattern }] })),
         diagnosis: deepEvidenceSummary,
         evidence: deepEvidence,
         confidence: deepEvidence.length > 0 ? 'high' : 'low',
@@ -3545,6 +3546,8 @@ Revisá si el contexto de la conversación ya contiene evidencia que responda la
     esas citas de archivo:línea son lecturas reales del código fuente — HECHOS, no suposiciones.
     → Si esa evidencia cubre la pregunta: sintetizá tu respuesta directamente desde ella.
       NO hagas grep_code ni read_file para re-buscar algo que ya está citado.
+      Si el fragmento ya incluye el cierre de la función (línea con \`};\` al final del bloque),
+      el cuerpo está completo — no releas el archivo para "ver el resto", ya está todo.
     → Si cubre parcialmente: usá lo que ya está y buscá SOLO lo que falta (ej: dependencias
       externas, otro símbolo no cubierto). No repitas búsquedas sobre lo ya encontrado.
   • Si hay "INVESTIGACIÓN PREVIA (FAST mode)" o "HALLAZGO PREVIO":
@@ -3605,7 +3608,17 @@ tu tarea es responder la pregunta con una síntesis completa:
     Eso es exclusivamente tarea de Sonnet cuando el usuario pide explícitamente un cambio.
   ✗ PROHIBIDO: inferir o afirmar lo que no leíste literalmente en el código.
 
-No inferás lo que no leíste. Citá fragmentos exactos para respaldar tus afirmaciones.`;
+No inferás lo que no leíste. Citá fragmentos exactos para respaldar tus afirmaciones.
+
+━━━ NOTA DE DOMINIO — variables de trading frecuentes ━━━
+En repos de trading (Signal OS, Ahorar, etc.), las abreviaturas de variables tienen convenciones fijas:
+  • \`st\`, \`stDir\`, \`stDirArr\`, \`sa\`, \`sb\` → dirección del indicador **SuperTrend** (NO Parabolic SAR).
+    SAR y SuperTrend son indicadores distintos — nunca intercambies sus nombres.
+  • \`ema\`, \`emaFast\`, \`emaSlow\` → **EMA** (Exponential Moving Average)
+  • \`rsi\`, \`rsiVal\` → **RSI**
+  • \`adx\`, \`adxVal\` → **ADX**
+  • \`atr\`, \`atrVal\` → **ATR**
+Cuando identifiques un indicador, usá siempre el nombre técnico completo de trading, no lo parafrasees.`;
 
 // Tools available for Sonnet synthesis turn — no search tools, only read + patch
 // Sonnet only gets propose_patch — it must not re-investigate with search tools.
