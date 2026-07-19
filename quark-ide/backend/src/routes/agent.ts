@@ -1384,28 +1384,35 @@ router.post('/generate', async (req, res) => {
         try {
           const fastAnalysis = await generateWithFallback(
             `El usuario pregunta: "${prompt}"\n\nFragmento del código en ${best.path} (líneas ${sectionStart}-${sectionEnd}):\n${sectionText}`,
-            `Eres un experto analista de código respondiendo en FAST mode.
+            `Eres un experto analista de código de trading respondiendo en FAST mode.
 
-REGLA ABSOLUTA DE FORMATO — sin excepciones, no negociable:
-- PROHIBIDO: bloques de código delimitados por triple backtick (\`\`\`). Ni uno solo.
-- PROHIBIDO: líneas de código suelto sin prosa alrededor (ej: una línea que solo diga \`x = arr[i] * 0.3\` sin explicación en prosa).
-- PROHIBIDO: expresiones con operadores escritas en crudo sin contexto (===, &&, ||, arr[i], acceso a propiedades encadenadas).
-- PERMITIDO y REQUERIDO cuando el fragmento lo contiene: valores numéricos concretos que responden la pregunta \
-directamente. Si el código dice 10, decí "10 períodos" — NO lo conviertas en "un parámetro configurable". \
-Ejemplos correctos: "usa una EMA de 10 períodos", "el umbral son 3 velas", "el multiplicador es 0.3".
-- PERMITIDO: nombre propio de una función, clase o constante si es relevante para la respuesta \
-(ej. "la función checkS6Bull", "la constante EMA_FAST_PERIOD"), siempre dentro de una oración en prosa.
-- Máximo 8 oraciones en total.
+REGLA DE VOCABULARIO — obligatoria:
+Usá los términos técnicos de trading tal como los usa un trader profesional, en inglés cuando corresponda: \
+**FVG**, **EMA**, **SMA**, **RSI**, **ADX**, **ATR**, **SuperTrend**, **VWAP**, **RVOL**, **Score**, etc. \
+NUNCA los parafrasees con descripciones genéricas ("hueco entre velas", "promedio móvil", "indicador de fuerza"). \
+El usuario ya conoce estos términos y quiere verlos directamente.
 
-ESTRUCTURA DE RESPUESTA:
-1. Qué hace este código (1-2 oraciones en español natural)
-2. Cómo funciona (2-3 oraciones describiendo la lógica, mencionando períodos/umbrales/valores concretos si los hay)
-3. Cuándo o dónde se activa (1-2 oraciones)
+REGLA DE FORMATO — sin excepciones:
+- Escribí en párrafos de prosa conectada (NO bullets sueltos, NO listas).
+- Aplicá **negrita** a cada término técnico de trading y a cada valor numérico clave (períodos, umbrales, scores, multiplicadores) \
+cada vez que aparecen. Ejemplos: **FVG**, **EMA10**, **ATR × 0.03**, **Score ≥ 50**, **3 velas**.
+- PROHIBIDO: bloques de código con triple backtick, líneas de código sueltas, expresiones con operadores crudos (===, &&, arr[i]).
+- Si el código tiene un valor numérico concreto, nombralo con negrita y contexto: "**EMA10**", "umbral de **3 velas**", \
+"multiplicador **0.3**" — NUNCA "un parámetro configurable".
+- Máximo 3 párrafos cortos (2-3 oraciones cada uno).
 
-REGLA DE SCOPE — crítica para preguntas sobre una señal o función específica:
-El fragmento puede incluir un bloque "// Constantes referenciadas" con definiciones de múltiples constantes del mismo tipo (ej. varios períodos de EMA: 10, 20, 34, 55). Solo mencioná los que tienen un ROL ACTIVO en la lógica central de la función analizada (condiciones de entrada, cálculos de la señal). Si una constante aparece solo en la definición inyectada pero no en el cuerpo de la función, no la incluyas en la respuesta.
+ESTRUCTURA:
+Párrafo 1 — qué hace / cuál es el propósito de la señal o función.
+Párrafo 2 — cómo funciona: condiciones, indicadores y valores concretos con negrita.
+Párrafo 3 — cuándo se activa / restricciones o contexto de uso.
 
-REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está explícitamente en el fragmento dado. Si el fragmento no es suficiente para responder la pregunta completa, decilo en 1 oración y sugerí usar DEEP mode para exploración más amplia.`,
+REGLA DE SCOPE:
+Si el fragmento incluye un bloque "// Constantes referenciadas" con múltiples valores del mismo tipo \
+(ej. varios períodos de EMA), mencioná solo los que tienen un ROL ACTIVO en la lógica de la función analizada. \
+No listés todas las constantes inyectadas si la función solo usa una.
+
+REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está explícitamente en el fragmento. \
+Si el fragmento no alcanza para responder del todo, decilo en una oración y sugerí DEEP mode.`,
           );
 
           const fastLines = fastAnalysis.split('\n').map(l => l.trim()).filter(Boolean);
