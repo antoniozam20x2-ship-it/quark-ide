@@ -1532,7 +1532,7 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
       for (const match of deepMatches.slice(0, 5)) {
         try {
           const fc = await getFileContent(match.path, repo);
-          const section = match.line
+          let section = match.line
             // BUG 4 fix: read full enclosing function, not a fixed ±20-line window.
             ? (readEnclosingFunction(fc, match.line) ?? smartReadSection(fc, match.line, 60))
             : (match.text ? smartReadSection(fc, match.text, 60) : null);
@@ -1544,8 +1544,23 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
           // doesn't appear in the window we read, skip this match so we don't
           // falsely report it as HIGH-CONFIDENCE evidence of that symbol.
           const symbolTerms = deepKeywords.length > 0 ? deepKeywords : deepPattern.split('|').map(t => t.trim()).filter(Boolean);
-          const fragmentLower = section.excerpt.toLowerCase();
-          const symbolFound = symbolTerms.some(t => t.length > 2 && fragmentLower.includes(t.toLowerCase()));
+          let symbolFound = symbolTerms.some(t => t.length > 2 && section!.excerpt.toLowerCase().includes(t.toLowerCase()));
+
+          if (!symbolFound && match.line) {
+            // readEnclosingFunction may have extracted a sibling function (backward-scan
+            // bug). Fallback: simple ±50-line range read directly around the match line.
+            // This mirrors what Haiku does natively and is proven to work in production.
+            const rangeSection = smartReadSection(fc, match.line, 50);
+            if (rangeSection) {
+              const rangeLower = rangeSection.excerpt.toLowerCase();
+              if (symbolTerms.some(t => t.length > 2 && rangeLower.includes(t.toLowerCase()))) {
+                section = rangeSection;
+                symbolFound = true;
+                send('action', { text: `📖 Fallback lectura por rango — ${match.path}:${match.line}±50` });
+              }
+            }
+          }
+
           if (!symbolFound) {
             send('action', { text: `⚠️ ${match.path}:${match.line} — fragmento no contiene el símbolo buscado [${symbolTerms.slice(0, 2).join(', ')}], descartado` });
             continue;
@@ -3190,22 +3205,37 @@ function readEnclosingFunction(
     return n;
   }
 
+  // Si la línea anchor ES la declaración de la función buscada (el symbol_index
+  // apunta a la definición, no a un call site), saltar el backward scan.
+  // El backward scan desde una línea de declaración cae inexorablemente dentro de
+  // la función hermana anterior, extrayendo su cuerpo en vez del símbolo buscado.
+  const anchorLineText = lines[anchor] ?? '';
+  const anchorIsDeclaration =
+    /\bfunction\s+\w/.test(anchorLineText) ||                          // function foo(
+    /\basync\s+function\s+\w/.test(anchorLineText) ||                  // async function foo(
+    (/\b(const|let|var|export)\b/.test(anchorLineText) &&              // const foo = (...)  => {
+      /=\s*(async\s*)?\(/.test(anchorLineText) &&
+      /[)]\s*(:\s*\w[\w<>, |]*\s*)?(=>|\{)/.test(anchorLineText));
+
   // Escanear hacia atrás desde anchor para encontrar el { de apertura del bloque
   // que nos contiene, y luego la declaración de función asociada.
+  // Sólo lo hacemos cuando el anchor es un call site / línea interior, no una declaración.
   let depth = 0;
   let funcStart = anchor;
-  for (let i = anchor; i >= 0; i--) {
-    depth -= netBraces(lines[i]); // yendo hacia atrás: { suma depth
-    if (depth > 0) {
-      // Estamos dentro de un bloque que abre en línea i o antes.
-      // Buscar hasta 5 líneas más atrás la declaración de función.
-      funcStart = i;
-      for (let j = Math.max(0, i - 4); j <= i; j++) {
-        if (/\b(function|const|let|var|async)\b|\)\s*[\{:]/.test(lines[j])) {
-          funcStart = j;
+  if (!anchorIsDeclaration) {
+    for (let i = anchor; i >= 0; i--) {
+      depth -= netBraces(lines[i]); // yendo hacia atrás: { suma depth
+      if (depth > 0) {
+        // Estamos dentro de un bloque que abre en línea i o antes.
+        // Buscar hasta 5 líneas más atrás la declaración de función.
+        funcStart = i;
+        for (let j = Math.max(0, i - 4); j <= i; j++) {
+          if (/\b(function|const|let|var|async)\b|\)\s*[\{:]/.test(lines[j])) {
+            funcStart = j;
+          }
         }
+        break;
       }
-      break;
     }
   }
 
@@ -3769,6 +3799,13 @@ async function runChatTurn(
     );
     if (haikuResult.resolved) {
       await saveChatHistory(sessionId, haikuResult.messages);
+      // Override any stale LOW-CONFIDENCE label from a preceding DEEP/FAST call.
+      // Haiku resolved the question with live code reads — the result is real.
+      send('confidence', {
+        level: 'medium',
+        reason: 'CHAT — Haiku 4.5 exploró y respondió con lectura directa del código fuente',
+        suggestedAction: 'none',
+      });
       return;
     }
     if (!haikuResult.foundFiles) {
