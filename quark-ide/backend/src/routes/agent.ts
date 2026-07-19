@@ -3550,6 +3550,10 @@ Revisá si el contexto de la conversación ya contiene evidencia que responda la
       el cuerpo está completo — no releas el archivo para "ver el resto", ya está todo.
     → Si cubre parcialmente: usá lo que ya está y buscá SOLO lo que falta (ej: dependencias
       externas, otro símbolo no cubierto). No repitas búsquedas sobre lo ya encontrado.
+      Si el fragmento ya tiene el cuerpo de la función pero le falta el bloque de retorno
+      o el cierre del objeto, hacé UN solo read_file MUY acotado:
+        start_line = [última línea del fragmento], end_line = [última línea + 20]
+      No uses N+150 ni re-leas el rango entero — 15-20 líneas alcanzan para encontrar el return.
   • Si hay "INVESTIGACIÓN PREVIA (FAST mode)" o "HALLAZGO PREVIO":
     usalo como punto de partida. Solo buscá de nuevo si necesitás más detalle que el que hay.
 Si la evidencia existente responde la pregunta completamente, pasá directo a la síntesis (ver ROL).
