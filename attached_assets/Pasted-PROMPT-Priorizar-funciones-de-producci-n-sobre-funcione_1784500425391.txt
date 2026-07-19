@@ -1,0 +1,24 @@
+PROMPT — Priorizar funciones de producción sobre funciones de test en la búsqueda + respuestas de FAST más fieles a lo leído
+
+Contexto: La búsqueda semántica en CHAT (Haiku explorando con instrucciones en lenguaje natural) ya funciona bien — quedó demostrado con la prueba de trailing stop, donde encontró correctamente placeTrailingStop() real evitando testTrailingStopCoexistence(). Pero symbol_index/DEEP siguen sin poder distinguir “función real” de “función de test” cuando ambas matchean las mismas palabras clave — devuelven consistentemente la de test primero.
+
+1. DEEP/symbol_index: despriorizar funciones de test
+
+Cuando una búsqueda por palabras clave matchea múltiples símbolos, y alguno de ellos tiene indicadores claros de ser código de test/desarrollo, ese símbolo debe rankearse más abajo, no devolverse como primer/único resultado. Señales para identificar código de test (heurística, no exhaustiva):
+
+	•	Nombre de función/interfaz contiene “test”, “Test”, “mock”, “debug”
+	•	Comentario adyacente menciona endpoints tipo /api/dev/*, headers de secreto de desarrollo (X-Dev-Secret), o frases como “never writes to [tabla de producción]”
+	•	Ubicación en un archivo o sección claramente separada como utilidades de desarrollo
+
+Cuando symbol_index devuelve un match así como único resultado, DEEP debería: (a) igual mostrarlo si es lo único que hay, pero marcándolo explícitamente como “posible código de test, no de producción” en el label de confianza, en vez de HIGH CONFIDENCE sin aclaración; o (b) si hay otros candidatos con nombres relacionados (ej. placeOrder, placeTrailingStop sin “test” en el nombre), priorizar esos en la búsqueda antes que el match de test.
+
+2. FAST mode: respuestas más fieles a lo que efectivamente lee, no evasivas
+
+En la prueba de trailing stop, FAST recibió el mismo fragmento de test que DEEP, y en vez de describir con precisión lo que el fragmento sí contenía, se fue a lenguaje especulativo (“se puede inferir que…”, “podría ser fijo o configurable”, “sería necesario examinar…”). Aunque correctamente identificó que era código de test (buen comportamiento anti-alucinación), el resto de la respuesta fue vago en vez de describir con precisión lo que el fragmento realmente mostraba.
+
+Ajustar el prompt de FAST: cuando identifique que el fragmento es insuficiente o de test, debe (a) decirlo en una oración clara, igual que ahora, pero (b) para lo que el fragmento SÍ contiene con certeza, describirlo con la misma precisión y detalle que ya logra en casos exitosos (ver ejemplo de la señal S6) — no diluir la respuesta completa en incertidumbre solo porque una parte de la pregunta no se puede responder con ese fragmento.
+
+Restricciones generales:
+
+	•	No tocar la lógica de extracción ya arreglada (readEnclosingFunction, backward-scan) — esto es sobre priorización de búsqueda y precisión de síntesis, no sobre extracción de fragmentos.
+	•	Antes de commitear: probá de nuevo “cómo funciona el trailing stop” en DEEP y FAST por separado. DEEP debería encontrar placeTrailingStop/placeOrder reales o al menos marcar claramente el resultado de test como tal. FAST debería describir con precisión lo que el fragmento (sea de test o no) efectivamente contiene, sin lenguaje evasivo para las partes que sí puede confirmar.

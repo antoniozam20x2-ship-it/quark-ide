@@ -1303,7 +1303,14 @@ router.post('/generate', async (req, res) => {
           return;
         }
 
-        const best = fastMatches[0];
+        // Prefer production symbols over test/dev matches.
+        // If the top result looks like test code but a non-test match exists, use that instead.
+        const nonTestFastMatches = fastMatches.filter(m => !isTestMatch(m.path, m.text));
+        const best = nonTestFastMatches.length > 0 ? nonTestFastMatches[0] : fastMatches[0];
+        const bestIsTest = isTestMatch(best.path, best.text);
+        if (bestIsTest) {
+          send('action', { text: '⚠️ Solo encontré código de test — el símbolo de producción puede tener un nombre diferente. Reformulá con el nombre exacto o usá DEEP mode.' });
+        }
         send('action', { text: `📍 Símbolo encontrado: ${best.path}${best.line ? `:${best.line}` : ''}` });
 
         // Cambio 3: si el hit viene de ripgrep (sin symbolType), intentar resolver
@@ -1412,7 +1419,19 @@ Si el fragmento incluye un bloque "// Constantes referenciadas" con múltiples v
 No listés todas las constantes inyectadas si la función solo usa una.
 
 REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está explícitamente en el fragmento. \
-Si el fragmento no alcanza para responder del todo, decilo en una oración y sugerí DEEP mode.`,
+Si el fragmento no alcanza para responder del todo, decilo en una oración y sugerí DEEP mode.
+
+REGLA DE FIDELIDAD PARCIAL — cuando el fragmento es de test o cubre solo parte de la pregunta:
+Identificá si el fragmento es de test (nombres como testFoo, mockBar, comentarios de /api/dev/, etc.) \
+o si solo cubre parcialmente la pregunta. En ese caso:
+  1. Decilo en UNA oración concisa al inicio del párrafo 1: "Este fragmento corresponde a código \
+de test, no a la implementación de producción." — o equivalente según el caso.
+  2. Luego describí con la MISMA PRECISIÓN Y DETALLE que en casos exitosos lo que el fragmento \
+SÍ muestra con certeza: parámetros reales, valores concretos, flujo visible, condiciones presentes. \
+Aplicá las mismas reglas de vocabulario, **negrita** y detalle numérico — no diluyas la descripción.
+  3. PROHIBIDO usar "se puede inferir", "podría ser", "sería necesario examinar" para describir \
+lo que el fragmento YA MUESTRA con certeza. Esas frases solo son válidas para afirmaciones \
+sobre código que NO está en el fragmento — no para lo que sí está visible.`,
           );
 
           const fastLines = fastAnalysis.split('\n').map(l => l.trim()).filter(Boolean);
@@ -1423,7 +1442,13 @@ Si el fragmento no alcanza para responder del todo, decilo en una oración y sug
           // BUG 5 fix: confidence level derives from match origin, not hardcoded 'medium'.
           // symbol_index hit (symbolType set) = exact lookup → HIGH.
           // fuzzy-match / ripgrep hit = approximate location → MEDIUM.
-          const fastConfidence: 'high' | 'medium' = best.symbolType ? 'high' : 'medium';
+          // Test match: cap at 'medium' regardless of lookup method (not production code).
+          const fastConfidence: 'high' | 'medium' = (best.symbolType && !bestIsTest) ? 'high' : 'medium';
+          const fastConfidenceReason = bestIsTest
+            ? 'FAST mode — resultado de test/dev, no de producción. Reformulá con el nombre exacto de la función de producción o usá DEEP mode.'
+            : fastConfidence === 'high'
+              ? 'FAST mode — símbolo ubicado por symbol_index (lookup exacto)'
+              : 'FAST mode — símbolo ubicado por fuzzy-match/ripgrep (posición aproximada)';
 
           const fastFindingId = await saveInvestigationFinding({
             repo,
@@ -1434,9 +1459,7 @@ Si el fragmento no alcanza para responder del todo, decilo en una oración y sug
 
           send('confidence', {
             level: fastConfidence,
-            reason: fastConfidence === 'high'
-              ? 'FAST mode — símbolo ubicado por symbol_index (lookup exacto)'
-              : 'FAST mode — símbolo ubicado por fuzzy-match/ripgrep (posición aproximada)',
+            reason: fastConfidenceReason,
             suggestedAction: 'deep',
             files: [best.path],
             diagnosis: fastAnalysis,
@@ -1517,12 +1540,13 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
       send('action', { text: `🔍 DEEP — buscando: [${deepPattern}]` });
       const allDeepMatches = await unifiedGrepSearch(deepPattern, repo, send);
 
-      // Prioritise matches in Gemini-identified files; fall back to full results
+      // Priority order: 1) Gemini target + production, 2) other production, 3) test/dev last
       const targetSet = new Set(targetFilePaths);
       const deepMatches = allDeepMatches.length > 0
         ? [
-            ...allDeepMatches.filter(m => targetSet.has(m.path)),
-            ...allDeepMatches.filter(m => !targetSet.has(m.path)),
+            ...allDeepMatches.filter(m => targetSet.has(m.path)  && !isTestMatch(m.path, m.text)),
+            ...allDeepMatches.filter(m => !targetSet.has(m.path) && !isTestMatch(m.path, m.text)),
+            ...allDeepMatches.filter(m => isTestMatch(m.path, m.text)),
           ]
         : [];
 
@@ -1599,17 +1623,34 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
         .map(e => `${e.path}:${e.line}\n${e.fragment}`)
         .join('\n\n');
 
+      // Assess whether evidence is from test/dev code — affects confidence label.
+      const deepAllTest  = deepEvidence.length > 0 && deepEvidence.every(e => isTestMatch(e.path, e.fragment));
+      const deepSomeTest = deepEvidence.some(e => isTestMatch(e.path, e.fragment));
+      const deepConfidence: 'high' | 'medium' | 'low' =
+        deepEvidence.length === 0 ? 'low' : deepAllTest ? 'medium' : 'high';
+      if (deepAllTest) {
+        send('action', { text: '⚠️ DEEP — solo se encontró código de test/dev. La función de producción puede tener un nombre diferente. Reformulá con el nombre exacto o revisá los archivos de producción directamente.' });
+      } else if (deepSomeTest) {
+        send('action', { text: '⚠️ DEEP — evidencia mixta: algunos fragmentos son de test/dev (rankeados al final). Los primeros resultados son de producción.' });
+      }
+
       const deepFindingId = await saveInvestigationFinding({
         repo,
         files: deepEvidence.map(e => ({ path: e.path, lineRanges: [{ start: e.line, end: (e as any).endLine ?? e.line + 40, matchedTerm: deepPattern }] })),
         diagnosis: deepEvidenceSummary,
         evidence: deepEvidence,
-        confidence: deepEvidence.length > 0 ? 'high' : 'low',
+        confidence: deepConfidence,
       }).catch(() => null);
 
+      const deepConfidenceReason = deepAllTest
+        ? 'DEEP mode — solo evidencia de test/dev. La implementación de producción puede tener un nombre diferente.'
+        : deepSomeTest
+          ? 'DEEP mode — evidencia mixta (producción + test). Los fragmentos de producción aparecen primero.'
+          : 'DEEP mode — fragmentos literales con citas file:line exactas, sin interpretación';
+
       send('confidence', {
-        level: deepEvidence.length > 0 ? 'high' : 'low',
-        reason: 'DEEP mode — fragmentos literales con citas file:line exactas, sin interpretación',
+        level: deepConfidence,
+        reason: deepConfidenceReason,
         suggestedAction: 'chat',
         files: deepEvidence.map(e => e.path),
         findingId: deepFindingId ?? undefined,
@@ -3319,6 +3360,28 @@ function findRealSymbolMatches(term: string, symbolNames: string[], maxResults =
     .filter(sym => normalizeForMatch(sym).includes(normTerm))
     .sort((a, b) => a.length - b.length)
     .slice(0, maxResults);
+}
+
+// ── Test / dev-only code detector ────────────────────────────────────────────
+// Heuristically identifies whether a search match points to test or dev code
+// rather than production logic. Used to DEPRIORITIZE (not exclude) such results
+// so production implementations surface first in both FAST and DEEP.
+function isTestMatch(filePath: string, matchText?: string): boolean {
+  // 1. Test file by path convention (.test.ts, .spec.ts, /tests/, /__tests__/, etc.)
+  if (/\.(test|spec)\.[jt]sx?$/.test(filePath)) return true;
+  if (/[/](tests?|__tests__|mocks?|fixtures?)[/]/i.test(filePath)) return true;
+
+  if (matchText) {
+    // 2. Symbol/function name declared with test/mock/debug prefix (camelCase)
+    //    Catches: function testFoo, const testFoo, async function mockBar — NOT placeTrailingStop
+    if (/\b(?:function\s+|(?:const|let|var)\s+)(?:async\s+)?(?:function\s+)?(test|mock|debug|stub|fake|dummy)[A-Za-z]/i.test(matchText)) return true;
+    // 3. Call/assignment form: testFoo( or testFoo = (camelCase after test prefix)
+    if (/\btest[A-Z]\w*\s*[=(]/i.test(matchText)) return true;
+    // 4. Dev/test-only indicators in comments or route strings
+    if (/\/api\/dev\/|X-Dev-Secret|never writes to|for (?:test|dev)(?:ing)? only/i.test(matchText)) return true;
+  }
+
+  return false;
 }
 
 // ── Trading pattern detector for DEEP mode ───────────────────────────────────
