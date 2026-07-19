@@ -1573,7 +1573,14 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
             continue;
           }
 
-          deepEvidence.push({ path: match.path, line: section.startLine, endLine: section.endLine, fragment: section.excerpt });
+          // Annotate the fragment with any recognized trading patterns (FVG, etc.)
+          // before storing — the annotation flows through deepEvidenceSummary →
+          // diagnosis → fastFindingContext so CHAT/Haiku reads it as resolved metadata.
+          const { annotatedFragment, notes: patternNotes } = annotateTradingPatterns(
+            section.excerpt, section.startLine, match.path,
+          );
+          for (const note of patternNotes) send('action', { text: `🔍 ${note}` });
+          deepEvidence.push({ path: match.path, line: section.startLine, endLine: section.endLine, fragment: annotatedFragment });
           send('action', { text: `📌 ${match.path}:${section.startLine}-${section.endLine}` });
           const preview = section.excerpt.split('\n').slice(0, 20);
           for (const fl of preview) {
@@ -3312,6 +3319,117 @@ function findRealSymbolMatches(term: string, symbolNames: string[], maxResults =
     .filter(sym => normalizeForMatch(sym).includes(normTerm))
     .sort((a, b) => a.length - b.length)
     .slice(0, maxResults);
+}
+
+// ── Trading pattern detector for DEEP mode ───────────────────────────────────
+// Identifies known trading patterns in extracted code fragments by their
+// LOGICAL STRUCTURE — not by variable names. Works across any repo
+// (Signal OS, Nexus OS, etc.) regardless of how variables are named.
+//
+// To add a new pattern: push a new entry to TRADING_PATTERNS below.
+// Each entry implements detect(lines, fragmentStartLine) and returns
+// { matchedLines, detail } if found, or null if not.
+
+interface TradingPatternResult {
+  matchedLines: number[];  // 1-based absolute line numbers within the source file
+  detail: string;          // human-readable annotation for the evidence note
+}
+
+interface TradingPattern {
+  name: string;        // e.g. 'FVG', 'EMA_CROSS'
+  description: string; // e.g. 'Fair Value Gap'
+  detect: (lines: string[], fragmentStartLine: number) => TradingPatternResult | null;
+}
+
+const TRADING_PATTERNS: TradingPattern[] = [
+  {
+    name: 'FVG',
+    description: 'Fair Value Gap',
+    detect(lines: string[], fragmentStartLine: number): TradingPatternResult | null {
+      // FVG structural signature: a comparison between an array value at the
+      // *current* bar index and an array value N bars *back* (offset index).
+      // This is the universal FVG implementation regardless of naming.
+      //
+      // Canonical form (checkS6Bull in Signal OS): lows[i] > highs[i-2]
+      //   • arr[loopVar]        — current bar's value
+      //   • arr2[loopVar - N]   — value N bars ago (N >= 1)
+      //   • comparison operator between them
+      //
+      // The backreference on the loop variable (group 2) prevents matching
+      // unrelated index comparisons like arr[i] > arr2[j-1].
+      //
+      // Fallback: explicit fvg-named variable (fvgBull, fvgBear, etc.)
+      // which is also structural — it means the repo already computed the gap.
+
+      // word[i] OP word[i-N]
+      const OFFSET_CMP_FORWARD = /\b\w+\s*\[\s*(\w+)\s*\]\s*[><=!]{1,3}\s*\w+\s*\[\s*\1\s*-\s*\d+\s*\]/;
+      // word[i-N] OP word[i]
+      const OFFSET_CMP_REVERSE = /\b\w+\s*\[\s*(\w+)\s*-\s*\d+\s*\]\s*[><=!]{1,3}\s*\w+\s*\[\s*\1\s*\]/;
+      // Explicit fvg variable (named structural result)
+      const FVG_NAMED_VAR = /\bfvg(?:Bull|Bear|bull|bear|Up|Down|Long|Short|[A-Z])/;
+
+      const matchedLines: number[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (OFFSET_CMP_FORWARD.test(line) || OFFSET_CMP_REVERSE.test(line) || FVG_NAMED_VAR.test(line)) {
+          matchedLines.push(fragmentStartLine + i);
+        }
+      }
+
+      if (matchedLines.length === 0) return null;
+
+      const first = matchedLines[0];
+      const last = matchedLines[matchedLines.length - 1];
+      const lineRef = first === last ? `línea ${first}` : `líneas ${first}-${last}`;
+      return {
+        matchedLines,
+        detail: `${lineRef} implementan el patrón FVG (comparación de low/close actual contra high de N velas atrás).`,
+      };
+    },
+  },
+  // ── Future patterns — add here without touching the rest of the pipeline ──
+  // { name: 'EMA_CROSS', description: 'EMA crossover', detect: ... },
+  // { name: 'RSI_CONDITION', description: 'RSI overbought/oversold', detect: ... },
+];
+
+/**
+ * Analyzes a raw code fragment extracted by DEEP mode and appends an
+ * annotation block for any recognized trading pattern.
+ *
+ * The annotation becomes part of the fragment stored in deepEvidence →
+ * deepEvidenceSummary → diagnosis → fastFindingContext sent to CHAT/Haiku,
+ * so Haiku receives pre-resolved pattern metadata and does NOT need its own
+ * structural recognition logic.
+ *
+ * @param fragment   Raw code text extracted from the source file
+ * @param startLine  1-based line number where the fragment begins in the file
+ * @param filePath   Source file path (used in display text only)
+ */
+function annotateTradingPatterns(
+  fragment: string,
+  startLine: number,
+  filePath: string,
+): { annotatedFragment: string; notes: string[] } {
+  const lines = fragment.split('\n');
+  const notes: string[] = [];
+  const fileName = filePath.split('/').pop() ?? filePath;
+
+  for (const pattern of TRADING_PATTERNS) {
+    const result = pattern.detect(lines, startLine);
+    if (result) {
+      notes.push(
+        `[QUARK PATTERN] ${pattern.name} (${pattern.description}) detectado en ${fileName}: ${result.detail}`,
+      );
+    }
+  }
+
+  if (notes.length === 0) return { annotatedFragment: fragment, notes: [] };
+
+  const annotationBlock =
+    '\n\n// ── Patrones de trading detectados por DEEP (estructura lógica, no nombres de variable) ──\n'
+    + notes.map(n => `// Nota: ${n}`).join('\n');
+
+  return { annotatedFragment: fragment + annotationBlock, notes };
 }
 
 async function unifiedGrepSearch(
