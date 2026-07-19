@@ -1,0 +1,28 @@
+PROMPT — DEEP/FAST: extracción rota vs. lectura simple que sí funciona + bug de label en CHAT
+
+Contexto: Nueva ronda de pruebas post-fixes. FAST y DEEP siguen fallando en extracción, pero CHAT (cuando Haiku explora desde cero con lectura simple por rango) dio la mejor respuesta de toda la sesión — mejor que la referencia original. Esto es evidencia clave: el problema no es el código fuente, no es el índice, es específicamente la función de extracción que usan FAST/DEEP.
+
+1. DEEP mode — extracción rota, ruta distinta a FAST
+Pregunta: “cómo funciona la señal S6”, repo Signal OS (Ahorar). symbol_index reporta checkS6Bull en línea 670 (correcto, confirmado por SQL en sesión anterior). DEEP descarta el fragmento con “no contiene el símbolo buscado” — igual que antes del fix del backward-scan.
+
+En la misma corrida, FAST sí encontró y leyó contenido en esa línea (aunque con problemas de scope, ver punto 2). Esto indica que FAST y DEEP no comparten la misma función de extracción, pese a que el resumen anterior decía que ambos usan readEnclosingFunction.
+
+Evidencia adicional de esta ronda: cuando DEEP falló y CHAT tomó el control, Haiku usó lectura simple por rango de líneas (📖 Leyendo tradingLogic.ts líneas 650–750, sin pasar por readEnclosingFunction) y extrajo todo perfecto: FVG, EMA10 con fórmula de aceleración, SuperTrend en dirección específica, Score≥50, sin agotamiento, vida de 3 velas — con citas de línea exactas.
+
+Acción: Trazá el call path real de DEEP mode para este flujo (checkS6Bull → fragmento). Confirmá si es la misma readEnclosingFunction con el fix del backward-scan aplicado, o una ruta distinta que no lo tiene. Dado que la lectura simple por rango SÍ funciona (ya probada en producción, en el propio log de Haiku), evaluá si conviene que DEEP use ese mismo enfoque simple como fallback cuando readEnclosingFunction falla, en vez de descartar la evidencia y devolver LOW CONFIDENCE.
+
+2. FAST mode — scope contaminado, el ajuste de prompt no alcanzó
+Respuesta actual para “cómo funciona S6” mezcla RSI, ADX, EMA20/34/55 y varios umbrales que no pertenecen a checkS6Bull — y el FVG, la condición central de la señal, desapareció por completo. La “REGLA DE SCOPE” agregada en la sesión anterior no lo resolvió.
+
+Acción: Mostrame el fragmento crudo exacto que readEnclosingFunction devuelve para checkS6Bull en esta corrida (el texto completo que recibe el LLM). Confirmá si contiene código de señales vecinas (S5/S7/otras) mezclado en el mismo fragmento, o si el modelo está combinando esto con el bloque de constantes inyectado por el Cambio 1 sin distinguir origen. No toques el prompt de nuevo hasta confirmar la causa con este fragmento crudo.
+
+3. Bug de label en CHAT — confianza no refleja el resultado real
+Cuando DEEP falla y Haiku completa la investigación con éxito (como en el caso de arriba, respuesta completa y precisa), el label final sigue mostrando “○ LOW CONFIDENCE — DEEP mode” heredado del fallo original. Debería reflejar la confianza real del resultado que efectivamente llegó al usuario, no la del paso que falló.
+
+Acción: Ajustar el label final para que se base en el resultado de CHAT/Haiku cuando ese fue el que resolvió la pregunta, no en el estado de DEEP que quedó obsoleto una vez que Haiku exploró con éxito.
+
+Restricciones generales:
+
+	•	Puntos 1 y 2 requieren evidencia (fragmento crudo, call path trazado) antes de aplicar cualquier fix — no repitas el patrón de aplicar sin confirmar causa.
+	•	Punto 3 es independiente, diff quirúrgico simple.
+	•	Cuando termines 1 y 2: probá “cómo funciona S6” en FAST y DEEP por separado, y confirmá que ambos coincidan con el nivel de detalle que logró Haiku en esta prueba (FVG, EMA10+aceleración, SuperTrend direccional, Score≥50, sin agotamiento, vida 3 velas).
