@@ -1293,7 +1293,10 @@ router.post('/generate', async (req, res) => {
           ? fastKeywords.join('|')
           : prompt.split(/\s+/).filter(w => w.length > 4).slice(0, 3).join('|');
 
-        const fastMatches = await unifiedGrepSearch(fastPattern, repo, send);
+        // searchWithTestFallback: first pass → if all test → retry without test paths.
+        // Returns matches sorted production-first; allTest=true when retry also failed.
+        const { matches: fastMatches, allTest: fastAllTest } =
+          await searchWithTestFallback(fastPattern, repo, send);
 
         if (fastMatches.length === 0) {
           send('action', { text: '❌ No encontré referencias directas a esos términos. Reformulá con el nombre exacto de la función o variable, o usá DEEP mode para una búsqueda extensiva.' });
@@ -1303,11 +1306,9 @@ router.post('/generate', async (req, res) => {
           return;
         }
 
-        // Prefer production symbols over test/dev matches.
-        // If the top result looks like test code but a non-test match exists, use that instead.
-        const nonTestFastMatches = fastMatches.filter(m => !isTestMatch(m.path, m.text));
-        const best = nonTestFastMatches.length > 0 ? nonTestFastMatches[0] : fastMatches[0];
-        const bestIsTest = isTestMatch(best.path, best.text);
+        // fastMatches already sorted production-first by searchWithTestFallback.
+        const best = fastMatches[0];
+        const bestIsTest = fastAllTest; // true only when ALL results (incl. retry) are test
         if (bestIsTest) {
           send('action', { text: '⚠️ Solo encontré código de test — el símbolo de producción puede tener un nombre diferente. Reformulá con el nombre exacto o usá DEEP mode.' });
         }
@@ -1538,15 +1539,21 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
         : prompt.split(/\s+/).filter(w => w.length > 4).slice(0, 4).join('|');
 
       send('action', { text: `🔍 DEEP — buscando: [${deepPattern}]` });
-      const allDeepMatches = await unifiedGrepSearch(deepPattern, repo, send);
 
-      // Priority order: 1) Gemini target + production, 2) other production, 3) test/dev last
+      // searchWithTestFallback: first pass → if all test → retry without test paths.
+      // Returns matches sorted production-first; we then further rank by targetSet.
+      const { matches: productionFirstMatches } =
+        await searchWithTestFallback(deepPattern, repo, send);
+
+      // DEEP priority: 1) Gemini target + production, 2) other production, 3) test/dev last.
+      // searchWithTestFallback guarantees production comes before test; we add the
+      // targetSet layer on top without re-running isTestMatch from scratch.
       const targetSet = new Set(targetFilePaths);
-      const deepMatches = allDeepMatches.length > 0
+      const deepMatches = productionFirstMatches.length > 0
         ? [
-            ...allDeepMatches.filter(m => targetSet.has(m.path)  && !isTestMatch(m.path, m.text)),
-            ...allDeepMatches.filter(m => !targetSet.has(m.path) && !isTestMatch(m.path, m.text)),
-            ...allDeepMatches.filter(m => isTestMatch(m.path, m.text)),
+            ...productionFirstMatches.filter(m => targetSet.has(m.path)  && !isTestMatch(m.path, m.text)),
+            ...productionFirstMatches.filter(m => !targetSet.has(m.path) && !isTestMatch(m.path, m.text)),
+            ...productionFirstMatches.filter(m => isTestMatch(m.path, m.text)),
           ]
         : [];
 
@@ -3384,6 +3391,48 @@ function isTestMatch(filePath: string, matchText?: string): boolean {
   return false;
 }
 
+// ── Shared test-aware search with automatic production retry ─────────────────
+// Both FAST and DEEP call this instead of duplicating the detect-and-retry
+// pattern. Workflow:
+//   1. First search via unifiedGrepSearch (index + ripgrep)
+//   2. Partition results into production vs test/dev
+//   3. If ALL first-pass results are test → retry with ripgrep glob exclusions
+//   4. Return sorted matches (production first) + allTest / someTest flags
+//
+// The caller decides which warning message to emit based on the flags;
+// this function only emits the intermediate retry status action.
+async function searchWithTestFallback(
+  pattern: string,
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+): Promise<{ matches: GrepMatch[]; allTest: boolean; someTest: boolean }> {
+  const first = await unifiedGrepSearch(pattern, repo, send);
+  if (first.length === 0) return { matches: [], allTest: false, someTest: false };
+
+  const production = first.filter(m => !isTestMatch(m.path, m.text));
+  const test       = first.filter(m =>  isTestMatch(m.path, m.text));
+
+  if (production.length > 0) {
+    // Normal case: at least some production results — return them sorted.
+    return { matches: [...production, ...test], allTest: false, someTest: test.length > 0 };
+  }
+
+  // All first-pass results are test/dev — retry with ripgrep glob exclusions
+  // so test directories are skipped at the OS level (faster, avoids cap issues).
+  send('action', { text: '🔄 Solo resultados de test — reintentando con exclusión de rutas de test...' });
+  const retry     = await unifiedGrepSearch(pattern, repo, send, { excludeTestPaths: true });
+  const retryProd = retry.filter(m => !isTestMatch(m.path, m.text));
+
+  if (retryProd.length > 0) {
+    send('action', { text: `✅ Reintento: ${retryProd.length} resultado(s) de producción encontrado(s).` });
+    return { matches: retryProd, allTest: false, someTest: false };
+  }
+
+  // Retry also found nothing in production — proceed with test results but
+  // set allTest so the caller can warn and cap confidence accordingly.
+  return { matches: test, allTest: true, someTest: true };
+}
+
 // ── Trading pattern detector for DEEP mode ───────────────────────────────────
 // Identifies known trading patterns in extracted code fragments by their
 // LOGICAL STRUCTURE — not by variable names. Works across any repo
@@ -3499,9 +3548,10 @@ async function unifiedGrepSearch(
   pattern: string,
   repo: string,
   send: (event: string, data: Record<string, unknown>) => void,
+  options?: { excludeTestPaths?: boolean },
 ): Promise<GrepMatch[]> {
   const rawTerms = pattern.split('|').map((t: string) => t.trim()).filter(Boolean);
-  console.log(`[unifiedGrepSearch] patrón: "${pattern}" → ${rawTerms.length} término(s): [${rawTerms.join(', ')}]`);
+  console.log(`[unifiedGrepSearch] patrón: "${pattern}" → ${rawTerms.length} término(s): [${rawTerms.join(', ')}]${options?.excludeTestPaths ? ' [excl. test]' : ''}`);
   send('action', { text: `🧠 Paso 1 — buscando en índice de símbolos: [${rawTerms.join(', ')}]` });
 
   // ── 1. Symbol index — exact identifier lookup, O(1) ──────────────────────
@@ -3543,11 +3593,21 @@ async function unifiedGrepSearch(
     // igual lograron matchear (ej. tipos comunes) suelen ser menos específicos
     // que nombres técnicos largos como "trailingStop" o "checkS1Bull".
     symbolMatches.sort((a, b) => b.term.length - a.term.length);
-    const best = symbolMatches[0];
-    send('action', { text: `⚡ Símbolo en índice: ${best.sym.filePath}:${best.sym.lineNumber} (término: "${best.term}")` });
-    return [{ path: best.sym.filePath, line: best.sym.lineNumber, text: best.term, symbolType: best.sym.symbolType }];
+    // When excludeTestPaths is active, skip symbol_index entries that point to
+    // test files — the retry should surface the production symbol instead.
+    const validMatches = options?.excludeTestPaths
+      ? symbolMatches.filter(m => !isTestMatch(m.sym.filePath))
+      : symbolMatches;
+    if (validMatches.length > 0) {
+      const best = validMatches[0];
+      send('action', { text: `⚡ Símbolo en índice: ${best.sym.filePath}:${best.sym.lineNumber} (término: "${best.term}")` });
+      return [{ path: best.sym.filePath, line: best.sym.lineNumber, text: best.term, symbolType: best.sym.symbolType }];
+    }
+    // All symbol_index hits were test paths — fall through to ripgrep with exclusions
+    send('action', { text: `⬜ Paso 1 — índice solo apunta a test, ignorado` });
+  } else {
+    send('action', { text: `⬜ Paso 1 — no en índice` });
   }
-  send('action', { text: `⬜ Paso 1 — no en índice` });
 
   // ── 2. ripgrep on local clone — primary search ────────────────────────────
   if (isCloned(repo)) {
@@ -3558,7 +3618,19 @@ async function unifiedGrepSearch(
     console.log(`[unifiedGrepSearch] patrón ripgrep construido: "${ripgrepPattern}" (desde: [${rawTerms.join(', ')}])`);
     send('action', { text: `🔬 Paso 2 — ripgrep local: \`${ripgrepPattern}\`` });
 
-    const rgResults = await rgSearch(ripgrepPattern, repo);
+    // When excludeTestPaths is active, add ripgrep glob exclusions so test
+    // directories are skipped at the OS level — faster and more thorough than
+    // post-filtering (avoids hitting the 20-result cap with test-only files).
+    const testExcludeGlobs: string[] = options?.excludeTestPaths
+      ? [
+          '--glob', '!**/*.test.ts', '--glob', '!**/*.test.js',
+          '--glob', '!**/*.spec.ts', '--glob', '!**/*.spec.js',
+          '--glob', '!**/__tests__/**', '--glob', '!**/tests/**',
+          '--glob', '!**/mocks/**',    '--glob', '!**/fixtures/**',
+        ]
+      : [];
+
+    const rgResults = await rgSearch(ripgrepPattern, repo, testExcludeGlobs);
     if (rgResults.length > 0) {
       send('action', { text: `✅ Paso 2 — ${rgResults.length} resultado(s) vía ripgrep local` });
       return rgResults.map(r => ({ path: r.path, line: r.line, text: r.text }));

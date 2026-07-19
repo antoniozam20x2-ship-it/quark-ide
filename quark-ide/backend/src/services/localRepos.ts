@@ -450,7 +450,7 @@ export interface RgMatch {
  * Search the local clone using ripgrep.
  * Returns empty array if repo not cloned or rg not available.
  */
-export async function rgSearch(pattern: string, repo: string): Promise<RgMatch[]> {
+export async function rgSearch(pattern: string, repo: string, extraArgs: string[] = []): Promise<RgMatch[]> {
   if (!isCloned(repo)) return [];
   const dir = repoDir(repo);
 
@@ -463,6 +463,7 @@ export async function rgSearch(pattern: string, repo: string): Promise<RgMatch[]
         '--max-count=5',          // max 5 matches per file
         '--max-filesize=2M',
         '--no-heading',
+        ...extraArgs,
         pattern,
         dir,
       ],
