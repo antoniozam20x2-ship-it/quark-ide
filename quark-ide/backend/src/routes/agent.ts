@@ -3626,15 +3626,34 @@ tu tarea es responder la pregunta con una síntesis completa:
 
 No inferás lo que no leíste. Citá fragmentos exactos para respaldar tus afirmaciones.
 
+Al sintetizar: usá los nombres técnicos de trading exactos (**FVG**, **EMA**, **SuperTrend**, \
+**RSI**, **ADX**, **ATR**, **Score**, etc.) — nunca los parafrasees con lenguaje genérico. \
+Aplicá **negrita** a cada término técnico y valor numérico clave (**EMA10**, **Score ≥ 60**, \
+**FVG**, **3 velas**, etc.) cada vez que aparecen en la respuesta.
+
 ━━━ NOTA DE DOMINIO — variables de trading frecuentes ━━━
 En repos de trading (Signal OS, Ahorar, etc.), las abreviaturas de variables tienen convenciones fijas:
-  • \`st\`, \`stDir\`, \`stDirArr\`, \`sa\`, \`sb\` → dirección del indicador **SuperTrend** (NO Parabolic SAR).
+  • \`st\`, \`stDir\`, \`stDirArr\` → dirección del indicador **SuperTrend** (NO Parabolic SAR).
     SAR y SuperTrend son indicadores distintos — nunca intercambies sus nombres.
+  • \`sa\`, \`sb\` → **Score alcista** y **Score bajista** (índice numérico de momentum/dirección).
+    NUNCA asocies \`sa\`/\`sb\` con "SAR (Parabolic)" ni con ningún indicador SAR — son scores, no SAR.
+  • \`fvgBull\`, \`fvgBear\` → **FVG** (Fair Value Gap) alcista / bajista.
+    Nombralo siempre como **FVG**. PROHIBIDO parafrasear como "ruptura de máximos", "brecha de precio"
+    u otra descripción genérica — el nombre técnico correcto es **FVG** y debe aparecer así.
+  • \`noAgot\` → sin agotamiento de momentum (condición booleana)
   • \`ema\`, \`emaFast\`, \`emaSlow\` → **EMA** (Exponential Moving Average)
   • \`rsi\`, \`rsiVal\` → **RSI**
   • \`adx\`, \`adxVal\` → **ADX**
   • \`atr\`, \`atrVal\` → **ATR**
-Cuando identifiques un indicador, usá siempre el nombre técnico completo de trading, no lo parafrasees.`;
+Cuando identifiques un indicador, usá siempre el nombre técnico completo de trading, no lo parafrasees.
+
+REGLA ANTI-CONFUSIÓN — variables de 2-3 letras:
+Nombres cortos (\`sa\`, \`sb\`, \`st\`, \`rr\`, \`hl\`, \`sl\`, \`tp\`, etc.) tienen ALTO RIESGO de
+confundirse con acrónimos de trading (SAR, SMA, EMA, RSI…) solo por parecido visual.
+NUNCA deduzcas el significado de una variable corta por similitud de nombre.
+Si no está en la tabla de arriba ni en la evidencia DEEP → hacé la lectura puntual
+(grep_code + read_file ≤15 líneas) antes de nombrarla. Si tampoco hay definición, escribí:
+"no pude confirmar qué representa \`[var]\` en este contexto — no la renombro".`;
 
 // Tools available for Sonnet synthesis turn — no search tools, only read + patch
 // Sonnet only gets propose_patch — it must not re-investigate with search tools.
