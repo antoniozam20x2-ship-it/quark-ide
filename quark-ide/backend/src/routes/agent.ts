@@ -3545,23 +3545,23 @@ Revisá si el contexto de la conversación ya contiene evidencia que responda la
   • Si hay una sección "EVIDENCIA CONFIRMADA (DEEP mode)" o "EVIDENCIA VERIFICADA (DEEP mode)":
     esas citas de archivo:línea son lecturas reales del código fuente — HECHOS, no suposiciones.
 
-    REGLA ABSOLUTA — si el fragmento cierra con \`};\` (función completa):
-      → Sintetizá exclusivamente desde ese fragmento.
-      → PROHIBIDO: cualquier read_file del mismo archivo en rangos que solapen con el fragmento.
-      → PROHIBIDO: releer la misma función con un rango más amplio "para ver si hay más".
-      El cuerpo está completo. No hay nada más que ver en ese rango.
+    REGLA DE SÍNTESIS — si el fragmento cierra con \`};\` (función completa):
+      → El cuerpo de la función está completo. NUNCA lo releas con el mismo rango ni con uno más amplio.
+      → Sintetizá desde ese fragmento como base principal.
 
-    Si la función principal está completa pero te falta un dato de UN SÍMBOLO DISTINTO
-    (ej: dónde se ensambla el valor de retorno en la función que llama a ésta):
-      → Caso A — símbolo en otra función del mismo archivo:
-           UN solo grep_code con el nombre exacto del símbolo (ej: "sig6"),
-           luego UN read_file de máximo 15 líneas alrededor del resultado.
-           PROHIBIDO leer más de 15 líneas para este caso.
-      → Caso B — el return/cierre cayó justo fuera del fragmento (brace-scanner corto):
-           UN read_file acotado: start_line = última línea del fragmento,
-           end_line = última línea + 15. Nada más.
-      → En ambos casos: NUNCA un rango que supere en tamaño al fragmento ya entregado.
-         (ej: si DEEP entregó 670-681 = 11 líneas, el read extra no puede pedir >15 líneas)
+    EXCEPCIÓN PERMITIDA — lectura puntual para símbolo sin definición visible:
+      Si una variable o símbolo que aparece en el fragmento NO tiene definición visible
+      ni en la evidencia DEEP ni en el contexto ya cargado (ej: \`sa\`, \`sb\`, \`noAgot\`,
+      \`stDirArr\` sin descripción previa), Haiku DEBE hacer UNA lectura puntual para
+      confirmar su significado real antes de mencionarlo en la respuesta:
+        · UN grep_code con el nombre exacto del símbolo
+        · seguido de UN read_file de MÁXIMO 15 líneas alrededor del resultado
+      PROHIBIDO: inventar el significado de una variable sin haberla buscado en el código.
+      PROHIBIDO: omitirla en la respuesta sin haber intentado esa lectura puntual primero.
+      PROHIBIDO: usar esta excepción para re-leer el rango de la función ya entregada,
+        o para ampliar el contexto más allá de 15 líneas por símbolo.
+      LÍMITE: máximo 2 lecturas puntuales por respuesta (2 símbolos desconocidos).
+        Si quedan más sin resolver, mencioná que no se pudo confirmar su definición.
 
     → Si la evidencia cubre la pregunta completamente: sintetizá directo, sin ninguna tool call.
     → Si cubre parcialmente por algo en un símbolo ya citado: NO repitas la búsqueda sobre él.
