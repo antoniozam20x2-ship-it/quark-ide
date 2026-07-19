@@ -3417,11 +3417,73 @@ async function searchWithTestFallback(
     return { matches: [...production, ...test], allTest: false, someTest: test.length > 0 };
   }
 
+  // Build accurate test-function line ranges for production files that had
+  // text-based test anchors (i.e. isTestMatch fired on the function NAME, not
+  // just the file path). We read each such file once and use readEnclosingFunction
+  // to get the EXACT start/end of each test function — this lets the retry filter
+  // matches that fall inside a test function body in a mixed production file,
+  // which --glob path exclusions cannot do (they operate at file granularity).
+  //
+  // Falls back to a ±120-line proximity window if brace-matching fails or the
+  // file cannot be read — conservative enough to avoid false-exclusions.
+  const FALLBACK_RADIUS = 120;
+  const anchorsByFile = new Map<string, number[]>(); // file → declaration lines
+  for (const m of test) {
+    if (!m.line) continue;
+    if (isTestMatch('', m.text)) { // '' path → fires only on text-based heuristics
+      const anchors = anchorsByFile.get(m.path) ?? [];
+      anchors.push(m.line);
+      anchorsByFile.set(m.path, anchors);
+    }
+  }
+
+  // Resolve exact function ranges by reading each anchored file once (parallel).
+  const testRangesByFile = new Map<string, Array<{ start: number; end: number }>>();
+  await Promise.allSettled(
+    [...anchorsByFile.entries()].map(async ([filePath, anchorLines]) => {
+      try {
+        const content = await getFileContent(filePath, repo);
+        const ranges: Array<{ start: number; end: number }> = [];
+        for (const anchor of anchorLines) {
+          const section = readEnclosingFunction(content, anchor);
+          if (section) {
+            ranges.push({ start: section.startLine, end: section.endLine });
+            send('action', { text: `🔎 Rango test resuelto: ${filePath}:${section.startLine}-${section.endLine}` });
+          } else {
+            ranges.push({ start: anchor, end: anchor + FALLBACK_RADIUS });
+          }
+        }
+        testRangesByFile.set(filePath, ranges);
+      } catch {
+        // File unreadable — fall back to proximity window from anchor lines
+        const ranges = anchorLines.map(a => ({ start: a, end: a + FALLBACK_RADIUS }));
+        testRangesByFile.set(filePath, ranges);
+      }
+    }),
+  );
+
   // All first-pass results are test/dev — retry with ripgrep glob exclusions
   // so test directories are skipped at the OS level (faster, avoids cap issues).
   send('action', { text: '🔄 Solo resultados de test — reintentando con exclusión de rutas de test...' });
-  const retry     = await unifiedGrepSearch(pattern, repo, send, { excludeTestPaths: true });
-  const retryProd = retry.filter(m => !isTestMatch(m.path, m.text));
+  const retry = await unifiedGrepSearch(pattern, repo, send, { excludeTestPaths: true });
+
+  const retryProd = retry.filter(m => {
+    // Check 1: file path + matched line text (catches test files and test declarations)
+    if (isTestMatch(m.path, m.text)) return false;
+    // Check 2: line-level — discard matches that fall inside a resolved test function
+    //   range (exact boundaries from readEnclosingFunction, or fallback ±window).
+    //   This handles lines inside the body of testFoo() that don't look like test code
+    //   by themselves (e.g. `placeTrailingStop(order)` inside testTrailingStopCoexistence).
+    if (m.line) {
+      const ranges = testRangesByFile.get(m.path);
+      const hit = ranges?.find(r => m.line! >= r.start && m.line! <= r.end);
+      if (hit) {
+        console.log(`[searchWithTestFallback] retry ${m.path}:${m.line} dentro de función test [${hit.start}-${hit.end}], descartado`);
+        return false;
+      }
+    }
+    return true;
+  });
 
   if (retryProd.length > 0) {
     send('action', { text: `✅ Reintento: ${retryProd.length} resultado(s) de producción encontrado(s).` });
