@@ -1620,6 +1620,119 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
         } catch { /* skip unfetchable files */ }
       }
 
+      // ── Multi-hop: follow call chains up to MAX_HOPS extra steps ──────────────
+      // After extracting the initial fragments, scan them for function calls that:
+      //   (a) are not already in the evidence, and
+      //   (b) share a ≥4-char keyword prefix with the original query terms
+      // For each candidate, do one more targeted unifiedGrepSearch + fragment read
+      // using the same BUG 2 validation. This lets DEEP cover a short call chain
+      // (e.g. placeTrailingStop → calculateBuffer → TRAILING_BUFFER_MULT) without
+      // becoming Haiku's open-ended exploration.
+      {
+        const MAX_HOPS = 2;
+        // Regex captures the bare function name before the opening paren.
+        // The /g flag requires manual lastIndex reset per string.
+        const CALL_RE = /\b(?:await\s+)?([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(/g;
+        // JS/TS builtins we never want to follow
+        const BUILTINS = new Set([
+          'if','for','while','switch','return','const','let','var','new','typeof',
+          'instanceof','async','await','function','class','import','export','default',
+          'throw','catch','try','super','this','void','null','true','false','undefined',
+          'console','Math','Object','Array','Promise','JSON','parseInt','parseFloat',
+          'String','Number','Boolean','Date','Set','Map','Error','Symbol','fetch',
+          'setTimeout','setInterval','clearTimeout','clearInterval','require',
+        ]);
+        // Seed the relevance set from the original query keywords (lowercase)
+        const symbolTerms: string[] = deepKeywords.length > 0
+          ? deepKeywords
+          : deepPattern.split('|').map((t: string) => t.trim()).filter(Boolean);
+        const relevanceSet = new Set<string>(symbolTerms.map(t => t.toLowerCase()));
+        const triedSymbols = new Set<string>(relevanceSet); // don't re-search what we started with
+
+        // Returns true if `sym` (lowercase) overlaps with any relevance-set entry
+        // by at least MIN chars (bi-directional prefix containment).
+        const MIN_OVERLAP = 4;
+        const isRelevant = (symLower: string): boolean => {
+          for (const kw of relevanceSet) {
+            if (kw.length < MIN_OVERLAP || symLower.length < MIN_OVERLAP) continue;
+            const shorter = kw.length <= symLower.length ? kw : symLower;
+            const longer  = kw.length <= symLower.length ? symLower : kw;
+            // Walk from full-shorter down to MIN_OVERLAP; first prefix found in longer → relevant
+            for (let l = shorter.length; l >= MIN_OVERLAP; l--) {
+              if (longer.includes(shorter.slice(0, l))) return true;
+            }
+          }
+          return false;
+        };
+
+        let hopStart = 0; // first hop scans all initial evidence
+        for (let hop = 0; hop < MAX_HOPS; hop++) {
+          // Scan only the evidence added in the previous step (or all on hop 0)
+          const scanSlice = deepEvidence.slice(hopStart);
+          hopStart = deepEvidence.length; // advance cursor for the next iteration
+
+          // Collect candidate symbols from this slice
+          const candidates = new Map<string, number>(); // sym → call-frequency
+          for (const ev of scanSlice) {
+            CALL_RE.lastIndex = 0;
+            let m: RegExpExecArray | null;
+            while ((m = CALL_RE.exec(ev.fragment)) !== null) {
+              const sym = m[1];
+              const symLower = sym.toLowerCase();
+              if (BUILTINS.has(sym) || triedSymbols.has(symLower)) continue;
+              if (isRelevant(symLower)) {
+                candidates.set(sym, (candidates.get(sym) ?? 0) + 1);
+              }
+            }
+          }
+
+          if (candidates.size === 0) break; // nothing to follow — stop early
+
+          // Pick the most-frequently-called candidate across the scanned fragments
+          const [bestSym] = [...candidates.entries()].sort((a, b) => b[1] - a[1])[0];
+          const bestSymLower = bestSym.toLowerCase();
+          triedSymbols.add(bestSymLower);
+
+          send('action', { text: `🔗 Salto ${hop + 1}: buscando "${bestSym}"…` });
+          try {
+            const hopMatches = await unifiedGrepSearch(bestSym, repo, send);
+            const prodMatches = hopMatches.filter(h => !isTestMatch(h.path, h.text));
+            const bestMatch = (prodMatches.length > 0 ? prodMatches : hopMatches)[0];
+            if (!bestMatch) continue;
+
+            const fc = await getFileContent(bestMatch.path, repo);
+            let section = bestMatch.line
+              ? (readEnclosingFunction(fc, bestMatch.line) ?? smartReadSection(fc, bestMatch.line, 60))
+              : null;
+            if (!section) continue;
+
+            // BUG 2 validation: the symbol must appear literally in the extracted fragment
+            if (!section.excerpt.toLowerCase().includes(bestSymLower)) {
+              const fallback = bestMatch.line ? smartReadSection(fc, bestMatch.line, 50) : null;
+              if (!fallback || !fallback.excerpt.toLowerCase().includes(bestSymLower)) {
+                send('action', { text: `⚠️ Salto ${hop + 1}: "${bestSym}" no confirmado en fragmento, descartado` });
+                continue;
+              }
+              section = fallback;
+            }
+
+            // Expand the relevance set so subsequent hops can follow from here
+            relevanceSet.add(bestSymLower);
+
+            // Annotate + store — identical path to main evidence loop
+            const { annotatedFragment, notes: hopNotes } = annotateTradingPatterns(
+              section.excerpt, section.startLine, bestMatch.path,
+            );
+            for (const note of hopNotes) send('action', { text: `🔍 ${note}` });
+            deepEvidence.push({ path: bestMatch.path, line: section.startLine, endLine: section.endLine, fragment: annotatedFragment });
+            send('action', { text: `📌 [hop ${hop + 1}] ${bestMatch.path}:${section.startLine}-${section.endLine}` });
+            const preview = section.excerpt.split('\n').slice(0, 20);
+            for (const fl of preview) send('action', { text: fl });
+          } catch { /* skip if file unreadable */ }
+        }
+      }
+      // ── end multi-hop ──────────────────────────────────────────────────────────
+
       if (deepEvidence.length === 0) {
         send('action', { text: '⚠️ Match encontrado en índice pero no se pudo leer el fragmento del archivo.' });
       }
