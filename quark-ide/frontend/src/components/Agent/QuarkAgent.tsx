@@ -180,7 +180,17 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
     const m = localStorage.getItem(LS_MODE_KEY);
     return (m === 'fast' || m === 'deep' || m === 'chat' || m === 'auto') ? m as 'fast' | 'deep' | 'chat' | 'auto' : 'fast';
   });
-  const [chatSessionId]                         = useState(() => `chat-${Date.now()}`);
+  // chatSessionId persiste en localStorage keyado por repo — sobrevive remounts.
+  // Clave distinta de 'quark-chat-session:*' (QuarkChat.tsx) para que ambos
+  // componentes no compartan ni pisenla misma sesión de backend.
+  const [chatSessionId] = useState(() => {
+    const lsKey = `quark-agent-chat-session:${localStorage.getItem(LS_REPO_KEY) ?? 'default'}`;
+    const existing = localStorage.getItem(lsKey);
+    if (existing) return existing;
+    const fresh = `chat-${Date.now()}`;
+    localStorage.setItem(lsKey, fresh);
+    return fresh;
+  });
   const [chatPatches, setChatPatches]           = useState<ChatPatch[]>([]);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [editableCommitMsg, setEditableCommitMsg] = useState('');
@@ -208,16 +218,42 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
   // Load feed + result from DB on mount
   useEffect(() => {
+    // Capture stable values from the initial render — both are initialized
+    // synchronously from localStorage so they're correct on first mount.
+    const sessionIdForLoad = chatSessionId;
+    const modeForLoad = mode;
+
     async function loadSession() {
       try {
+        // ── FAST/DEEP session (feed + result snapshot) ─────────────────────
         const res = await fetch(`${API_BASE}/agent/session`);
-        if (!res.ok) return;
-        const data = await res.json() as { session: { feed: FeedItem[]; result: AgentEvent | null; commitResult: CommitResult | null; fixResult: FixResult | null } | null };
-        if (data.session) {
-          if (data.session.feed?.length)        setFeed(data.session.feed);
-          if (data.session.result)              setResult(data.session.result);
-          if (data.session.commitResult)        setCommitResult(data.session.commitResult);
-          if (data.session.fixResult)           setFixResult(data.session.fixResult);
+        if (res.ok) {
+          const data = await res.json() as { session: { feed: FeedItem[]; result: AgentEvent | null; commitResult: CommitResult | null; fixResult: FixResult | null } | null };
+          if (data.session) {
+            if (data.session.feed?.length)        setFeed(data.session.feed);
+            if (data.session.result)              setResult(data.session.result);
+            if (data.session.commitResult)        setCommitResult(data.session.commitResult);
+            if (data.session.fixResult)           setFixResult(data.session.fixResult);
+          }
+        }
+
+        // ── CHAT mode: rehidratar historial del backend ────────────────────
+        // El backend guarda hasta 40 turnos en memory_entries; los recargamos
+        // al volver a la pestaña para que la conversación sobreviva el remount.
+        // Solo aplica cuando el modo activo es 'chat' — en FAST/DEEP el feed
+        // ya viene del snapshot de sesión de arriba.
+        if (modeForLoad === 'chat') {
+          const chatRes = await fetch(`${API_BASE}/agent/chat/history/${encodeURIComponent(sessionIdForLoad)}`);
+          if (chatRes.ok) {
+            const chatData = await chatRes.json() as { messages: { role: 'user' | 'assistant'; text: string }[] };
+            if (chatData.messages.length > 0) {
+              const chatFeed: FeedItem[] = chatData.messages.map(m => ({
+                event: m.role === 'user' ? 'user_message' : 'chat_message',
+                text: m.text,
+              } as FeedItem));
+              setFeed(chatFeed);
+            }
+          }
         }
       } catch {
         // fail silently — agent works without session
@@ -226,7 +262,8 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
       }
     }
     loadSession();
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally empty — runs once on mount; chatSessionId and mode are stable from localStorage
 
   async function saveSession(
     feedSnapshot: FeedItem[],
