@@ -1686,7 +1686,72 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
             }
           }
 
-          if (candidates.size === 0) break; // nothing to follow — stop early
+          if (candidates.size === 0) {
+            // Strategy 2: caller search — "who calls X" instead of "what X calls"
+            // Used when the fragment is a leaf function or doesn't internally call
+            // anything relevant. We grep for the already-found symbol's name as a
+            // call site to find the parent context where it's invoked.
+            // This is exactly the pattern Haiku needed to find TRAILING_BUFFER_MULT:
+            // it lives at the call site of placeTrailingStop, not inside the function.
+            let callerFound = false;
+            for (const ev of scanSlice) {
+              // Extract the defined symbol name from the fragment header.
+              // Covers: async function foo(, function foo(, const foo =, export function foo(
+              const defM = ev.fragment.match(
+                /(?:^|\n)\s*(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(|(?:^|\n)\s*(?:export\s+)?(?:const|let|var)\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*=/
+              );
+              const defSym = defM ? (defM[1] ?? defM[2]) : null;
+              if (!defSym) continue;
+              const defSymLower = defSym.toLowerCase();
+              if (triedSymbols.has(defSymLower)) continue;
+              triedSymbols.add(defSymLower);
+
+              send('action', { text: `🔗 Salto ${hop + 1} (call site de "${defSym}")…` });
+              try {
+                // rgSearch finds every line where defSym( appears — definition + all call sites.
+                // We filter out the definition range we already have to isolate call sites.
+                const callerRaw = await rgSearch(`\\b${defSym}\\s*\\(`, repo);
+                const callerProd = callerRaw.filter(h =>
+                  !isTestMatch(h.path, h.text) &&
+                  // Exclude lines that fall inside the evidence entry we already have
+                  !(h.path === ev.path && h.line >= ev.line && h.line <= ev.endLine)
+                );
+                const callerMatch = callerProd[0];
+                if (!callerMatch?.line) continue;
+
+                const fc = await getFileContent(callerMatch.path, repo);
+                let section = readEnclosingFunction(fc, callerMatch.line)
+                  ?? smartReadSection(fc, callerMatch.line, 60);
+                if (!section) continue;
+
+                // BUG 2 validation: call site must appear in the extracted enclosing function
+                if (!section.excerpt.toLowerCase().includes(defSymLower)) {
+                  const fallback = smartReadSection(fc, callerMatch.line, 50);
+                  if (!fallback || !fallback.excerpt.toLowerCase().includes(defSymLower)) {
+                    send('action', { text: `⚠️ Salto ${hop + 1}: call site de "${defSym}" no confirmado en fragmento, descartado` });
+                    continue;
+                  }
+                  section = fallback;
+                }
+
+                // Expand relevance so subsequent hops can follow from the caller context
+                relevanceSet.add(defSymLower);
+
+                const { annotatedFragment, notes: hopNotes } = annotateTradingPatterns(
+                  section.excerpt, section.startLine, callerMatch.path,
+                );
+                for (const note of hopNotes) send('action', { text: `🔍 ${note}` });
+                deepEvidence.push({ path: callerMatch.path, line: section.startLine, endLine: section.endLine, fragment: annotatedFragment });
+                send('action', { text: `📌 [hop ${hop + 1}↑] ${callerMatch.path}:${section.startLine}-${section.endLine}` });
+                const preview = section.excerpt.split('\n').slice(0, 20);
+                for (const fl of preview) send('action', { text: fl });
+                callerFound = true;
+                break; // one caller per hop is enough
+              } catch { /* skip if file unreadable */ }
+            }
+            if (!callerFound) break; // neither strategy found anything — stop
+            continue; // skip the forward-search code below; proceed to next hop
+          }
 
           // Pick the most-frequently-called candidate across the scanned fragments
           const [bestSym] = [...candidates.entries()].sort((a, b) => b[1] - a[1])[0];
