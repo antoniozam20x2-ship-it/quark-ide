@@ -23,13 +23,42 @@ interface QuarkChatProps {
   initialMessage?: string;
 }
 
+// Devuelve un sessionId estable para el repo — sobrevive remounts del componente
+// porque se persiste en localStorage. Si no hay uno previo, genera uno nuevo.
+function getOrCreateSessionId(repo: string): string {
+  const key = `quark-chat-session:${repo}`;
+  const existing = localStorage.getItem(key);
+  if (existing) return existing;
+  const fresh = `session-${Date.now()}`;
+  localStorage.setItem(key, fresh);
+  return fresh;
+}
+
 export default function QuarkChat({ repo, activeProject, onProjectChange, initialMessage }: QuarkChatProps) {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState('');
   const [pendingPatch, setPendingPatch] = useState<PendingPatch | null>(null);
   const [streaming, setStreaming] = useState(false);
-  const [sessionId] = useState(() => `session-${Date.now()}`);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  // sessionId es estable entre remounts — vive en localStorage keyado por repo
+  const [sessionId] = useState(() => getOrCreateSessionId(repo));
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Rehidratar historial al montar (o al volver a la pestaña de CHAT)
+  useEffect(() => {
+    let cancelled = false;
+    setHistoryLoading(true);
+    fetch(`${API_BASE}/api/agent/chat/history/${encodeURIComponent(sessionId)}`)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then((data: { messages: ChatMsg[] }) => {
+        if (!cancelled && data.messages.length > 0) setMessages(data.messages);
+      })
+      .catch(() => { /* sin historial previo — arrancar limpio */ })
+      .finally(() => { if (!cancelled) setHistoryLoading(false); });
+    return () => { cancelled = true; };
+  // Solo se ejecuta al montar — sessionId es estable para el repo
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
 
   useEffect(() => {
     if (initialMessage) setInput(initialMessage);
@@ -128,6 +157,11 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
         </div>
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {historyLoading && (
+          <div style={{ color: '#6b7280', fontSize: '13px', alignSelf: 'center', marginTop: '8px' }}>
+            Cargando historial...
+          </div>
+        )}
         {messages.map((m, i) => (
           <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '85%' }}>
             <div style={{

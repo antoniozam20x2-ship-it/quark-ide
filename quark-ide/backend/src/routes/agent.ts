@@ -4348,6 +4348,35 @@ RESTRICCIÓN: NO uses grep_code, list_files ni read_file — el contexto ya est�
   await saveChatHistory(sessionId, messages);
 }
 
+// ── GET /chat/history/:sessionId ─────────────────────────────────────────────
+// Devuelve el historial de la sesión como [{role, text}] para que el frontend
+// pueda rehidratar el componente de CHAT al volver a la pestaña.
+// Solo se retornan turnos user/assistant — los mensajes de action son eventos
+// de UI efímeros y no se almacenan en el backend.
+router.get('/chat/history/:sessionId', async (req, res) => {
+  const { sessionId } = req.params;
+  if (!sessionId) { res.status(400).json({ error: 'sessionId required' }); return; }
+  try {
+    const raw = await loadChatHistory(sessionId);
+    // raw entries use the AI SDK format: { role, content: string | Array<{type,text}> }
+    const messages = raw
+      .filter((m: any) => m.role === 'user' || m.role === 'assistant')
+      .map((m: any) => {
+        const text = typeof m.content === 'string'
+          ? m.content
+          : Array.isArray(m.content)
+            ? m.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('')
+            : String(m.content ?? '');
+        return { role: m.role as 'user' | 'assistant', text };
+      })
+      .filter((m: any) => m.text.trim().length > 0);
+    res.json({ messages });
+  } catch (err) {
+    console.error('[CHAT/history] error:', err);
+    res.status(500).json({ error: 'Failed to load history' });
+  }
+});
+
 router.post('/chat', async (req, res) => {
   const { message, repo: bodyRepo, sessionId, findingId } = req.body as {
     message?: string; repo?: string; sessionId?: string; findingId?: string;
