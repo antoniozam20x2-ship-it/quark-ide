@@ -1678,12 +1678,18 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
           // We also exclude the symbol that *defines* the fragment (auto-reference).
           const stripLineComments = (src: string): string =>
             src.split('\n').map(line => {
-              // Keep lines that are pure comments as empty (preserve line count)
-              const trimmed = line.replace(/^\s*/, '');
+              // Strip the "NNN: " line-number prefix (added by readEnclosingFunction/smartReadSection)
+              // before evaluating comment status — otherwise a pure-comment line like
+              // "875: // stop (planType..." never matches /^\s*\/\// and leaks into CALL_RE.
+              const withoutLineNum = line.replace(/^(\s*)(\d+:\s*)/, '$1');
+              const trimmed = withoutLineNum.replace(/^\s*/, '');
               if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return '';
-              // Strip trailing inline comment
-              const inlineIdx = line.indexOf('//');
-              return inlineIdx >= 0 ? line.slice(0, inlineIdx) : line;
+              // Strip trailing inline comment — search in the version without the line-number prefix,
+              // but slice the original `line` so we don't shift offsets unexpectedly.
+              const inlineIdx = withoutLineNum.indexOf('//');
+              if (inlineIdx < 0) return line;
+              const prefixLen = line.length - withoutLineNum.length;
+              return line.slice(0, prefixLen + inlineIdx);
             }).join('\n');
 
           // Regex that extracts the primary defined symbol from a fragment header.
