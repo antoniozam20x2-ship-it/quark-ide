@@ -4046,7 +4046,7 @@ async function runHaikuTier(
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 4096,
         system: [{ type: 'text', text: HAIKU_SEARCH_SYSTEM, cache_control: { type: 'ephemeral' } }],
-        tools: (allowPatch ? CHAT_TOOLS : CHAT_TOOLS.filter(t => t.name !== 'propose_patch')).map((t, i, arr) =>
+        tools: (allowPatch ? CHAT_TOOLS : CHAT_TOOLS.filter(t => t.name !== 'propose_patch' && t.name !== 'apply_patch')).map((t, i, arr) =>
           i === arr.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t
         ),
         messages,
