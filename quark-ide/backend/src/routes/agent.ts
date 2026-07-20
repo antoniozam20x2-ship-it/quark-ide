@@ -3665,9 +3665,30 @@ async function unifiedGrepSearch(
     // AND PascalCase embedded words like TrailingStop*Test*Result (new rule 5).
     const isTestCandidate = (m: { term: string; sym: SymbolMatch }) =>
       isTestMatch(m.sym.filePath) || isTestMatch('', m.term);
-    const byLengthDesc = (a: { term: string }, b: { term: string }) => b.term.length - a.term.length;
-    const prodCandidates = symbolMatches.filter(m => !isTestCandidate(m)).sort(byLengthDesc);
-    const testCandidates = symbolMatches.filter(m =>  isTestCandidate(m)).sort(byLengthDesc);
+    // Desempate dentro de cada grupo: funciones primero, luego longitud.
+    // Racional: la pregunta del usuario suele buscar el comportamiento (función),
+    // no la config que lo activa (constante/variable). Longitud sigue siendo el
+    // desempate final entre símbolos del mismo tipo (ej. dos funciones).
+    const SYMBOL_TYPE_PRIORITY: Record<string, number> = {
+      function: 0,
+      method:   1,
+      class:    2,
+      interface: 3,
+      type:     4,
+      constant: 5,
+      variable: 6,
+    };
+    const typeRank = (sym: SymbolMatch) => SYMBOL_TYPE_PRIORITY[sym.symbolType ?? ''] ?? 99;
+    const byTypeAndLength = (
+      a: { term: string; sym: SymbolMatch },
+      b: { term: string; sym: SymbolMatch },
+    ) => {
+      const typeDiff = typeRank(a.sym) - typeRank(b.sym);
+      if (typeDiff !== 0) return typeDiff;
+      return b.term.length - a.term.length; // length tiebreaker within same type
+    };
+    const prodCandidates = symbolMatches.filter(m => !isTestCandidate(m)).sort(byTypeAndLength);
+    const testCandidates = symbolMatches.filter(m =>  isTestCandidate(m)).sort(byTypeAndLength);
     // Production-first; when excludeTestPaths is active, drop test candidates entirely.
     const ranked = options?.excludeTestPaths
       ? prodCandidates
