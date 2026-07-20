@@ -3386,6 +3386,13 @@ function isTestMatch(filePath: string, matchText?: string): boolean {
     if (/\btest[A-Z]\w*\s*[=(]/i.test(matchText)) return true;
     // 4. Dev/test-only indicators in comments or route strings
     if (/\/api\/dev\/|X-Dev-Secret|never writes to|for (?:test|dev)(?:ing)? only/i.test(matchText)) return true;
+    // 5. PascalCase identifiers with Test/Mock/Debug/Stub as an EMBEDDED capitalized word
+    //    (not just a prefix). Catches: TrailingStopTestResult, CheckSignalMockData,
+    //    OrderDebugHelper, etc. — but NOT placeTrailingStop (starts lowercase) or
+    //    TrailingStop (no embedded test word).
+    //    Applied to every PascalCase token found in matchText so it works on both bare
+    //    symbol names (fuzzy index lookup) and full matched lines (ripgrep output).
+    if (/\b[A-Z][a-zA-Z]*(?:Test|Mock|Debug|Stub)(?:[A-Z][a-zA-Z]*)?\b/.test(matchText)) return true;
   }
 
   return false;
@@ -3651,21 +3658,31 @@ async function unifiedGrepSearch(
   }
 
   if (symbolMatches.length > 0) {
-    // Preferir el término/símbolo más largo — términos cortos y genéricos que
-    // igual lograron matchear (ej. tipos comunes) suelen ser menos específicos
-    // que nombres técnicos largos como "trailingStop" o "checkS1Bull".
-    symbolMatches.sort((a, b) => b.term.length - a.term.length);
-    // When excludeTestPaths is active, skip symbol_index entries that point to
-    // test files — the retry should surface the production symbol instead.
-    const validMatches = options?.excludeTestPaths
-      ? symbolMatches.filter(m => !isTestMatch(m.sym.filePath))
-      : symbolMatches;
-    if (validMatches.length > 0) {
-      const best = validMatches[0];
-      send('action', { text: `⚡ Símbolo en índice: ${best.sym.filePath}:${best.sym.lineNumber} (término: "${best.term}")` });
-      return [{ path: best.sym.filePath, line: best.sym.lineNumber, text: best.term, symbolType: best.sym.symbolType }];
+    // Fix 2: partition production vs test BEFORE sorting by length.
+    // Without this, TrailingStopTestResult (longer name) beats placeTrailingStop
+    // because the length sort runs first and picks the wrong winner.
+    // isTestMatch covers: test file paths, camelCase prefixes (existing rules),
+    // AND PascalCase embedded words like TrailingStop*Test*Result (new rule 5).
+    const isTestCandidate = (m: { term: string; sym: SymbolMatch }) =>
+      isTestMatch(m.sym.filePath) || isTestMatch('', m.term);
+    const byLengthDesc = (a: { term: string }, b: { term: string }) => b.term.length - a.term.length;
+    const prodCandidates = symbolMatches.filter(m => !isTestCandidate(m)).sort(byLengthDesc);
+    const testCandidates = symbolMatches.filter(m =>  isTestCandidate(m)).sort(byLengthDesc);
+    // Production-first; when excludeTestPaths is active, drop test candidates entirely.
+    const ranked = options?.excludeTestPaths
+      ? prodCandidates
+      : [...prodCandidates, ...testCandidates];
+
+    if (ranked.length > 0) {
+      // Fix 3: return up to 3 candidates instead of collapsing to the single best.
+      // This gives searchWithTestFallback real data to partition on the first pass,
+      // so it doesn't have to rely solely on the retry to surface production results.
+      const TOP_N = 3;
+      const top = ranked.slice(0, TOP_N);
+      send('action', { text: `⚡ Símbolo(s) en índice: ${top.map(m => `${m.sym.filePath.split('/').pop()}:${m.sym.lineNumber} ("${m.term}")`).join(' | ')}` });
+      return top.map(m => ({ path: m.sym.filePath, line: m.sym.lineNumber, text: m.term, symbolType: m.sym.symbolType }));
     }
-    // All symbol_index hits were test paths — fall through to ripgrep with exclusions
+    // All symbol_index hits were test paths and excludeTestPaths is active
     send('action', { text: `⬜ Paso 1 — índice solo apunta a test, ignorado` });
   } else {
     send('action', { text: `⬜ Paso 1 — no en índice` });
