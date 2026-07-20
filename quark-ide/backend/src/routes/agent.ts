@@ -1671,15 +1671,40 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
           const scanSlice = deepEvidence.slice(hopStart);
           hopStart = deepEvidence.length; // advance cursor for the next iteration
 
-          // Collect candidate symbols from this slice
+          // Collect candidate symbols from this slice.
+          // We strip comment text first so that symbols mentioned only in
+          // prose/comments (e.g. "// Only called when TRAILING_STOP_ENABLED…
+          // placeTrailingStop …") don't create false forward-hop candidates.
+          // We also exclude the symbol that *defines* the fragment (auto-reference).
+          const stripLineComments = (src: string): string =>
+            src.split('\n').map(line => {
+              // Keep lines that are pure comments as empty (preserve line count)
+              const trimmed = line.replace(/^\s*/, '');
+              if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return '';
+              // Strip trailing inline comment
+              const inlineIdx = line.indexOf('//');
+              return inlineIdx >= 0 ? line.slice(0, inlineIdx) : line;
+            }).join('\n');
+
+          // Regex that extracts the primary defined symbol from a fragment header.
+          // Covers: (export) (async) function foo(, (export) const/let/var foo =
+          const DEF_SYM_RE = /(?:^|\n)\s*(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(|(?:^|\n)\s*(?:export\s+)?(?:const|let|var)\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*=/;
+
           const candidates = new Map<string, number>(); // sym → call-frequency
           for (const ev of scanSlice) {
+            // Determine the symbol this fragment defines so we can exclude it
+            const defM = ev.fragment.match(DEF_SYM_RE);
+            const evDefSymLower = defM ? (defM[1] ?? defM[2] ?? '').toLowerCase() : '';
+
+            const codeOnly = stripLineComments(ev.fragment);
             CALL_RE.lastIndex = 0;
             let m: RegExpExecArray | null;
-            while ((m = CALL_RE.exec(ev.fragment)) !== null) {
+            while ((m = CALL_RE.exec(codeOnly)) !== null) {
               const sym = m[1];
               const symLower = sym.toLowerCase();
+              // Skip builtins, already-tried, and self-references (auto-reference guard)
               if (BUILTINS.has(sym) || triedSymbols.has(symLower)) continue;
+              if (evDefSymLower && symLower === evDefSymLower) continue;
               if (isRelevant(symLower)) {
                 candidates.set(sym, (candidates.get(sym) ?? 0) + 1);
               }
