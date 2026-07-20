@@ -1688,7 +1688,7 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
 
           // Regex that extracts the primary defined symbol from a fragment header.
           // Covers: (export) (async) function foo(, (export) const/let/var foo =
-          const DEF_SYM_RE = /(?:^|\n)\s*(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(|(?:^|\n)\s*(?:export\s+)?(?:const|let|var)\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*=/;
+          const DEF_SYM_RE = /(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(|(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:const|let|var)\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*=/;
 
           const candidates = new Map<string, number>(); // sym → call-frequency
           for (const ev of scanSlice) {
@@ -1723,7 +1723,7 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
               // Extract the defined symbol name from the fragment header.
               // Covers: async function foo(, function foo(, const foo =, export function foo(
               const defM = ev.fragment.match(
-                /(?:^|\n)\s*(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(|(?:^|\n)\s*(?:export\s+)?(?:const|let|var)\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*=/
+                /(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(|(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:const|let|var)\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*=/
               );
               const defSym = defM ? (defM[1] ?? defM[2]) : null;
               if (!defSym) continue;
