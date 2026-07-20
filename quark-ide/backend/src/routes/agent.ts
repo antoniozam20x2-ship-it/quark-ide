@@ -3855,8 +3855,9 @@ async function executeChatTool(
     const rawTerms = input.pattern.split('|').map((t: string) => t.trim()).filter(Boolean);
     console.log(`[grep_code] patrón recibido: "${input.pattern}" → ${rawTerms.length} término(s) pipe-separado(s): [${rawTerms.join(', ')}]`);
     let matches: GrepMatch[];
+    let allTest = false;
     try {
-      matches = await unifiedGrepSearch(input.pattern, repo, send);
+      ({ matches, allTest } = await searchWithTestFallback(input.pattern, repo, send));
     } catch (e: any) {
       if (e.message === 'GITHUB_RATE_LIMIT') {
         return `Error: GitHub code search rate limit alcanzado (10 req/min). Esperá ~1 min y reintentá, o usá read_file directamente en los archivos sospechosos.`;
@@ -3869,11 +3870,17 @@ async function executeChatTool(
       }
       return `Sin resultados vía GitHub code search para "${input.pattern}". Causas posibles: delay de indexación de GitHub, rate limit silencioso, o caracteres especiales en el patrón (${input.pattern}). Si el término existe, usá read_file directamente en los archivos donde lo esperás encontrar, en vez de reintentar grep_code con el mismo término.`;
     }
-    return matches.map(m => {
+    const lines = matches.map(m => {
       if (m.symbolType) return `${m.path} — línea ${m.line}: [${m.symbolType}] "${m.text}"`;
       if (m.line) return `${m.path} — línea ${m.lineApprox ? '~' : ''}${m.line}: "${m.text}"`;
       return `${m.path} — "${m.text}"`;
-    }).join('\n');
+    });
+    // Warn Haiku when every result is test/dev code — it should surface this to
+    // the user rather than treating test symbols as production implementations.
+    if (allTest) {
+      lines.push(`\n⚠️ Todos los resultados encontrados corresponden a archivos o funciones de test/dev. No se encontró implementación de producción para "${input.pattern}". Indicale al usuario que solo existe evidencia de test.`);
+    }
+    return lines.join('\n');
   }
   if (name === 'propose_patch') {
     send('patch_proposal', {

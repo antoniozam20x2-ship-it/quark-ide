@@ -1,0 +1,20 @@
+PROMPT — Que Haiku use searchWithTestFallback en grep_code, en vez de unifiedGrepSearch directo
+
+Contexto: searchWithTestFallback() ya implementa la lógica de reintento con priorización producción-sobre-test (confirmada funcionando en la prueba de trailing stop) — pero FAST y DEEP la usan, mientras que la herramienta grep_code que usa Haiku en CHAT mode (dentro de executeChatTool) sigue llamando a unifiedGrepSearch() directo, sin el reintento ni la priorización.
+
+Objetivo: que Haiku, al usar grep_code, obtenga automáticamente la misma calidad de búsqueda que ya tienen FAST y DEEP — sin necesitar que CHAT dispare el pipeline completo de DEEP (skeleton + Gemini) en segundo plano, que sería más caro y redundante para una búsqueda puntual mid-conversación.
+
+Cambio:
+En executeChatTool, en el bloque que maneja name === 'grep_code', reemplazar la llamada a unifiedGrepSearch(input.pattern, repo, send) por searchWithTestFallback(input.pattern, repo, send), y ajustar el manejo del resultado para leer matches en vez del array directo (la función devuelve { matches, allTest, someTest }).
+
+Comportamiento esperado tras el cambio:
+
+	•	Si Haiku busca un símbolo y el primer intento encuentra solo resultados de test, el propio grep_code va a reintentar automáticamente con exclusión de test — sin que Haiku tenga que pedirlo ni notarlo.
+	•	Si el reintento tampoco encuentra producción, el resultado que recibe Haiku debe indicar claramente que solo hay evidencia de test/dev (igual que ya hace DEEP con su aviso ⚠️), para que Haiku pueda decírselo al usuario en vez de asumir que es código de producción.
+	•	No tocar el comportamiento de grep_code cuando encuentra resultados de producción en el primer intento — debe seguir funcionando igual que ahora, solo con mejor priorización interna.
+
+Restricciones generales:
+
+	•	Diff quirúrgico — un solo cambio de función en executeChatTool.
+	•	No dupliques lógica: reusar searchWithTestFallback tal como está, no reimplementar su comportamiento dentro de executeChatTool.
+	•	Antes de commitear: probá una pregunta en CHAT que dependa de grep_code para encontrar un símbolo con nombre similar a uno de test (podés reusar el caso de trailing stop u otro símbolo con equivalente de test conocido) y confirmá que Haiku encuentra el de producción sin intervención manual.
