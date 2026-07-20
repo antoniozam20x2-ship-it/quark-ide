@@ -3928,6 +3928,14 @@ Revisá si el contexto de la conversación ya contiene evidencia que responda la
 
   • Si hay "INVESTIGACIÓN PREVIA (FAST mode)" o "HALLAZGO PREVIO":
     usalo como punto de partida. Solo buscá de nuevo si necesitás más detalle que el que hay.
+
+  • Si hay "CONTEXTO YA INVESTIGADO RECIENTEMENTE":
+    son paths reales de archivos explorados hace menos de 30 min en este mismo repo.
+    Tratálos con la misma prioridad que la evidencia de DEEP/FAST:
+    → Si los archivos listados cubren la pregunta: usá read_file directo sobre esos paths, sin grep_code.
+    → Si cubren parcialmente: leé solo los archivos relevantes del listado y evitá re-buscar lo ya encontrado.
+    → PROHIBIDO ignorar este bloque y lanzar grep_code desde cero cuando los paths ya están disponibles.
+
 Si la evidencia existente responde la pregunta completamente, pasá directo a la síntesis (ver ROL).
 
 ━━━ PROCESO DE BÚSQUEDA (solo si el Paso 0 no alcanzó) ━━━
