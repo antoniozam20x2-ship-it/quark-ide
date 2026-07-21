@@ -3751,10 +3751,10 @@ const TRADING_PATTERNS: TradingPattern[] = [
       // Fallback: explicit fvg-named variable (fvgBull, fvgBear, etc.)
       // which is also structural — it means the repo already computed the gap.
 
-      // word[i] OP word[i-N]
-      const OFFSET_CMP_FORWARD = /\b\w+\s*\[\s*(\w+)\s*\]\s*[><=!]{1,3}\s*\w+\s*\[\s*\1\s*-\s*\d+\s*\]/;
-      // word[i-N] OP word[i]
-      const OFFSET_CMP_REVERSE = /\b\w+\s*\[\s*(\w+)\s*-\s*\d+\s*\]\s*[><=!]{1,3}\s*\w+\s*\[\s*\1\s*\]/;
+      // word[i]!? OP (?word[i-N]  — tolerates TS non-null assertion and optional open-paren
+      const OFFSET_CMP_FORWARD = /\b\w+\s*\[\s*(\w+)\s*\]!?\s*[><=!]{1,3}\s*\(?\s*\w+\s*\[\s*\1\s*-\s*\d+\s*\]/;
+      // word[i-N]!? OP (?word[i]  — same tolerances for reverse form
+      const OFFSET_CMP_REVERSE = /\b\w+\s*\[\s*(\w+)\s*-\s*\d+\s*\]!?\s*[><=!]{1,3}\s*\(?\s*\w+\s*\[\s*\1\s*\]/;
       // Explicit fvg variable (named structural result)
       const FVG_NAMED_VAR = /\bfvg(?:Bull|Bear|bull|bear|Up|Down|Long|Short|[A-Z])/;
 
