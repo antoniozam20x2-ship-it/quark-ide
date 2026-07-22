@@ -4076,6 +4076,53 @@ async function runDeepSearchPipeline(
   return deepEvidence;
 }
 
+// ── deep_search internal retry helpers ───────────────────────────────────────
+
+/**
+ * Returns true when deep_search evidence is too thin to be useful:
+ * - 0 fragments extracted, OR
+ * - ≤2 fragments and none of them contain a real implementation body
+ *   (only type/interface declarations like `adx: number` in an interface).
+ * Detects implementation by looking for control flow, arrow function bodies,
+ * logical operators, or array-method calls — all absent from pure type declarations.
+ */
+function isEvidenceSparse(evidence: { fragment: string }[]): boolean {
+  if (evidence.length === 0) return true;
+  if (evidence.length > 2) return false;
+  const hasImplementation = (fragment: string): boolean =>
+    /\b(if|for|while|switch|return\s+\w|await\s+\w|new\s+\w)\b/.test(fragment) ||
+    /=>\s*\{/.test(fragment) ||
+    /[|&]{2}/.test(fragment) ||
+    /\.(map|filter|reduce|forEach|find|some|every)\s*\(/.test(fragment);
+  return evidence.every(e => !hasImplementation(e.fragment));
+}
+
+/**
+ * Given the original query terms (e.g. ["ADX"]), generates alternative
+ * search terms for the internal deep_search retry pass:
+ * - Common function prefixes: calculateAdx, computeAdx, getAdx, …
+ * - CONSTANT_CASE: ADX_PERIOD, ADX_VALUE
+ * - Common value/signal suffixes for short acronyms: adxValue, adxSignal
+ * Returns at most 6 new terms (does not include the originals).
+ */
+function reformulateQueryTerms(originalTerms: string[]): string[] {
+  const PREFIXES = ['calculate', 'compute', 'get', 'build', 'run', 'update', 'check', 'process'];
+  const added = new Set<string>();
+  for (const term of originalTerms) {
+    const lo  = term.toLowerCase();
+    const cap = lo.charAt(0).toUpperCase() + lo.slice(1);
+    for (const prefix of PREFIXES) added.add(`${prefix}${cap}`);
+    added.add(term.toUpperCase());
+    if (term.length <= 5) {
+      added.add(`${lo}Value`);
+      added.add(`${lo}Signal`);
+      added.add(`${lo}Period`);
+    }
+  }
+  const origSet = new Set(originalTerms.map(t => t.toLowerCase()));
+  return [...added].filter(t => !origSet.has(t.toLowerCase())).slice(0, 6);
+}
+
 async function executeChatTool(
   name: string,
   input: Record<string, any>,
@@ -4156,30 +4203,66 @@ async function executeChatTool(
   if (name === 'deep_search') {
     const query: string = input.query ?? '';
     if (!query.trim()) return 'deep_search: query vacío — pasá al menos un identificador técnico.';
-    // Emit a dedicated event so the UI can render a distinct "DEEP active" badge
-    // instead of a generic action line.
+    // Emit a dedicated event so the UI can render a distinct "DEEP active" badge.
     send('deep_search', { query });
     const queryTerms = query.split('|').map((t: string) => t.trim()).filter(Boolean);
-    let matches: GrepMatch[];
+
+    // Shared search+extract helper — used for both attempt 1 and internal retry.
+    type DeepEvidence = { path: string; line: number; endLine: number; fragment: string };
+    const deepAttempt = async (
+      q: string,
+      terms: string[],
+    ): Promise<{ matches: GrepMatch[]; evidence: DeepEvidence[] }> => {
+      const result = await searchWithTestFallback(q, repo, send);
+      if (result.matches.length === 0) return { matches: [], evidence: [] };
+      const prod   = result.matches.filter(m => !isTestMatch(m.path, m.text));
+      const ranked = prod.length > 0 ? prod : result.matches;
+      if (prod.length === 0) {
+        send('action', { text: '⚠️ deep_search — solo resultados de test/dev. Ampliando a todos los matches.' });
+      }
+      return { matches: ranked, evidence: await runDeepSearchPipeline(ranked, terms, repo, send) };
+    };
+
+    // ── Attempt 1 ────────────────────────────────────────────────────────────
+    let matches: GrepMatch[] = [];
+    let evidence: DeepEvidence[] = [];
     try {
-      const result = await searchWithTestFallback(query, repo, send);
-      matches = result.matches;
+      ({ matches, evidence } = await deepAttempt(query, queryTerms));
     } catch (e: any) {
       if (e.message === 'GITHUB_RATE_LIMIT') {
         return `deep_search: rate limit de GitHub. Esperá ~1 min y reintentá, o usá grep_code directamente.`;
       }
       throw e;
     }
+
+    // ── Attempt 2 — internal retry when evidence is sparse ───────────────────
+    // If attempt 1 returned 0 fragments or only type/interface declarations
+    // (no real implementation body, e.g. `adx: number` in an interface), retry
+    // with reformulated query terms before returning control to Haiku.
+    // This keeps the retry on the cheap Gemini/DEEP path instead of forcing
+    // Haiku to iterate its own grep_code/read_file loop with Claude.
+    if (isEvidenceSparse(evidence)) {
+      const retryTerms = reformulateQueryTerms(queryTerms);
+      if (retryTerms.length > 0) {
+        const retryQuery = retryTerms.join('|');
+        send('action', { text: `🔄 deep_search — evidencia escasa (${evidence.length} fragmento(s)), reintentando con variantes: ${retryTerms.slice(0, 3).join(', ')}…` });
+        send('deep_search', { query: retryQuery });
+        try {
+          const a2 = await deepAttempt(retryQuery, [...queryTerms, ...retryTerms]);
+          if (a2.evidence.length > evidence.length) {
+            evidence = a2.evidence;
+            if (matches.length === 0) matches = a2.matches;
+          } else if (matches.length === 0) {
+            matches = a2.matches; // retain for the error message even if BUG-2 still fails
+          }
+        } catch { /* non-fatal — proceed with attempt 1 results */ }
+      }
+    }
+
+    // ── Final result ──────────────────────────────────────────────────────────
     if (matches.length === 0) {
       return `deep_search: sin resultados para "${query}". Reformulá con el nombre exacto de la función o variable (camelCase), o probá con grep_code para variantes alternativas.`;
     }
-    // Production-first ranking (searchWithTestFallback already sorts prod first)
-    const prodMatches = matches.filter(m => !isTestMatch(m.path, m.text));
-    const rankedMatches = prodMatches.length > 0 ? prodMatches : matches;
-    if (prodMatches.length === 0) {
-      send('action', { text: '⚠️ deep_search — solo resultados de test/dev. Ampliando a todos los matches.' });
-    }
-    const evidence = await runDeepSearchPipeline(rankedMatches, queryTerms, repo, send);
     if (evidence.length === 0) {
       return `deep_search: ${matches.length} match(es) encontrado(s) pero ningún fragmento superó la validación BUG-2 (símbolo no aparece en el fragmento extraído). Intentá con grep_code + read_file más específicos.`;
     }
