@@ -1469,9 +1469,52 @@ router.post('/generate', async (req, res) => {
           return;
         }
 
+        // ── FAST fallback hop (único salto condicional) ──────────────────────
+        // Si la heurística detecta que el fragmento inicial es insuficiente
+        // (declaración de tipo, firma sin cuerpo, muy corto, o keyword solo en 1 línea),
+        // hacemos UNA búsqueda adicional con el mismo patrón, descartando el archivo
+        // ya leído. El resultado se combina con el fragmento inicial en una sola llamada
+        // de síntesis — no es un loop.
+        let fallbackSectionText = '';
+        let fallbackPath        = '';
+        let fallbackStart       = 0;
+        let fallbackEnd         = 0;
+
+        if (sectionText && isFragmentInsufficient(sectionText, fastKeywords)) {
+          send('action', { text: '🔍 Fragmento inicial incompleto — buscando implementación adicional...' });
+          try {
+            const { matches: fbMatches } = await searchWithTestFallback(fastPattern, repo, send);
+            // Descartar el archivo ya leído y elegir el primer resultado de producción nuevo
+            const fbBest = fbMatches.find(
+              m => m.path !== readPath && !isTestMatch(m.path, m.text ?? ''),
+            );
+            if (fbBest) {
+              send('action', { text: `📍 Fragmento adicional: ${fbBest.path}${fbBest.line ? `:${fbBest.line}` : ''}` });
+              const fbContent = await getFileContent(fbBest.path, repo);
+              const fbSection = fbBest.line
+                ? (readEnclosingFunction(fbContent, fbBest.line) ?? smartReadSection(fbContent, fbBest.line, 60))
+                : smartReadSection(fbContent, fbBest.text ?? '', 60);
+              if (fbSection) {
+                fallbackSectionText = fbSection.excerpt;
+                fallbackPath        = fbBest.path;
+                fallbackStart       = fbSection.startLine;
+                fallbackEnd         = fbSection.endLine;
+              }
+            }
+          } catch (fbErr) {
+            console.warn('[agent/fast-fallback] búsqueda adicional fallida:', fbErr instanceof Error ? fbErr.message : fbErr);
+          }
+        }
+
+        // Contexto combinado: fragmento inicial + fragmento de respaldo (si existe)
+        const combinedContext = fallbackSectionText
+          ? `Fragmento principal — ${best.path} (líneas ${sectionStart}-${sectionEnd}):\n${sectionText}\n\n` +
+            `Fragmento adicional — ${fallbackPath} (líneas ${fallbackStart}-${fallbackEnd}):\n${fallbackSectionText}`
+          : `Fragmento del código en ${best.path} (líneas ${sectionStart}-${sectionEnd}):\n${sectionText}`;
+
         try {
           const fastAnalysis = await generateWithFallback(
-            `El usuario pregunta: "${prompt}"\n\nFragmento del código en ${best.path} (líneas ${sectionStart}-${sectionEnd}):\n${sectionText}`,
+            `El usuario pregunta: "${prompt}"\n\n${combinedContext}`,
             `Eres un experto analista de código de trading respondiendo en FAST mode.
 
 REGLA DE VOCABULARIO — obligatoria:
@@ -1499,8 +1542,13 @@ Si el fragmento incluye un bloque "// Constantes referenciadas" con múltiples v
 (ej. varios períodos de EMA), mencioná solo los que tienen un ROL ACTIVO en la lógica de la función analizada. \
 No listés todas las constantes inyectadas si la función solo usa una.
 
-REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está explícitamente en el fragmento. \
-Si el fragmento no alcanza para responder del todo, decilo en una oración y sugerí DEEP mode.
+REGLA DE DOS FRAGMENTOS — cuando se proveen "Fragmento principal" y "Fragmento adicional":
+Sintetizá usando ambos. Si se complementan, integralos en la respuesta. \
+Si el fragmento principal es solo una declaración de tipo y el adicional muestra la implementación, \
+priorizá el adicional para explicar el comportamiento real. No menciones explícitamente que hubo dos búsquedas.
+
+REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está explícitamente en los fragmentos. \
+Si aun con ambos fragmentos no alcanza para responder del todo, decilo en una oración y sugerí DEEP mode.
 
 REGLA DE FIDELIDAD PARCIAL — cuando el fragmento es de test o cubre solo parte de la pregunta:
 Identificá si el fragmento es de test (nombres como testFoo, mockBar, comentarios de /api/dev/, etc.) \
@@ -3295,6 +3343,52 @@ function smartReadSection(
  * Si el balance no cierra dentro del cap, retorna null → el llamador cae a
  * smartReadSection con un ventana más amplia (±60 líneas).
  */
+
+// ── FAST mode: heurística de fragmento insuficiente ───────────────────────────
+// Pure check — sin llamada a modelo. Retorna true cuando el fragmento extraído
+// parece insuficiente para responder la pregunta:
+//   1. Muy corto (< 8 líneas de contenido real).
+//   2. Declaración pura de tipo/interfaz sin cuerpo de función.
+//   3. Firma de función sin bloque de apertura (estilo .d.ts).
+//   4. Las keywords originales aparecen en ≤ 1 línea (hit fuera de la implementación).
+function isFragmentInsufficient(sectionText: string, originalKeywords: string[]): boolean {
+  // Strip line-number prefixes («123: code») to get raw source
+  const raw = sectionText.replace(/^\d+:\s*/mg, '').trim();
+  const allLines   = raw.split('\n');
+  const contentLines = allLines.filter(l => l.trim().length > 0);
+
+  // 1. Demasiado corto
+  if (contentLines.length < 8) return true;
+
+  // 2. Declaración de tipo/interfaz sin cuerpo de función
+  const codeLines  = contentLines.filter(l => !/^\s*(\/\/|\/\*|\*)/.test(l));
+  const firstCode  = codeLines[0] ?? '';
+  const isTypeDecl = /^\s*(export\s+)?(interface|type)\s+\w/.test(firstCode);
+  // «cuerpo de función» = flecha con apertura de bloque, palabra clave function, o
+  // asignación de función: const foo = (async) (...) { / (...): ReturnType {
+  const hasFuncBody =
+    /\bfunction\s+\w|\)\s*=>\s*\{|async\s+function/.test(raw) ||
+    /=\s*(async\s*)?\([^)]*\)\s*(?::\s*[\w<>[\], |]+\s*)?\{/.test(raw);
+  if (isTypeDecl && !hasFuncBody) return true;
+
+  // 3. Firma de función sin bloque de apertura (declaration-only)
+  const hasFuncSignature =
+    /\bfunction\s+\w+\s*\(|const\s+\w+\s*=\s*(async\s*)?\(/.test(raw);
+  const hasBodyBrace = /\)\s*(?::\s*[\w<>[\]|, ]+\s*)?\{/.test(raw);
+  if (hasFuncSignature && !hasBodyBrace) return true;
+
+  // 4. Las keywords de búsqueda aparecen en ≤ 1 línea del fragmento
+  //    (ripgrep localizó un call site aislado, no la implementación real)
+  if (originalKeywords.length > 0) {
+    const escaped = originalKeywords.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const kwRe    = new RegExp(`\\b(${escaped.join('|')})\\b`, 'i');
+    const kwLines = contentLines.filter(l => kwRe.test(l));
+    if (kwLines.length <= 1) return true;
+  }
+
+  return false;
+}
+
 function readEnclosingFunction(
   content: string,
   anchorLine: number, // 1-indexed
