@@ -40,6 +40,9 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
   const [pendingPatch, setPendingPatch] = useState<PendingPatch | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(true);
+  // forceGroq: cuando está activo, el próximo mensaje se procesa directo por Groq
+  // saltando la continuidad de sesión Haiku. Se resetea automáticamente tras el envío.
+  const [forceGroq, setForceGroq] = useState(false);
   // sessionId es estable entre remounts — vive en localStorage keyado por repo
   const [sessionId] = useState(() => getOrCreateSessionId(repo));
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -71,6 +74,9 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
   async function sendMessage() {
     if (!input.trim() || streaming) return;
     const userMsg = input;
+    // Capturar y resetear forceGroq ANTES del envío — aplica solo a este mensaje
+    const useForceGroq = forceGroq;
+    setForceGroq(false);
     setMessages(m => [...m, { role: 'user', text: userMsg }]);
     setInput('');
     setStreaming(true);
@@ -79,7 +85,7 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
       const res = await fetch(`${API_BASE}/api/agent/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMsg, repo, sessionId }),
+        body: JSON.stringify({ message: userMsg, repo, sessionId, forceGroq: useForceGroq }),
       });
 
       if (!res.ok) {
@@ -221,16 +227,49 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
         {streaming && <div style={{ color: '#6b7280', fontSize: '13px' }}>Quark está pensando...</div>}
         <div ref={bottomRef} />
       </div>
-      <div style={{ display: 'flex', padding: '10px', borderTop: '1px solid #222', gap: '8px' }}>
-        <input
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && sendMessage()}
-          placeholder="Escribe un mensaje..."
-          disabled={streaming}
-          style={{ flex: 1, background: '#141420', color: 'white', border: '1px solid #333', borderRadius: '8px', padding: '10px 12px', fontSize: '15px' }}
-        />
-        <button onClick={sendMessage} disabled={streaming} style={{ background: '#7c3aed', color: 'white', border: 'none', borderRadius: '8px', padding: '0 18px', fontSize: '15px' }}>➤</button>
+      <div style={{ borderTop: '1px solid #222', padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {/* Modo rápido indicator — visible solo cuando está activo */}
+        {forceGroq && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '6px',
+            fontSize: '11px', color: '#fbbf24',
+            fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em',
+          }}>
+            <span>⚡</span>
+            <span>Modo rápido activado — próximo mensaje va directo a Groq</span>
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {/* Toggle "Modo rápido" — fuerza Groq para el próximo mensaje solamente */}
+          <button
+            onClick={() => setForceGroq(v => !v)}
+            disabled={streaming}
+            title={forceGroq ? 'Modo rápido activo — click para desactivar' : 'Activar modo rápido (Groq directo para este mensaje)'}
+            style={{
+              flexShrink: 0,
+              background: forceGroq ? 'rgba(251,191,36,0.18)' : 'rgba(255,255,255,0.04)',
+              border: forceGroq ? '1px solid #fbbf24' : '1px solid #333',
+              borderRadius: '8px',
+              color: forceGroq ? '#fbbf24' : '#6b7280',
+              padding: '0 10px',
+              height: '40px',
+              fontSize: '14px',
+              cursor: streaming ? 'not-allowed' : 'pointer',
+              transition: 'all 0.15s',
+            }}
+          >
+            ⚡
+          </button>
+          <input
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && sendMessage()}
+            placeholder="Escribe un mensaje..."
+            disabled={streaming}
+            style={{ flex: 1, background: '#141420', color: 'white', border: '1px solid #333', borderRadius: '8px', padding: '10px 12px', fontSize: '15px' }}
+          />
+          <button onClick={sendMessage} disabled={streaming} style={{ background: '#7c3aed', color: 'white', border: 'none', borderRadius: '8px', padding: '0 18px', fontSize: '15px', height: '40px' }}>➤</button>
+        </div>
       </div>
     </div>
   );

@@ -2884,6 +2884,13 @@ interface SessionFileCacheEntry {
 const SESSION_FILE_CACHE = new Map<string, { files: Map<string, SessionFileCacheEntry>; ts: number }>();
 const SESSION_CACHE_TTL_MS = 30 * 60 * 1000;
 
+// Tracks which sessions have previously escalated to the Haiku tier.
+// Used to implement session continuity: follow-up turns in a session that already
+// used Haiku skip classifyComplexity and go directly to Haiku, preventing
+// domain-specific follow-up questions from being incorrectly classified as "simple"
+// and falling back to Groq (which lacks trading-domain knowledge).
+const SESSION_HAIKU_USED = new Map<string, number>(); // sessionId → lastUsedAt timestamp
+
 function getSessionFiles(sessionId: string): Map<string, SessionFileCacheEntry> {
   const now = Date.now();
   for (const [id, entry] of SESSION_FILE_CACHE) {
@@ -4464,9 +4471,29 @@ async function runChatTurn(
   send: (event: string, data: Record<string, unknown>) => void,
   maxToolSteps = 20,
   findingId?: string,
+  forceGroq = false,
 ): Promise<void> {
   const history = await loadChatHistory(sessionId);
-  const complexity = classifyComplexity(userMessage);
+
+  // Routing decision — three cases in priority order:
+  //
+  // 1. forceGroq=true (user pressed "Modo rápido"): force Groq unconditionally.
+  //    classifyComplexity is NOT consulted; complexity is pinned to 'simple' so the
+  //    Groq triage path runs. If Groq still returns NEEDS_TOOLS, Haiku escalates as
+  //    usual — this is intentional and documented UX.
+  //
+  // 2. Session continuity: if this session previously invoked Haiku (SESSION_HAIKU_USED),
+  //    skip classifyComplexity and route directly to Haiku. This prevents domain-specific
+  //    follow-up questions (e.g. "diferencia entre FVG e imbalance" after Haiku explained
+  //    S6) from being mis-classified as 'simple' and falling back to Groq, which lacks
+  //    the repo-specific trading domain context.
+  //
+  // 3. First message in a new session: run classifyComplexity normally.
+  const complexity: 'simple' | 'complex' = forceGroq
+    ? 'simple'
+    : SESSION_HAIKU_USED.has(sessionId)
+      ? 'complex'
+      : classifyComplexity(userMessage);
 
   // Cargar hallazgo de FAST si viene con findingId
   let fastFindingContext = '';
@@ -4575,6 +4602,10 @@ async function runChatTurn(
   //   'generate' → Haiku searches/reads, then Sonnet writes the patch
   const intent = classifyIntent(userMessage);
   {
+    // Mark this session as having used Haiku so subsequent turns skip classifyComplexity
+    // and route directly here, preserving domain context for follow-up questions.
+    SESSION_HAIKU_USED.set(sessionId, Date.now());
+
     // Haiku NEVER gets propose_patch — that tool is exclusively for Sonnet.
     // BUG 0 fix: allowPatch was accidentally set to `intent === 'explain'` (true for
     // informational queries), which let Haiku generate patches for read-only questions.
@@ -4757,8 +4788,8 @@ router.get('/chat/history/:sessionId', async (req, res) => {
 });
 
 router.post('/chat', async (req, res) => {
-  const { message, repo: bodyRepo, sessionId, findingId } = req.body as {
-    message?: string; repo?: string; sessionId?: string; findingId?: string;
+  const { message, repo: bodyRepo, sessionId, findingId, forceGroq } = req.body as {
+    message?: string; repo?: string; sessionId?: string; findingId?: string; forceGroq?: boolean;
   };
   const repo = bodyRepo ?? process.env.GITHUB_REPO;
   console.log('[CHAT] incoming →', { message, repo, sessionId });
@@ -4777,7 +4808,7 @@ router.post('/chat', async (req, res) => {
   };
 
   try {
-    await runChatTurn(sessionId, message, repo, send, 20, findingId);
+    await runChatTurn(sessionId, message, repo, send, 20, findingId, forceGroq ?? false);
     send('done', {});
   } catch (err) {
     const stack = err instanceof Error ? (err.stack ?? err.message) : String(err);
