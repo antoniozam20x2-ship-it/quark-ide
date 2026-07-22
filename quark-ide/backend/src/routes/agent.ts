@@ -4245,7 +4245,67 @@ confundirse con acrónimos de trading (SAR, SMA, EMA, RSI…) solo por parecido 
 NUNCA deduzcas el significado de una variable corta por similitud de nombre.
 Si no está en la tabla de arriba ni en la evidencia DEEP → hacé la lectura puntual
 (grep_code + read_file ≤15 líneas) antes de nombrarla. Si tampoco hay definición, escribí:
-"no pude confirmar qué representa \`[var]\` en este contexto — no la renombro".`;
+"no pude confirmar qué representa \`[var]\` en este contexto — no la renombro".
+
+━━━ CONOCIMIENTO DE DOMINIO — conceptos de trading técnico ━━━
+Este bloque describe conceptos de mercado en general — no afirma nada sobre la implementación \
+concreta del repo. Para cualquier afirmación sobre el código real, siempre citá la evidencia leída.
+
+INDICADORES DE TENDENCIA:
+  • **EMA** (Exponential Moving Average): media móvil que pondera más las velas recientes. \
+    Reacciona más rápido que la SMA a cambios de precio. Se usa para filtrar dirección de tendencia \
+    y para cruces de señal (ej: EMA rápida cruza EMA lenta → cambio de momentum).
+  • **SMA** (Simple Moving Average): promedio aritmético de N velas. Más lenta que EMA, \
+    menos susceptible a ruido, más usada como soporte/resistencia dinámico.
+  • **SuperTrend**: indicador de seguimiento de tendencia basado en bandas de ATR alrededor \
+    del precio. Devuelve una dirección binaria (alcista/bajista) y un nivel de stop dinámico. \
+    IMPORTANTE: NO es SAR (Parabolic Stop and Reverse) — son indicadores distintos con lógica \
+    diferente. SuperTrend usa ATR; SAR usa aceleración acumulada. Nunca intercambies sus nombres.
+  • **ADX** (Average Directional Index): mide la FUERZA de la tendencia, NO su dirección. \
+    Rango 0-100. Convención habitual: < 20 = mercado en rango/lateral; > 25 = tendencia presente; \
+    > 40 = tendencia fuerte. Se usa como filtro: solo tomar señales cuando ADX > umbral.
+
+OSCILADORES:
+  • **RSI** (Relative Strength Index): oscilador de momentum 0-100. Convención habitual: \
+    > 70 = sobrecomprado; < 30 = sobrevendido. Se usa para detectar agotamiento de movimiento \
+    y divergencias. Un RSI alto en tendencia alcista no es señal de venta automática — contexto importa.
+  • **MACD** (Moving Average Convergence Divergence): diferencia entre dos EMAs (rápida y lenta), \
+    más una línea de señal (EMA del MACD). Cruces de MACD sobre su señal → cambios de momentum. \
+    El histograma mide la distancia entre MACD y señal.
+
+PATRONES DE ESTRUCTURA DE PRECIO:
+  • **FVG** (Fair Value Gap): formación de 3 velas donde hay un gap entre el máximo de la vela \
+    [i-2] y el mínimo de la vela [i] (alcista), o entre el mínimo de [i-2] y el máximo de [i] \
+    (bajista). Indica que el precio se movió tan rápido que dejó una zona sin operar — el mercado \
+    tiende a volver a "llenar" ese gap. Es una formación ESTRUCTURAL y ESPECÍFICA: requiere \
+    exactamente esa relación entre velas [i], [i-1] e [i-2].
+  • **Imbalance**: concepto más AMPLIO que FVG. Cubre cualquier zona donde la oferta/demanda fue \
+    unilateral: puede incluir FVGs, mechas largas de vela única, zonas de alto volumen sin rotación, \
+    o cualquier área donde el precio no halló contraparte. \
+    DIFERENCIA CLAVE FVG vs. Imbalance: FVG es un subconjunto estricto de imbalance — toda FVG \
+    es un imbalance, pero no todo imbalance es una FVG. Reemplazar FVG por imbalance en una señal \
+    amplía los casos detectados (más sensibilidad) pero pierde la especificidad estructural de la \
+    formación de 3 velas — lo que puede aumentar falsos positivos en mercados ruidosos.
+  • **BOS** (Break of Structure): el precio rompe un máximo/mínimo de swing previo EN LA DIRECCIÓN \
+    de la tendencia actual. Señal de CONTINUACIÓN — confirma que la tendencia sigue vigente.
+  • **CHOCH** (Change of Character): el precio rompe el último máximo/mínimo de swing en DIRECCIÓN \
+    OPUESTA a la tendencia. Primera señal de posible REVERSIÓN — no confirma el cambio, pero \
+    advierte que el momentum puede estar agotándose. Suele preceder a un BOS en la nueva dirección.
+  • DISTINCIÓN BOS vs. CHOCH: BOS ocurre con la tendencia (confirmación); CHOCH ocurre contra \
+    ella (alerta de reversión). En código, la diferencia suele estar en si el swing roto es \
+    alcista o bajista respecto del contexto de tendencia actual.
+
+VOLATILIDAD:
+  • **ATR** (Average True Range): promedio del rango verdadero de N velas (max de: high-low, \
+    |high-close anterior|, |low-close anterior|). Mide volatilidad en términos absolutos de precio. \
+    Usos típicos: sizing de stops (ej: stop = entrada − 2×ATR), ancho de bandas (SuperTrend), \
+    y sizing de posición (riesgo fijo / ATR = tamaño de lote). Un ATR alto indica mercado volátil; \
+    un ATR bajo indica compresión — precaución antes de breakouts.
+
+REGLA DE USO: este conocimiento te permite discutir tradeoffs cuando el usuario propone cambios \
+de lógica (ej: "¿conviene reemplazar FVG por imbalance?"). Podés opinar con criterio sobre \
+qué gana y qué pierde el sistema — pero SIEMPRE aclarando que estás hablando del concepto de \
+mercado general, y que cualquier impacto concreto en el código requiere ver la implementación real.`;
 
 // Tools available for Sonnet synthesis turn — no search tools, only read + patch
 // Sonnet only gets propose_patch — it must not re-investigate with search tools.

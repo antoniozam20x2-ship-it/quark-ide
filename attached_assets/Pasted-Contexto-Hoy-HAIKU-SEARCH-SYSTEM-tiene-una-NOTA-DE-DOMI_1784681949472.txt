@@ -1,0 +1,19 @@
+Contexto: Hoy HAIKU_SEARCH_SYSTEM tiene una “NOTA DE DOMINIO” limitada a nombres de variables específicas de este código (sa, sb, stDirArr, etc.). Eso resuelve la traducción variable→nombre técnico, pero no le da a Haiku criterio real sobre los conceptos de trading en sí — necesario para que pueda no solo citar código, sino opinar cuando el usuario propone un cambio (ej. “¿conviene cambiar FVG por imbalance en la señal S6?”).
+
+Objetivo: agregar una sección de conocimiento de dominio (trading técnico) al system prompt de Haiku, separada de la “NOTA DE DOMINIO” específica del código — un bloque de conceptos generales que le permita:
+
+	1.	Explicar con precisión qué es cada indicador/patrón cuando el usuario pregunta (ya lo hace parcialmente, esto lo refuerza).
+	2.	Cuando el usuario propone un cambio de lógica, poder discutir tradeoffs con criterio real: qué gana y qué pierde al cambiar FVG por imbalance, por ejemplo — no solo describir el código actual.
+	3.	Distinguir conceptos que se confunden fácilmente por nombre parecido (ya cubrimos SAR vs. SuperTrend hoy; extender ese cuidado a otros pares confundibles del dominio).
+
+Contenido sugerido para el bloque (a validar y ampliar con Replit, dado que puede tener mejor cobertura de terminología de trading que la nuestra):
+
+	•	Indicadores de tendencia: EMA, SMA, SuperTrend, ADX — qué miden, diferencias clave.
+	•	Osciladores: RSI, MACD — qué miden, rangos típicos.
+	•	Patrones de estructura de precio: FVG (Fair Value Gap), imbalance, CHOCH (Change of Character), BOS (Break of Structure) — qué detecta cada uno, en qué se parecen y en qué difieren FVG vs. imbalance específicamente (dado que el usuario los está comparando activamente).
+	•	Volatilidad: ATR y su uso típico en sizing de stops.
+
+Restricciones generales:
+
+	•	Este es un bloque de conocimiento general de trading, no reemplaza la “NOTA DE DOMINIO” específica del código existente — ambas conviven.
+	•	Mantener la regla existente de “nunca inventar/alucinar sobre el código real” — este skill es para conceptos de mercado en general, no para afirmar cosas sobre la implementación sin haberla
