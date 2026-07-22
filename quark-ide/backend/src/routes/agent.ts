@@ -274,7 +274,72 @@ function getGroqKeys(): string[] {
   ].filter((k): k is string => Boolean(k))
 }
 
-async function callGroqAgent(prompt: string, system: string, maxTokens = 4096): Promise<string> {
+/**
+ * Converts stored Anthropic-format chat history to the flat {role, content: string}
+ * array that Groq (OpenAI-compatible) expects.
+ *
+ * Rules:
+ *  - assistant turns: keep only `type:"text"` blocks, drop `type:"tool_use"` blocks.
+ *  - user turns:      keep only `type:"text"` blocks, drop `type:"tool_result"` blocks.
+ *  - Turns that become empty after filtering (pure tool turns) are skipped entirely.
+ *  - Adjacent messages of the same role are merged (defensive; shouldn't occur normally).
+ *  - Capped to the last `maxExchanges` user+assistant pairs (default 8) and at most
+ *    MAX_HISTORY_CHARS total characters to stay well within Groq's context window.
+ */
+function groqHistoryFromMessages(
+  history: any[],
+  maxExchanges = 8,
+): { role: string; content: string }[] {
+  const MAX_HISTORY_CHARS = 20_000;
+
+  // Step 1: convert each stored message to a plain {role, content} object.
+  const flat: { role: string; content: string }[] = [];
+  for (const msg of history) {
+    const role: string = msg.role;
+    if (role !== 'user' && role !== 'assistant') continue;
+
+    let text = '';
+    if (typeof msg.content === 'string') {
+      text = msg.content.trim();
+    } else if (Array.isArray(msg.content)) {
+      text = (msg.content as any[])
+        .filter((b: any) => b.type === 'text' && typeof b.text === 'string')
+        .map((b: any) => (b.text as string).trim())
+        .filter(Boolean)
+        .join('\n');
+    }
+
+    if (!text) continue; // pure tool turn — nothing useful for Groq
+
+    // Merge with previous if same role (shouldn't happen in practice, but be safe).
+    if (flat.length > 0 && flat[flat.length - 1].role === role) {
+      flat[flat.length - 1].content += '\n' + text;
+    } else {
+      flat.push({ role, content: text });
+    }
+  }
+
+  // Step 2: keep at most the last maxExchanges*2 messages (each exchange = user + assistant).
+  const sliced = flat.slice(-(maxExchanges * 2));
+
+  // Step 3: walk backwards and accumulate until we hit the char cap.
+  let totalChars = 0;
+  const capped: { role: string; content: string }[] = [];
+  for (let i = sliced.length - 1; i >= 0; i--) {
+    totalChars += sliced[i].content.length;
+    if (totalChars > MAX_HISTORY_CHARS) break;
+    capped.unshift(sliced[i]);
+  }
+
+  return capped;
+}
+
+async function callGroqAgent(
+  prompt: string,
+  system: string,
+  maxTokens = 4096,
+  historyMessages?: { role: string; content: string }[],
+): Promise<string> {
   const keys = getGroqKeys()
   if (keys.length === 0) throw new Error('No GROQ_API_KEY configured')
   for (const key of keys) {
@@ -290,6 +355,7 @@ async function callGroqAgent(prompt: string, system: string, maxTokens = 4096): 
           max_tokens: maxTokens,
           messages: [
             { role: 'system', content: system },
+            ...(historyMessages ?? []),
             { role: 'user', content: prompt },
           ],
         }),
@@ -4462,7 +4528,18 @@ async function runChatTurn(
   if (complexity === 'simple') {
     send('action', { text: '⚡ Modo rápido — Groq' });
     send('model_active', { model: 'Groq (Llama 3.3 70B)', tier: 'fast' });
-    const groqAnswer = await callGroqAgent(userMessage, buildTriagePrompt(cacheHint), fastFinding ? 768 : 512);
+    // Convert the stored session history (Anthropic format) to the flat {role, content}
+    // array Groq expects — stripping all tool_use / tool_result blocks so Groq only
+    // sees the conversational text thread, not the raw code-search internals.
+    // `cacheHint` (DEEP evidence, shared summaries) stays in the system prompt as
+    // complementary context on top of the real turn history.
+    const groqHistory = groqHistoryFromMessages(history);
+    const groqAnswer = await callGroqAgent(
+      userMessage,
+      buildTriagePrompt(cacheHint),
+      fastFinding ? 768 : 512,
+      groqHistory,
+    );
 
     if (!groqAnswer.trim().startsWith('NEEDS_TOOLS:')) {
       send('chat_message', { text: groqAnswer });
