@@ -4076,7 +4076,7 @@ async function runDeepSearchPipeline(
   return deepEvidence;
 }
 
-// ── deep_search internal retry helpers ───────────────────────────────────────
+// ── deep_search / DEEP pre-fetch helpers ─────────────────────────────────────
 
 /**
  * Returns true when deep_search evidence is too thin to be useful:
@@ -4095,6 +4095,19 @@ function isEvidenceSparse(evidence: { fragment: string }[]): boolean {
     /[|&]{2}/.test(fragment) ||
     /\.(map|filter|reduce|forEach|find|some|every)\s*\(/.test(fragment);
   return evidence.every(e => !hasImplementation(e.fragment));
+}
+
+/**
+ * Extracts technical search keywords from a natural-language user message for
+ * use in the Groq→DEEP pre-fetch path. Picks:
+ * - Uppercase acronyms 2–6 chars (ADX, EMA, FVG, CHOCH, RSI, RVOL, …)
+ * - camelCase/PascalCase identifiers (trailingStop, calcScore, …)
+ * Returns at most 4 terms.
+ */
+function extractKeywordsFromMessage(message: string): string[] {
+  const acronyms = message.match(/\b[A-Z]{2,6}\b/g) ?? [];
+  const camel    = message.match(/\b[a-z][a-z0-9]*[A-Z][a-zA-Z0-9]+\b/g) ?? [];
+  return [...new Set([...acronyms, ...camel])].slice(0, 4);
 }
 
 /**
@@ -4674,9 +4687,50 @@ async function runChatTurn(
     }
 
     const groqReason = groqAnswer.replace('NEEDS_TOOLS:', '').trim();
-    send('action', { text: `🧠 Groq necesita explorar el codebase (${groqReason}) — Haiku 4.5 investigando` });
-    // All NEEDS_TOOLS cases — both medium and high effort — go through the Haiku
-    // exploration phase below. Haiku does the search; Sonnet only synthesises.
+    send('action', { text: `🧠 Groq → ${groqReason.slice(0, 80)} — ejecutando DEEP pre-fetch` });
+
+    // ── DEEP pre-fetch: gather evidence before handing off to Haiku ──────────
+    // Extract technical keywords from the user's message and run the DEEP
+    // search pipeline (Gemini/cheap) directly — before Haiku (Claude/expensive)
+    // gets involved. If evidence is found, it is injected into the messages as
+    // "EVIDENCIA VERIFICADA (DEEP mode)" so Haiku's PASO 0 picks it up and
+    // synthesizes without re-searching, saving a full Claude exploration loop.
+    // This path is non-fatal: any error or empty result falls through to Haiku.
+    {
+      const baseKws = extractKeywordsFromMessage(userMessage);
+      if (baseKws.length > 0) {
+        const allKws   = [...baseKws, ...reformulateQueryTerms(baseKws)];
+        const deepQ    = allKws.join('|');
+        send('deep_search', { query: deepQ });
+        send('action', { text: `🔍 DEEP pre-fetch — keywords: ${baseKws.join(', ')}` });
+        try {
+          const preResult = await searchWithTestFallback(deepQ, repo, send);
+          if (preResult.matches.length > 0) {
+            const preProd   = preResult.matches.filter(m => !isTestMatch(m.path, m.text));
+            const preRanked = preProd.length > 0 ? preProd : preResult.matches;
+            const preEv     = await runDeepSearchPipeline(preRanked, allKws, repo, send);
+            if (preEv.length > 0) {
+              const evidenceSummary = preEv.map(e => `${e.path}:${e.line}\n${e.fragment}`).join('\n\n---\n\n');
+              const deepCtx =
+                `\n\nEVIDENCIA VERIFICADA (DEEP mode — disparado por Groq pre-escalación, ` +
+                `lectura real del código fuente). Si esta evidencia responde la pregunta original ` +
+                `por completo, sintetizá desde aquí (PASO 0) sin volver a buscar los mismos símbolos:\n` +
+                evidenceSummary;
+              // Append to the last user message so Haiku's PASO 0 detects it immediately
+              const lastMsg = messages[messages.length - 1];
+              if (typeof lastMsg?.content === 'string') lastMsg.content += deepCtx;
+              send('action', { text: `✅ DEEP pre-fetch — ${preEv.length} fragmento(s) listos para síntesis` });
+            } else {
+              send('action', { text: `⚠️ DEEP pre-fetch — matches sin fragmentos válidos, Haiku investigará` });
+            }
+          } else {
+            send('action', { text: `⚠️ DEEP pre-fetch — sin resultados para "${baseKws.join('|')}", Haiku investigará` });
+          }
+        } catch { /* non-fatal — fall through to Haiku as normal */ }
+      }
+    }
+    // All NEEDS_TOOLS cases fall through to the Haiku exploration phase.
+    // If DEEP pre-fetch injected evidence, Haiku's PASO 0 uses it directly.
   }
 
   // ── Haiku exploration phase (ALL paths that need code inspection) ─────────────
