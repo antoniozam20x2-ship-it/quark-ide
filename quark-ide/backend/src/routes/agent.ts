@@ -3828,6 +3828,23 @@ async function unifiedGrepSearch(
     }
   }
 
+  // Dedup: distintos alias del query (trailingStop, TRAILING_STOP, trailing_stop)
+  // pueden resolver al mismo símbolo real. Sin esto, runDeepSearchPipeline procesa
+  // el mismo fragmento N veces — una por cada alias que matcheó el mismo símbolo.
+  if (symbolMatches.length > 1) {
+    const seenSymbols = new Map<string, { term: string; sym: SymbolMatch }>();
+    for (const m of symbolMatches) {
+      const key = `${m.sym.filePath}:${m.sym.lineNumber}`;
+      if (!seenSymbols.has(key)) seenSymbols.set(key, m);
+    }
+    const deduped = [...seenSymbols.values()];
+    if (deduped.length < symbolMatches.length) {
+      console.log(`[unifiedGrepSearch] dedup: ${symbolMatches.length} → ${deduped.length} símbolo(s) único(s)`);
+    }
+    symbolMatches.length = 0;
+    symbolMatches.push(...deduped);
+  }
+
   if (symbolMatches.length > 0) {
     // Fix 2: partition production vs test BEFORE sorting by length.
     // Without this, TrailingStopTestResult (longer name) beats placeTrailingStop

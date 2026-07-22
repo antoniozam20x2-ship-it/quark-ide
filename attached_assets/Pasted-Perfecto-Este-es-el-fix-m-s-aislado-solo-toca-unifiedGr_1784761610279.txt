@@ -1,0 +1,69 @@
+Perfecto. Este es el fix más aislado — solo toca unifiedGrepSearch, no afecta el resto del pipeline.
+
+Dónde: en el archivo que compartiste, dentro de unifiedGrepSearch, justo después del bloque de fuzzy match (paso 1.5) y antes de if (symbolMatches.length > 0) { // Fix 2: partition production vs test....
+
+Por qué ahí: en ese punto ya están juntos los resultados del match exacto (paso 1) y del fuzzy match (paso 1.5), pero todavía no se particionan por producción/test ni se rankean. Es el único lugar donde tenés la lista completa antes de que se use para armar deepEvidence.
+
+El cambio (str_replace):
+
+old_str:
+
+  if (symbolMatches.length === 0) {
+    const realSymbolNames = await getRepoSymbolNames(repo);
+    if (realSymbolNames.length > 0) {
+      for (const term of rawTerms) {
+        const fuzzyCandidates = findRealSymbolMatches(term, realSymbolNames);
+        if (fuzzyCandidates.length > 0) {
+          console.log(`[unifiedGrepSearch] fuzzy match: "${term}" → símbolos reales [${fuzzyCandidates.join(', ')}]`);
+        }
+        for (const symName of fuzzyCandidates) {
+          const sym = await lookupSymbol(symName, repo);
+          if (sym) symbolMatches.push({ term: symName, sym });
+        }
+      }
+    }
+  }
+
+  if (symbolMatches.length > 0) {
+    // Fix 2: partition production vs test BEFORE sorting by length.
+
+new_str
+
+  if (symbolMatches.length === 0) {
+    const realSymbolNames = await getRepoSymbolNames(repo);
+    if (realSymbolNames.length > 0) {
+      for (const term of rawTerms) {
+        const fuzzyCandidates = findRealSymbolMatches(term, realSymbolNames);
+        if (fuzzyCandidates.length > 0) {
+          console.log(`[unifiedGrepSearch] fuzzy match: "${term}" → símbolos reales [${fuzzyCandidates.join(', ')}]`);
+        }
+        for (const symName of fuzzyCandidates) {
+          const sym = await lookupSymbol(symName, repo);
+          if (sym) symbolMatches.push({ term: symName, sym });
+        }
+      }
+    }
+  }
+
+  // Dedup: distintos alias del query (trailingStop, TRAILING_STOP, trailing_stop)
+  // pueden resolver al mismo símbolo real. Sin esto, runDeepSearchPipeline procesa
+  // el mismo fragmento N veces — una por cada alias que matcheó el mismo símbolo.
+  if (symbolMatches.length > 1) {
+    const seenSymbols = new Map<string, { term: string; sym: SymbolMatch }>();
+    for (const m of symbolMatches) {
+      const key = `${m.sym.filePath}:${m.sym.lineNumber}`;
+      if (!seenSymbols.has(key)) seenSymbols.set(key, m);
+    }
+    const deduped = [...seenSymbols.values()];
+    if (deduped.length < symbolMatches.length) {
+      console.log(`[unifiedGrepSearch] dedup: ${symbolMatches.length} → ${deduped.length} símbolo(s) único(s)`);
+    }
+    symbolMatches.length = 0;
+    symbolMatches.push(...deduped);
+  }
+
+  if (symbolMatches.length > 0) {
+    // Fix 2: partition production vs test BEFORE sorting by length.
+
+
+Por qué es seguro: no toca prodCandidates/testCandidates ni la lógica de ranking que viene después — solo reduce symbolMatches a entradas únicas por path:line antes de que ese código las use. TOP_N=3 sigue funcionando igual, pero ahora sobre símbolos reales distintos en vez de duplicados del mismo.
