@@ -865,7 +865,21 @@ const CHAT_TOOLS = [
       },
       required: ["path", "old_str", "new_str", "reasoning"]
     }
-  }
+  },
+  {
+    name: "deep_search",
+    description: "Ejecuta el pipeline completo de DEEP en una sola llamada: symbol_index + extracción de función completa (readEnclosingFunction) + multi-hop caller/callee + anotación de patrones de trading. Usá esta herramienta como PRIMERA OPCIÓN para investigar código nuevo — reemplaza el ciclo grep_code → read_file → grep_code por una sola llamada consolidada. Pasá los identificadores técnicos en camelCase/CONSTANT_CASE separados por '|'. Resultado: fragmentos anotados con citas file:línea exactas, en el mismo formato que la evidencia DEEP.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Identificadores técnicos a buscar, separados por '|'. Ejemplos: 'trailingStop|TRAILING_STOP_ENABLED|callbackRatio' o 'checkS6Bull|fvgBull'. Generá variantes camelCase, CONSTANT_CASE y snake_case antes de llamar."
+        }
+      },
+      required: ["query"]
+    }
+  },
 ];
 
 async function runAgenticLoop(
@@ -1565,269 +1579,14 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
         return;
       }
 
-      // Extract literal fragments — no AI, no interpretation
-      const deepEvidence: { path: string; line: number; endLine: number; fragment: string }[] = [];
-      for (const match of deepMatches.slice(0, 5)) {
-        try {
-          const fc = await getFileContent(match.path, repo);
-          let section = match.line
-            // BUG 4 fix: read full enclosing function, not a fixed ±20-line window.
-            ? (readEnclosingFunction(fc, match.line) ?? smartReadSection(fc, match.line, 60))
-            : (match.text ? smartReadSection(fc, match.text, 60) : null);
-          if (!section) continue;
-
-          // BUG 2 fix: validate the extracted fragment actually contains the
-          // searched symbol literally. symbol_index can point to a stale line
-          // number if the file changed since last indexing — if the symbol name
-          // doesn't appear in the window we read, skip this match so we don't
-          // falsely report it as HIGH-CONFIDENCE evidence of that symbol.
-          const symbolTerms = deepKeywords.length > 0 ? deepKeywords : deepPattern.split('|').map(t => t.trim()).filter(Boolean);
-          let symbolFound = symbolTerms.some(t => t.length > 2 && section!.excerpt.toLowerCase().includes(t.toLowerCase()));
-
-          if (!symbolFound && match.line) {
-            // readEnclosingFunction may have extracted a sibling function (backward-scan
-            // bug). Fallback: simple ±50-line range read directly around the match line.
-            // This mirrors what Haiku does natively and is proven to work in production.
-            const rangeSection = smartReadSection(fc, match.line, 50);
-            if (rangeSection) {
-              const rangeLower = rangeSection.excerpt.toLowerCase();
-              if (symbolTerms.some(t => t.length > 2 && rangeLower.includes(t.toLowerCase()))) {
-                section = rangeSection;
-                symbolFound = true;
-                send('action', { text: `📖 Fallback lectura por rango — ${match.path}:${match.line}±50` });
-              }
-            }
-          }
-
-          if (!symbolFound) {
-            send('action', { text: `⚠️ ${match.path}:${match.line} — fragmento no contiene el símbolo buscado [${symbolTerms.slice(0, 2).join(', ')}], descartado` });
-            continue;
-          }
-
-          // Annotate the fragment with any recognized trading patterns (FVG, etc.)
-          // before storing — the annotation flows through deepEvidenceSummary →
-          // diagnosis → fastFindingContext so CHAT/Haiku reads it as resolved metadata.
-          const { annotatedFragment, notes: patternNotes } = annotateTradingPatterns(
-            section.excerpt, section.startLine, match.path,
-          );
-          for (const note of patternNotes) send('action', { text: `🔍 ${note}` });
-          deepEvidence.push({ path: match.path, line: section.startLine, endLine: section.endLine, fragment: annotatedFragment });
-          send('action', { text: `📌 ${match.path}:${section.startLine}-${section.endLine}` });
-          const preview = section.excerpt.split('\n').slice(0, 20);
-          for (const fl of preview) {
-            send('action', { text: fl });
-          }
-        } catch { /* skip unfetchable files */ }
-      }
-
-      // ── Multi-hop: follow call chains up to MAX_HOPS extra steps ──────────────
-      // After extracting the initial fragments, scan them for function calls that:
-      //   (a) are not already in the evidence, and
-      //   (b) share a ≥4-char keyword prefix with the original query terms
-      // For each candidate, do one more targeted unifiedGrepSearch + fragment read
-      // using the same BUG 2 validation. This lets DEEP cover a short call chain
-      // (e.g. placeTrailingStop → calculateBuffer → TRAILING_BUFFER_MULT) without
-      // becoming Haiku's open-ended exploration.
-      {
-        const MAX_HOPS = 2;
-        // Regex captures the bare function name before the opening paren.
-        // The /g flag requires manual lastIndex reset per string.
-        const CALL_RE = /\b(?:await\s+)?([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(/g;
-        // JS/TS builtins we never want to follow
-        const BUILTINS = new Set([
-          'if','for','while','switch','return','const','let','var','new','typeof',
-          'instanceof','async','await','function','class','import','export','default',
-          'throw','catch','try','super','this','void','null','true','false','undefined',
-          'console','Math','Object','Array','Promise','JSON','parseInt','parseFloat',
-          'String','Number','Boolean','Date','Set','Map','Error','Symbol','fetch',
-          'setTimeout','setInterval','clearTimeout','clearInterval','require',
-        ]);
-        // Seed the relevance set from the original query keywords (lowercase)
-        const symbolTerms: string[] = deepKeywords.length > 0
-          ? deepKeywords
-          : deepPattern.split('|').map((t: string) => t.trim()).filter(Boolean);
-        const relevanceSet = new Set<string>(symbolTerms.map(t => t.toLowerCase()));
-        const triedSymbols = new Set<string>(relevanceSet); // don't re-search what we started with
-
-        // Returns true if `sym` (lowercase) overlaps with any relevance-set entry
-        // by at least MIN chars (bi-directional prefix containment).
-        const MIN_OVERLAP = 4;
-        const isRelevant = (symLower: string): boolean => {
-          for (const kw of relevanceSet) {
-            if (kw.length < MIN_OVERLAP || symLower.length < MIN_OVERLAP) continue;
-            const shorter = kw.length <= symLower.length ? kw : symLower;
-            const longer  = kw.length <= symLower.length ? symLower : kw;
-            // Walk from full-shorter down to MIN_OVERLAP; first prefix found in longer → relevant
-            for (let l = shorter.length; l >= MIN_OVERLAP; l--) {
-              if (longer.includes(shorter.slice(0, l))) return true;
-            }
-          }
-          return false;
-        };
-
-        let hopStart = 0; // first hop scans all initial evidence
-        for (let hop = 0; hop < MAX_HOPS; hop++) {
-          // Scan only the evidence added in the previous step (or all on hop 0)
-          const scanSlice = deepEvidence.slice(hopStart);
-          hopStart = deepEvidence.length; // advance cursor for the next iteration
-
-          // Collect candidate symbols from this slice.
-          // We strip comment text first so that symbols mentioned only in
-          // prose/comments (e.g. "// Only called when TRAILING_STOP_ENABLED…
-          // placeTrailingStop …") don't create false forward-hop candidates.
-          // We also exclude the symbol that *defines* the fragment (auto-reference).
-          const stripLineComments = (src: string): string =>
-            src.split('\n').map(line => {
-              // Strip the "NNN: " line-number prefix (added by readEnclosingFunction/smartReadSection)
-              // before evaluating comment status — otherwise a pure-comment line like
-              // "875: // stop (planType..." never matches /^\s*\/\// and leaks into CALL_RE.
-              const withoutLineNum = line.replace(/^(\s*)(\d+:\s*)/, '$1');
-              const trimmed = withoutLineNum.replace(/^\s*/, '');
-              if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return '';
-              // Strip trailing inline comment — search in the version without the line-number prefix,
-              // but slice the original `line` so we don't shift offsets unexpectedly.
-              const inlineIdx = withoutLineNum.indexOf('//');
-              if (inlineIdx < 0) return line;
-              const prefixLen = line.length - withoutLineNum.length;
-              return line.slice(0, prefixLen + inlineIdx);
-            }).join('\n');
-
-          // Regex that extracts the primary defined symbol from a fragment header.
-          // Covers: (export) (async) function foo(, (export) const/let/var foo =
-          const DEF_SYM_RE = /(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(|(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:const|let|var)\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*=/;
-
-          const candidates = new Map<string, number>(); // sym → call-frequency
-          for (const ev of scanSlice) {
-            // Determine the symbol this fragment defines so we can exclude it
-            const defM = ev.fragment.match(DEF_SYM_RE);
-            const evDefSymLower = defM ? (defM[1] ?? defM[2] ?? '').toLowerCase() : '';
-
-            const codeOnly = stripLineComments(ev.fragment);
-            CALL_RE.lastIndex = 0;
-            let m: RegExpExecArray | null;
-            while ((m = CALL_RE.exec(codeOnly)) !== null) {
-              const sym = m[1];
-              const symLower = sym.toLowerCase();
-              // Skip builtins, already-tried, and self-references (auto-reference guard)
-              if (BUILTINS.has(sym) || triedSymbols.has(symLower)) continue;
-              if (evDefSymLower && symLower === evDefSymLower) continue;
-              if (isRelevant(symLower)) {
-                candidates.set(sym, (candidates.get(sym) ?? 0) + 1);
-              }
-            }
-          }
-
-          if (candidates.size === 0) {
-            // Strategy 2: caller search — "who calls X" instead of "what X calls"
-            // Used when the fragment is a leaf function or doesn't internally call
-            // anything relevant. We grep for the already-found symbol's name as a
-            // call site to find the parent context where it's invoked.
-            // This is exactly the pattern Haiku needed to find TRAILING_BUFFER_MULT:
-            // it lives at the call site of placeTrailingStop, not inside the function.
-            let callerFound = false;
-            for (const ev of scanSlice) {
-              // Extract the defined symbol name from the fragment header.
-              // Covers: async function foo(, function foo(, const foo =, export function foo(
-              const defM = ev.fragment.match(
-                /(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(|(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:const|let|var)\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*=/
-              );
-              const defSym = defM ? (defM[1] ?? defM[2]) : null;
-              if (!defSym) continue;
-              const defSymLower = defSym.toLowerCase();
-              if (triedSymbols.has(defSymLower)) continue;
-              triedSymbols.add(defSymLower);
-
-              send('action', { text: `🔗 Salto ${hop + 1} (call site de "${defSym}")…` });
-              try {
-                // rgSearch finds every line where defSym( appears — definition + all call sites.
-                // We filter out the definition range we already have to isolate call sites.
-                const callerRaw = await rgSearch(`\\b${defSym}\\s*\\(`, repo);
-                const callerProd = callerRaw.filter(h =>
-                  !isTestMatch(h.path, h.text) &&
-                  // Exclude lines that fall inside the evidence entry we already have
-                  !(h.path === ev.path && h.line >= ev.line && h.line <= ev.endLine)
-                );
-                const callerMatch = callerProd[0];
-                if (!callerMatch?.line) continue;
-
-                const fc = await getFileContent(callerMatch.path, repo);
-                let section = readEnclosingFunction(fc, callerMatch.line)
-                  ?? smartReadSection(fc, callerMatch.line, 60);
-                if (!section) continue;
-
-                // BUG 2 validation: call site must appear in the extracted enclosing function
-                if (!section.excerpt.toLowerCase().includes(defSymLower)) {
-                  const fallback = smartReadSection(fc, callerMatch.line, 50);
-                  if (!fallback || !fallback.excerpt.toLowerCase().includes(defSymLower)) {
-                    send('action', { text: `⚠️ Salto ${hop + 1}: call site de "${defSym}" no confirmado en fragmento, descartado` });
-                    continue;
-                  }
-                  section = fallback;
-                }
-
-                // Expand relevance so subsequent hops can follow from the caller context
-                relevanceSet.add(defSymLower);
-
-                const { annotatedFragment, notes: hopNotes } = annotateTradingPatterns(
-                  section.excerpt, section.startLine, callerMatch.path,
-                );
-                for (const note of hopNotes) send('action', { text: `🔍 ${note}` });
-                deepEvidence.push({ path: callerMatch.path, line: section.startLine, endLine: section.endLine, fragment: annotatedFragment });
-                send('action', { text: `📌 [hop ${hop + 1}↑] ${callerMatch.path}:${section.startLine}-${section.endLine}` });
-                const preview = section.excerpt.split('\n').slice(0, 20);
-                for (const fl of preview) send('action', { text: fl });
-                callerFound = true;
-                break; // one caller per hop is enough
-              } catch { /* skip if file unreadable */ }
-            }
-            if (!callerFound) break; // neither strategy found anything — stop
-            continue; // skip the forward-search code below; proceed to next hop
-          }
-
-          // Pick the most-frequently-called candidate across the scanned fragments
-          const [bestSym] = [...candidates.entries()].sort((a, b) => b[1] - a[1])[0];
-          const bestSymLower = bestSym.toLowerCase();
-          triedSymbols.add(bestSymLower);
-
-          send('action', { text: `🔗 Salto ${hop + 1}: buscando "${bestSym}"…` });
-          try {
-            const hopMatches = await unifiedGrepSearch(bestSym, repo, send);
-            const prodMatches = hopMatches.filter(h => !isTestMatch(h.path, h.text));
-            const bestMatch = (prodMatches.length > 0 ? prodMatches : hopMatches)[0];
-            if (!bestMatch) continue;
-
-            const fc = await getFileContent(bestMatch.path, repo);
-            let section = bestMatch.line
-              ? (readEnclosingFunction(fc, bestMatch.line) ?? smartReadSection(fc, bestMatch.line, 60))
-              : null;
-            if (!section) continue;
-
-            // BUG 2 validation: the symbol must appear literally in the extracted fragment
-            if (!section.excerpt.toLowerCase().includes(bestSymLower)) {
-              const fallback = bestMatch.line ? smartReadSection(fc, bestMatch.line, 50) : null;
-              if (!fallback || !fallback.excerpt.toLowerCase().includes(bestSymLower)) {
-                send('action', { text: `⚠️ Salto ${hop + 1}: "${bestSym}" no confirmado en fragmento, descartado` });
-                continue;
-              }
-              section = fallback;
-            }
-
-            // Expand the relevance set so subsequent hops can follow from here
-            relevanceSet.add(bestSymLower);
-
-            // Annotate + store — identical path to main evidence loop
-            const { annotatedFragment, notes: hopNotes } = annotateTradingPatterns(
-              section.excerpt, section.startLine, bestMatch.path,
-            );
-            for (const note of hopNotes) send('action', { text: `🔍 ${note}` });
-            deepEvidence.push({ path: bestMatch.path, line: section.startLine, endLine: section.endLine, fragment: annotatedFragment });
-            send('action', { text: `📌 [hop ${hop + 1}] ${bestMatch.path}:${section.startLine}-${section.endLine}` });
-            const preview = section.excerpt.split('\n').slice(0, 20);
-            for (const fl of preview) send('action', { text: fl });
-          } catch { /* skip if file unreadable */ }
-        }
-      }
-      // ── end multi-hop ──────────────────────────────────────────────────────────
+      // Extract fragments + multi-hop — delegated to shared pipeline so the
+      // deep_search tool in Haiku can reuse the exact same logic.
+      const deepEvidence = await runDeepSearchPipeline(
+        deepMatches,
+        deepKeywords.length > 0 ? deepKeywords : deepPattern.split('|').map(t => t.trim()).filter(Boolean),
+        repo,
+        send,
+      );
 
       if (deepEvidence.length === 0) {
         send('action', { text: '⚠️ Match encontrado en índice pero no se pudo leer el fragmento del archivo.' });
@@ -4023,6 +3782,219 @@ async function unifiedGrepSearch(
   return resolved;
 }
 
+// ── runDeepSearchPipeline ─────────────────────────────────────────────────────
+// Shared between the DEEP route handler and the deep_search tool exposed to Haiku.
+// Accepts pre-ranked GrepMatch results and a list of query terms (already expanded
+// by the caller), extracts full enclosing-function fragments with BUG-2 validation,
+// annotates trading patterns, and follows up to maxHops call-chain hops.
+async function runDeepSearchPipeline(
+  matches: GrepMatch[],
+  queryTerms: string[],
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+  maxHops = 2,
+): Promise<{ path: string; line: number; endLine: number; fragment: string }[]> {
+  // Extract literal fragments — no AI, no interpretation
+  const deepEvidence: { path: string; line: number; endLine: number; fragment: string }[] = [];
+  for (const match of matches.slice(0, 5)) {
+    try {
+      const fc = await getFileContent(match.path, repo);
+      let section = match.line
+        ? (readEnclosingFunction(fc, match.line) ?? smartReadSection(fc, match.line, 60))
+        : (match.text ? smartReadSection(fc, match.text, 60) : null);
+      if (!section) continue;
+
+      const symbolTerms = queryTerms.length > 0 ? queryTerms : [];
+      let symbolFound = symbolTerms.some(t => t.length > 2 && section!.excerpt.toLowerCase().includes(t.toLowerCase()));
+
+      if (!symbolFound && match.line) {
+        const rangeSection = smartReadSection(fc, match.line, 50);
+        if (rangeSection) {
+          const rangeLower = rangeSection.excerpt.toLowerCase();
+          if (symbolTerms.some(t => t.length > 2 && rangeLower.includes(t.toLowerCase()))) {
+            section = rangeSection;
+            symbolFound = true;
+            send('action', { text: `📖 Fallback lectura por rango — ${match.path}:${match.line}±50` });
+          }
+        }
+      }
+
+      if (!symbolFound) {
+        send('action', { text: `⚠️ ${match.path}:${match.line} — fragmento no contiene el símbolo buscado [${symbolTerms.slice(0, 2).join(', ')}], descartado` });
+        continue;
+      }
+
+      const { annotatedFragment, notes: patternNotes } = annotateTradingPatterns(
+        section.excerpt, section.startLine, match.path,
+      );
+      for (const note of patternNotes) send('action', { text: `🔍 ${note}` });
+      deepEvidence.push({ path: match.path, line: section.startLine, endLine: section.endLine, fragment: annotatedFragment });
+      send('action', { text: `📌 ${match.path}:${section.startLine}-${section.endLine}` });
+      const preview = section.excerpt.split('\n').slice(0, 20);
+      for (const fl of preview) send('action', { text: fl });
+    } catch { /* skip unfetchable files */ }
+  }
+
+  // ── Multi-hop: follow call chains up to maxHops extra steps ──────────────────
+  {
+    const CALL_RE = /\b(?:await\s+)?([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(/g;
+    const BUILTINS = new Set([
+      'if','for','while','switch','return','const','let','var','new','typeof',
+      'instanceof','async','await','function','class','import','export','default',
+      'throw','catch','try','super','this','void','null','true','false','undefined',
+      'console','Math','Object','Array','Promise','JSON','parseInt','parseFloat',
+      'String','Number','Boolean','Date','Set','Map','Error','Symbol','fetch',
+      'setTimeout','setInterval','clearTimeout','clearInterval','require',
+    ]);
+    const relevanceSet = new Set<string>(queryTerms.map(t => t.toLowerCase()));
+    const triedSymbols = new Set<string>(relevanceSet);
+
+    const MIN_OVERLAP = 4;
+    const isRelevant = (symLower: string): boolean => {
+      for (const kw of relevanceSet) {
+        if (kw.length < MIN_OVERLAP || symLower.length < MIN_OVERLAP) continue;
+        const shorter = kw.length <= symLower.length ? kw : symLower;
+        const longer  = kw.length <= symLower.length ? symLower : kw;
+        for (let l = shorter.length; l >= MIN_OVERLAP; l--) {
+          if (longer.includes(shorter.slice(0, l))) return true;
+        }
+      }
+      return false;
+    };
+
+    const stripLineComments = (src: string): string =>
+      src.split('\n').map(line => {
+        const withoutLineNum = line.replace(/^(\s*)(\d+:\s*)/, '$1');
+        const trimmed = withoutLineNum.replace(/^\s*/, '');
+        if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return '';
+        const inlineIdx = withoutLineNum.indexOf('//');
+        if (inlineIdx < 0) return line;
+        const prefixLen = line.length - withoutLineNum.length;
+        return line.slice(0, prefixLen + inlineIdx);
+      }).join('\n');
+
+    const DEF_SYM_RE = /(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(|(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:const|let|var)\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*=/;
+
+    let hopStart = 0;
+    for (let hop = 0; hop < maxHops; hop++) {
+      const scanSlice = deepEvidence.slice(hopStart);
+      hopStart = deepEvidence.length;
+
+      const candidates = new Map<string, number>();
+      for (const ev of scanSlice) {
+        const defM = ev.fragment.match(DEF_SYM_RE);
+        const evDefSymLower = defM ? (defM[1] ?? defM[2] ?? '').toLowerCase() : '';
+        const codeOnly = stripLineComments(ev.fragment);
+        CALL_RE.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = CALL_RE.exec(codeOnly)) !== null) {
+          const sym = m[1];
+          const symLower = sym.toLowerCase();
+          if (BUILTINS.has(sym) || triedSymbols.has(symLower)) continue;
+          if (evDefSymLower && symLower === evDefSymLower) continue;
+          if (isRelevant(symLower)) {
+            candidates.set(sym, (candidates.get(sym) ?? 0) + 1);
+          }
+        }
+      }
+
+      if (candidates.size === 0) {
+        // Strategy 2: caller search
+        let callerFound = false;
+        for (const ev of scanSlice) {
+          const defM = ev.fragment.match(
+            /(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(|(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:const|let|var)\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*=/
+          );
+          const defSym = defM ? (defM[1] ?? defM[2]) : null;
+          if (!defSym) continue;
+          const defSymLower = defSym.toLowerCase();
+          if (triedSymbols.has(defSymLower)) continue;
+          triedSymbols.add(defSymLower);
+
+          send('action', { text: `🔗 Salto ${hop + 1} (call site de "${defSym}")…` });
+          try {
+            const callerRaw = await rgSearch(`\\b${defSym}\\s*\\(`, repo);
+            const callerProd = callerRaw.filter(h =>
+              !isTestMatch(h.path, h.text) &&
+              !(h.path === ev.path && h.line >= ev.line && h.line <= ev.endLine)
+            );
+            const callerMatch = callerProd[0];
+            if (!callerMatch?.line) continue;
+
+            const fc = await getFileContent(callerMatch.path, repo);
+            let section = readEnclosingFunction(fc, callerMatch.line)
+              ?? smartReadSection(fc, callerMatch.line, 60);
+            if (!section) continue;
+
+            if (!section.excerpt.toLowerCase().includes(defSymLower)) {
+              const fallback = smartReadSection(fc, callerMatch.line, 50);
+              if (!fallback || !fallback.excerpt.toLowerCase().includes(defSymLower)) {
+                send('action', { text: `⚠️ Salto ${hop + 1}: call site de "${defSym}" no confirmado en fragmento, descartado` });
+                continue;
+              }
+              section = fallback;
+            }
+
+            relevanceSet.add(defSymLower);
+            const { annotatedFragment, notes: hopNotes } = annotateTradingPatterns(
+              section.excerpt, section.startLine, callerMatch.path,
+            );
+            for (const note of hopNotes) send('action', { text: `🔍 ${note}` });
+            deepEvidence.push({ path: callerMatch.path, line: section.startLine, endLine: section.endLine, fragment: annotatedFragment });
+            send('action', { text: `📌 [hop ${hop + 1}↑] ${callerMatch.path}:${section.startLine}-${section.endLine}` });
+            const preview = section.excerpt.split('\n').slice(0, 20);
+            for (const fl of preview) send('action', { text: fl });
+            callerFound = true;
+            break;
+          } catch { /* skip if file unreadable */ }
+        }
+        if (!callerFound) break;
+        continue;
+      }
+
+      const [bestSym] = [...candidates.entries()].sort((a, b) => b[1] - a[1])[0];
+      const bestSymLower = bestSym.toLowerCase();
+      triedSymbols.add(bestSymLower);
+
+      send('action', { text: `🔗 Salto ${hop + 1}: buscando "${bestSym}"…` });
+      try {
+        const hopMatches = await unifiedGrepSearch(bestSym, repo, send);
+        const prodMatches = hopMatches.filter(h => !isTestMatch(h.path, h.text));
+        const bestMatch = (prodMatches.length > 0 ? prodMatches : hopMatches)[0];
+        if (!bestMatch) continue;
+
+        const fc = await getFileContent(bestMatch.path, repo);
+        let section = bestMatch.line
+          ? (readEnclosingFunction(fc, bestMatch.line) ?? smartReadSection(fc, bestMatch.line, 60))
+          : null;
+        if (!section) continue;
+
+        if (!section.excerpt.toLowerCase().includes(bestSymLower)) {
+          const fallback = bestMatch.line ? smartReadSection(fc, bestMatch.line, 50) : null;
+          if (!fallback || !fallback.excerpt.toLowerCase().includes(bestSymLower)) {
+            send('action', { text: `⚠️ Salto ${hop + 1}: "${bestSym}" no confirmado en fragmento, descartado` });
+            continue;
+          }
+          section = fallback;
+        }
+
+        relevanceSet.add(bestSymLower);
+        const { annotatedFragment, notes: hopNotes } = annotateTradingPatterns(
+          section.excerpt, section.startLine, bestMatch.path,
+        );
+        for (const note of hopNotes) send('action', { text: `🔍 ${note}` });
+        deepEvidence.push({ path: bestMatch.path, line: section.startLine, endLine: section.endLine, fragment: annotatedFragment });
+        send('action', { text: `📌 [hop ${hop + 1}] ${bestMatch.path}:${section.startLine}-${section.endLine}` });
+        const preview = section.excerpt.split('\n').slice(0, 20);
+        for (const fl of preview) send('action', { text: fl });
+      } catch { /* skip if file unreadable */ }
+    }
+  }
+  // ── end multi-hop ─────────────────────────────────────────────────────────────
+
+  return deepEvidence;
+}
+
 async function executeChatTool(
   name: string,
   input: Record<string, any>,
@@ -4100,6 +4072,38 @@ async function executeChatTool(
     });
     return 'Patch propuesto al usuario — esperando aprobación. No lo des por aplicado.';
   }
+  if (name === 'deep_search') {
+    const query: string = input.query ?? '';
+    if (!query.trim()) return 'deep_search: query vacío — pasá al menos un identificador técnico.';
+    send('action', { text: `🔭 deep_search — buscando: "${query}"` });
+    const queryTerms = query.split('|').map((t: string) => t.trim()).filter(Boolean);
+    let matches: GrepMatch[];
+    try {
+      const result = await searchWithTestFallback(query, repo, send);
+      matches = result.matches;
+    } catch (e: any) {
+      if (e.message === 'GITHUB_RATE_LIMIT') {
+        return `deep_search: rate limit de GitHub. Esperá ~1 min y reintentá, o usá grep_code directamente.`;
+      }
+      throw e;
+    }
+    if (matches.length === 0) {
+      return `deep_search: sin resultados para "${query}". Reformulá con el nombre exacto de la función o variable (camelCase), o probá con grep_code para variantes alternativas.`;
+    }
+    // Production-first ranking (searchWithTestFallback already sorts prod first)
+    const prodMatches = matches.filter(m => !isTestMatch(m.path, m.text));
+    const rankedMatches = prodMatches.length > 0 ? prodMatches : matches;
+    if (prodMatches.length === 0) {
+      send('action', { text: '⚠️ deep_search — solo resultados de test/dev. Ampliando a todos los matches.' });
+    }
+    const evidence = await runDeepSearchPipeline(rankedMatches, queryTerms, repo, send);
+    if (evidence.length === 0) {
+      return `deep_search: ${matches.length} match(es) encontrado(s) pero ningún fragmento superó la validación BUG-2 (símbolo no aparece en el fragmento extraído). Intentá con grep_code + read_file más específicos.`;
+    }
+    const summary = evidence.map(e => `${e.path}:${e.line}\n${e.fragment}`).join('\n\n---\n\n');
+    send('action', { text: `✅ deep_search — ${evidence.length} fragmento(s) extraído(s)` });
+    return summary;
+  }
   return `Tool desconocida: ${name}`;
 }
 
@@ -4149,44 +4153,33 @@ Si la evidencia existente responde la pregunta completamente, pasá directo a la
 
 ━━━ PROCESO DE BÚSQUEDA (solo si el Paso 0 no alcanzó) ━━━
 
-1. MIRÁ LA ESTRUCTURA PRIMERO: usá list_files en las carpetas raíz relevantes antes de leer contenido. \
-Los nombres de carpeta/archivo te dicen dónde vivirá la lógica (ej: "lib/", "routes/", "services/" para \
-backend; "components/", "pages/" para UI; "utils/", "helpers/" para funciones compartidas).
+HERRAMIENTA PRIMARIA — usá deep_search para cualquier investigación nueva de código:
+  deep_search(query: "sym1|sym2|sym3") ejecuta en una sola llamada: symbol_index + extracción \
+  de función completa + multi-hop caller/callee + anotación de patrones. \
+  Reemplaza el ciclo grep_code → read_file → grep_code → ... por UNA sola llamada consolidada. \
+  El resultado llega en el mismo formato que la evidencia DEEP — aplica el PASO 0 directamente.
 
-2. GENERÁ VARIANTES DE DOMINIO ANTES DE BUSCAR — a partir del término de la pregunta, generá 3-5 variantes \
-basadas en convenciones reales de código, NO en el término literal:
+VARIANTES DE DOMINIO — generá 3-5 antes de llamar a deep_search, NO buscás el término literal:
    - camelCase (ej: "trailing stop" → trailingStop)
    - CONSTANT_CASE (ej: TRAILING_STOP_ENABLED)
    - snake_case (ej: trailing_stop)
-   - Jerga del dominio si aplica (en trading: callbackRatio, rangeRate, movingPlan; en auth: token, session, jwt; \
-en pagos: charge, invoice, webhook)
-   - Sinónimos funcionales cortos (ej: "stop dinámico", "SL móvil")
+   - Jerga del dominio si aplica (en trading: callbackRatio, rangeRate, movingPlan)
+   - Sinónimos funcionales cortos (ej: "SL móvil")
+  Pasalas todas juntas: deep_search(query: "trailingStop|TRAILING_STOP|trailing_stop|callbackRatio")
 
-3. PRIMERA PASADA — mandá TODAS las variantes en UN SOLO llamado a grep_code usando el separador "|": \
-pattern: "trailingStop|TRAILING_STOP|trailing_stop|callbackRatio". NO busques una, esperes el resultado, \
-y recién ahí pienses la siguiente. Todas las variantes van juntas en la primera llamada.
-   NOTA: grep_code ya consulta automáticamente el índice de símbolos del repo antes de buscar. Si el \
-término es un nombre de función/clase exacto que ya fue indexado, vas a obtener el archivo y línea exacta \
-de inmediato sin pasos intermedios. Mandá el nombre exacto (camelCase) como primera variante en el pipe.
+HERRAMIENTAS DE FALLBACK — grep_code + read_file solo para:
+  - Confirmar que un old_str existe literalmente antes de propose_patch
+  - Leer un símbolo relacionado muy puntual que deep_search no cubrió (≤ 15 líneas con read_file)
+  - Búsquedas de texto libre (comentarios, strings, no identificadores de código)
+  - Listar estructura de directorios (list_files) cuando no sabés en qué archivo buscar
 
-4. SEGUNDA PASADA (solo si la primera no encontró nada): revisá los nombres de archivo reales que listaste \
-en el paso 1, generá nuevas variantes informadas por esos nombres reales, y hacé UNA segunda búsqueda con \
-las variantes más probables dado lo que existe en el repo.
+REGLA CRÍTICA — si usás read_file como fallback después de grep_code:
+Cuando grep_code devuelva "línea ~N", apuntá directo: start_line: N-20, end_line: N+150 — \
+UNA sola llamada. NUNCA leas en bloques secuenciales (1-100, 100-200…). \
+Si la función es más larga, ampliá end_line en esa misma llamada.
 
-5. Si después de estas dos pasadas no encontraste nada, terminá tu respuesta con el texto EXACTO: \
+Si deep_search + fallbacks no encontraron nada, terminá con el texto EXACTO: \
 "BÚSQUEDA_SIN_RESULTADOS". No rellenes con conocimiento general que no venga del código real.
-
-REGLA CRÍTICA — read_file después de grep_code:
-Cuando grep_code devuelva un resultado con "línea ~N", tu siguiente read_file DEBE apuntar \
-directamente a esa zona: start_line: N-20, end_line: N+150 — UNA sola llamada. \
-NUNCA leas el archivo en bloques secuenciales adivinando dónde está la función \
-(ej: 1-100, 100-200, 200-300...). Si la función es más larga que ese rango, ampliá \
-end_line en esa misma llamada (ej. N+300), no con una segunda llamada incremental.
-
-Si grep_code NO incluye número de línea (búsqueda conceptual sin match exacto): \
-hacé UNA sola llamada a read_file con start_line: 1, end_line: 300 para ver la \
-estructura general del archivo, luego UNA segunda llamada dirigida a la sección \
-relevante que identifiques de esa estructura. No más de dos llamadas por archivo.
 
 ━━━ ROL DE HAIKU — síntesis y límites ━━━
 Una vez que tenés el código relevante (sea de evidencia previa o de tu búsqueda), \
