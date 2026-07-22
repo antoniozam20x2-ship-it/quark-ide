@@ -23,6 +23,8 @@ interface QuarkChatProps {
   initialMessage?: string;
 }
 
+// ── localStorage helpers ──────────────────────────────────────────────────────
+
 // Devuelve un sessionId estable para el repo — sobrevive remounts del componente
 // porque se persiste en localStorage. Si no hay uno previo, genera uno nuevo.
 function getOrCreateSessionId(repo: string): string {
@@ -34,6 +36,22 @@ function getOrCreateSessionId(repo: string): string {
   return fresh;
 }
 
+function createFreshSessionId(repo: string): string {
+  const key = `quark-chat-session:${repo}`;
+  const fresh = `session-${Date.now()}`;
+  localStorage.setItem(key, fresh);
+  return fresh;
+}
+
+// Key para el historial completo de UI (todos los roles: user, assistant, action,
+// deep_search). Persiste los "archivos encontrados" y otros action messages que
+// el backend no guarda — solo guarda user/assistant para continuidad del modelo.
+function uiHistoryKey(sessionId: string) {
+  return `quark-chat-ui:${sessionId}`;
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
 export default function QuarkChat({ repo, activeProject, onProjectChange, initialMessage }: QuarkChatProps) {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState('');
@@ -43,25 +61,60 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
   // forceGroq: cuando está activo, el próximo mensaje se procesa directo por Groq
   // saltando la continuidad de sesión Haiku. Se resetea automáticamente tras el envío.
   const [forceGroq, setForceGroq] = useState(false);
-  // sessionId es estable entre remounts — vive en localStorage keyado por repo
-  const [sessionId] = useState(() => getOrCreateSessionId(repo));
+  // sessionId es estable entre remounts — vive en localStorage keyado por repo.
+  // Tiene setter para que resetConversation() pueda generar uno nuevo.
+  const [sessionId, setSessionId] = useState(() => getOrCreateSessionId(repo));
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Rehidratar historial al montar (o al volver a la pestaña de CHAT)
+  // ── Rehidratar historial al montar (o al cambiar sessionId por reset) ────────
+  // Orden de prioridad:
+  //   1. localStorage (uiHistoryKey) — contiene TODOS los roles (action, deep_search)
+  //      incluyendo los "archivos encontrados" que el backend no persiste.
+  //   2. Backend GET /api/agent/chat/history/:sessionId — fallback cuando localStorage
+  //      está vacío (sesión nueva, distinto navegador, etc.); solo user/assistant.
   useEffect(() => {
     let cancelled = false;
     setHistoryLoading(true);
+
+    // Intento 1: localStorage (historial completo de UI)
+    const localRaw = localStorage.getItem(uiHistoryKey(sessionId));
+    if (localRaw) {
+      try {
+        const localMsgs = JSON.parse(localRaw) as ChatMsg[];
+        if (localMsgs.length > 0 && !cancelled) {
+          setMessages(localMsgs);
+          setHistoryLoading(false);
+          return;
+        }
+      } catch {
+        // JSON inválido — seguir al fallback
+      }
+    }
+
+    // Intento 2: backend (solo user/assistant, sin action/deep_search)
     fetch(`${API_BASE}/api/agent/chat/history/${encodeURIComponent(sessionId)}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then((data: { messages: ChatMsg[] }) => {
-        if (!cancelled && data.messages.length > 0) setMessages(data.messages);
+        if (!cancelled && data.messages.length > 0) {
+          setMessages(data.messages);
+          // Persistir en localStorage para futuros remounts sin fetch
+          localStorage.setItem(uiHistoryKey(sessionId), JSON.stringify(data.messages));
+        }
       })
       .catch(() => { /* sin historial previo — arrancar limpio */ })
       .finally(() => { if (!cancelled) setHistoryLoading(false); });
+
     return () => { cancelled = true; };
-  // Solo se ejecuta al montar — sessionId es estable para el repo
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
+
+  // ── Persistir historial UI en localStorage cada vez que cambia messages ──────
+  // Guarda todos los roles (incluido action/deep_search) para que sobrevivan
+  // cambios de pestaña sin llamada al backend.
+  useEffect(() => {
+    if (messages.length > 0) {
+      localStorage.setItem(uiHistoryKey(sessionId), JSON.stringify(messages));
+    }
+  }, [messages, sessionId]);
 
   useEffect(() => {
     if (initialMessage) setInput(initialMessage);
@@ -70,6 +123,23 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, pendingPatch]);
+
+  // ── Reset de conversación ─────────────────────────────────────────────────────
+  // Limpia el historial visible, genera un nuevo sessionId y lo persiste en
+  // localStorage. El historial backend del sessionId anterior queda huérfano
+  // (no se borra — no molesta que queden filas en la DB).
+  function resetConversation() {
+    if (messages.length > 0 && !window.confirm('¿Borrar la conversación actual y empezar de cero?')) return;
+    // Limpiar UI history del sessionId viejo
+    localStorage.removeItem(uiHistoryKey(sessionId));
+    // Nuevo sessionId (se persiste automáticamente en getOrCreateSessionId/createFreshSessionId)
+    const newId = createFreshSessionId(repo);
+    // Reset de todo el estado de UI
+    setSessionId(newId);
+    setMessages([]);
+    setPendingPatch(null);
+    setForceGroq(false);
+  }
 
   async function sendMessage() {
     if (!input.trim() || streaming) return;
@@ -164,6 +234,41 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
         <div style={{ padding: '0 16px', color: '#a78bfa', fontWeight: 600, fontSize: 13, flexShrink: 0 }}>
           💬 QUARK CHAT
         </div>
+        {/* Botón reiniciar conversación */}
+        <button
+          onClick={resetConversation}
+          disabled={streaming}
+          title="Reiniciar conversación — borra el historial visible y empieza de cero"
+          style={{
+            flexShrink: 0,
+            marginRight: 12,
+            background: 'transparent',
+            border: '1px solid #333',
+            borderRadius: '6px',
+            color: '#6b7280',
+            padding: '4px 10px',
+            fontSize: '11px',
+            cursor: streaming ? 'not-allowed' : 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            transition: 'all 0.15s',
+            letterSpacing: '0.02em',
+          }}
+          onMouseEnter={e => {
+            if (!streaming) {
+              e.currentTarget.style.borderColor = '#ef4444';
+              e.currentTarget.style.color = '#ef4444';
+            }
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.borderColor = '#333';
+            e.currentTarget.style.color = '#6b7280';
+          }}
+        >
+          <span style={{ fontSize: '12px' }}>↺</span>
+          <span>Reiniciar</span>
+        </button>
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
         {historyLoading && (
