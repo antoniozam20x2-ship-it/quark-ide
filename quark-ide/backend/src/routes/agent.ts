@@ -2816,8 +2816,16 @@ function buildTriagePrompt(cacheHint: string): string {
   return `Responde de forma breve y directa, usando SOLO tu conocimiento general — no tienes acceso a herramientas ni al código real del repo.
 ${cacheHint}
 SOBRE EL CONTEXTO ADICIONAL: si aparece una sección "RESUMEN" o "CONTEXTO ADICIONAL" arriba, ese contenido proviene de una inspección real del código fuente de este mismo repo, hecha por este sistema hace menos de 30 minutos — no es una suposición ni una fuente externa incierta. Tratá esos datos como hechos verificados: usá los nombres exactos que aparecen ahí, no los parafrasees, y no agregues disclaimers como "probablemente", "podría ser" o "esto puede variar" sobre información que ya está confirmada.
+REGLA OBLIGATORIA — TÉRMINOS DE TRADING Y DOMINIO:
+Si la pregunta menciona cualquier término de dominio de este proyecto — incluyendo pero no limitado a: FVG, imbalance, CHOCH, BOS, EMA, SMA, RSI, MACD, ADX, ATR, SuperTrend, SAR, Score, RVOL, señal, trailing, stop, activación, condición de entrada, o cualquier COMPARACIÓN entre estos conceptos (ej: "diferencia entre X e Y", "cómo funciona X vs Y", "cambiar X por Y") — debés responder ÚNICAMENTE con "NEEDS_TOOLS: " seguido de una razón breve, SALVO que la respuesta exacta a esa pregunta específica ya esté transcripta literalmente en el cacheHint o historial arriba (no basta con que el término aparezca — debe estar la respuesta real).
+NUNCA completes con tu conocimiento genérico de trading/finanzas para preguntas sobre estos términos — el comportamiento de FVG, imbalance, EMA, Score, etc. en ESTE proyecto es específico del código real, no una definición estándar. Usar una definición genérica cuando el proyecto puede tener una implementación distinta es un error crítico.
+Ejemplos que SIEMPRE resultan en NEEDS_TOOLS (aunque la pregunta parezca conceptual):
+- "¿Cuál es la diferencia entre FVG e imbalance?" → NEEDS_TOOLS: necesito leer el código para ver cómo este proyecto los distingue
+- "¿Cómo funciona el EMA aquí?" → NEEDS_TOOLS: depende de la implementación específica del repo
+- "¿Qué es el Score en este bot?" → NEEDS_TOOLS: salvo que el cacheHint lo explique con detalle
+- "Explicame el SuperTrend vs SAR" → NEEDS_TOOLS: comparación de implementaciones específicas
 IMPORTANTE: si la pregunta es sobre algo ESPECÍFICO de este proyecto (nombres de agentes/componentes propios, funciones particulares, arquitectura específica de este repo) y NO tenés ese dato exacto en el contexto de arriba, NO completes con conocimiento genérico de IA/programación — responde ÚNICAMENTE con "NEEDS_TOOLS: " seguido de una razón breve.
-Si la pregunta es genuinamente genérica (conceptos estándar de programación, definiciones de libro) SÍ podés responder normal, sin ese prefijo.
+Si la pregunta es genuinamente genérica (conceptos estándar de programación, definiciones de libro de texto que NO dependan de la implementación de este proyecto) SÍ podés responder normal, sin ese prefijo.
 RESULTADO PARCIAL vs. CONCLUSIÓN DEFINITIVA: si el contexto disponible solo cubre una fuente o un término, no presentes la ausencia de datos como una conclusión definitiva sobre el proyecto. Usá lenguaje parcial: "El contexto disponible no menciona esto — puede estar bajo otro nombre o en un módulo no revisado aún." Reservá afirmaciones definitivas ("esto no existe en el proyecto") solo cuando el contexto cubre múltiples fuentes relacionadas sin resultado.
 REGLA DE ANCLAJE POR AFIRMACIÓN:
 Cada afirmación específica sobre el comportamiento del código (qué activa algo, qué condición dispara qué, cómo se relacionan dos variables) debe ir acompañada del fragmento de código exacto del resumen o contexto que la sustenta — no solo el nombre del archivo.
@@ -4141,7 +4149,9 @@ async function executeChatTool(
   if (name === 'deep_search') {
     const query: string = input.query ?? '';
     if (!query.trim()) return 'deep_search: query vacío — pasá al menos un identificador técnico.';
-    send('action', { text: `🔭 deep_search — buscando: "${query}"` });
+    // Emit a dedicated event so the UI can render a distinct "DEEP active" badge
+    // instead of a generic action line.
+    send('deep_search', { query });
     const queryTerms = query.split('|').map((t: string) => t.trim()).filter(Boolean);
     let matches: GrepMatch[];
     try {

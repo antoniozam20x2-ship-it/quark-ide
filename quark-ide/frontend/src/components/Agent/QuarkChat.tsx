@@ -5,7 +5,7 @@ import type { Project } from '../../App';
 const API_BASE = (import.meta.env.VITE_API_URL ?? 'https://backend-production-0d77.up.railway.app').replace(/\/$/, '');
 
 interface ChatMsg {
-  role: 'user' | 'assistant' | 'action';
+  role: 'user' | 'assistant' | 'action' | 'deep_search';
   text: string;
 }
 
@@ -106,6 +106,9 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
           if (evt.event === 'action') {
             setMessages(m => [...m, { role: 'action', text: evt.text }]);
           }
+          if (evt.event === 'deep_search') {
+            setMessages(m => [...m, { role: 'deep_search', text: evt.query ?? '' }]);
+          }
           if (evt.event === 'chat_message') {
             setMessages(m => [...m, { role: 'assistant', text: evt.text }]);
           }
@@ -164,16 +167,38 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
         )}
         {messages.map((m, i) => (
           <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '85%' }}>
-            <div style={{
-              padding: '8px 12px',
-              borderRadius: '10px',
-              fontSize: m.role === 'action' ? '13px' : '15px',
-              background: m.role === 'user' ? '#6d28d9' : m.role === 'action' ? 'transparent' : '#1a1a24',
-              color: m.role === 'action' ? '#38bdf8' : '#e5e7eb',
-              opacity: m.role === 'action' ? 0.8 : 1,
-            }}>
-              {m.text}
-            </div>
+            {m.role === 'deep_search' ? (
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '7px',
+                padding: '5px 11px',
+                borderRadius: '20px',
+                fontSize: '12px',
+                fontWeight: 600,
+                background: 'linear-gradient(90deg, #1e1040 0%, #2d1060 100%)',
+                border: '1px solid #7c3aed',
+                color: '#c4b5fd',
+                letterSpacing: '0.02em',
+              }}>
+                <span style={{ fontSize: '14px' }}>🔭</span>
+                <span>DEEP</span>
+                <span style={{ color: '#a78bfa', fontWeight: 400, maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {m.text}
+                </span>
+              </div>
+            ) : (
+              <div style={{
+                padding: '8px 12px',
+                borderRadius: '10px',
+                fontSize: m.role === 'action' ? '13px' : '15px',
+                background: m.role === 'user' ? '#6d28d9' : m.role === 'action' ? 'transparent' : '#1a1a24',
+                color: m.role === 'action' ? '#38bdf8' : '#e5e7eb',
+                opacity: m.role === 'action' ? 0.8 : 1,
+              }}>
+                {m.text}
+              </div>
+            )}
           </div>
         ))}
 
