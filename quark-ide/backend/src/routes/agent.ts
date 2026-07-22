@@ -2847,6 +2847,33 @@ function classifyIntent(message: string): 'explain' | 'generate' {
   return GENERATE_SIGNALS.test(message) ? 'generate' : 'explain';
 }
 
+// Detecta mensajes puramente sociales/triviales: saludos, agradecimientos,
+// confirmaciones vacías, charla genérica. Estos nunca deben disparar NEEDS_TOOLS
+// ni escalar a DEEP/Haiku — se responden con un prompt conversacional minimalista.
+function isTrivialMessage(message: string): boolean {
+  const msg = message.trim();
+  // Mensajes muy cortos sin términos técnicos (sin CamelCase, sin acrónimos, sin extensiones)
+  if (msg.length < 20 && !/[A-Z]{2,}|[a-z][A-Z]|\.\w{2,4}\b/.test(msg)) {
+    // Confirmar que tampoco contiene palabras de dominio técnico
+    if (!/\b(error|bug|falla|función|código|archivo|clase|variable|api|endpoint|módulo|import|export)\b/i.test(msg)) {
+      return true;
+    }
+  }
+  const TRIVIAL_PATTERNS = [
+    // Saludos
+    /^(hola|buenas|buen\s?(d[ií]a|tarde|noche)|hey|hi|hello|saludos|qu[eé]\s?tal|c[oó]mo\s?(est[aá]s|va[ns]?|and[aá]s?))[\s!.,?¡¿]*$/i,
+    // Agradecimientos y confirmaciones positivas
+    /^(gracias|thank(s| you)|ok|okay|okey|perfecto|genial|bien|buenísimo|excelente|entendido|claro|dale|listo|re-?bien|de\s?nada|por\s?nada|con\s?gusto)[\s!.,]*$/i,
+    // Confirmaciones simples
+    /^(s[ií]|no|tal\s?vez|quiz[aá]s|puede\s?ser|obvio|obvs|claro\s?que\s?s[ií])[\s!.,]*$/i,
+    // Cierres de conversación
+    /^(eso\s?es\s?todo|nada\s?m[aá]s|por\s?ahora\s?(es\s?todo|nada\s?m[aá]s)|fue\s?todo|chau|cha[ou]|adios|adiós|bye)[\s!.,]*$/i,
+    // Expresiones de acuerdo o ánimo
+    /^(re\s?bien|muy\s?bien|super|súper|ok\s?ent[eé]nd[ií]|perfecto\s*gracias|gracias\s*perfecto)[\s!.,]*$/i,
+  ];
+  return TRIVIAL_PATTERNS.some(p => p.test(msg));
+}
+
 function classifyComplexity(message: string): 'simple' | 'complex' {
   const COMPLEX_SIGNALS = [
     /\b(por qué|causa raíz|no funciona|bug|error|falla|se rompe|arregla|corrige|resuelve)\b/i,
@@ -2863,6 +2890,7 @@ function classifyComplexity(message: string): 'simple' | 'complex' {
 function buildTriagePrompt(cacheHint: string): string {
   return `Responde de forma breve y directa, usando SOLO tu conocimiento general — no tienes acceso a herramientas ni al código real del repo.
 ${cacheHint}
+PRIMERA PRIORIDAD — MENSAJES SOCIALES Y CONVERSACIONALES: si el mensaje es un saludo (Hola, Buenas, Hey…), agradecimiento (Gracias, Perfecto, Genial…), confirmación vacía (Ok, Entendido, Dale, Sí, No…), pregunta de cortesía (¿Cómo estás?…) o cualquier otro mensaje sin pregunta técnica real — respondé de forma conversacional, breve y natural. NUNCA retornés "NEEDS_TOOLS" para mensajes puramente sociales. Esta regla tiene prioridad ABSOLUTA sobre todas las demás reglas de este prompt, incluyendo las de trading y dominio.
 SOBRE EL CONTEXTO ADICIONAL: si aparece una sección "RESUMEN" o "CONTEXTO ADICIONAL" arriba, ese contenido proviene de una inspección real del código fuente de este mismo repo, hecha por este sistema hace menos de 30 minutos — no es una suposición ni una fuente externa incierta. Tratá esos datos como hechos verificados: usá los nombres exactos que aparecen ahí, no los parafrasees, y no agregues disclaimers como "probablemente", "podría ser" o "esto puede variar" sobre información que ya está confirmada.
 REGLA OBLIGATORIA — TÉRMINOS DE TRADING Y DOMINIO:
 Si la pregunta menciona cualquier término de dominio de este proyecto — incluyendo pero no limitado a: FVG, imbalance, CHOCH, BOS, EMA, SMA, RSI, MACD, ADX, ATR, SuperTrend, SAR, Score, RVOL, señal, trailing, stop, activación, condición de entrada, o cualquier COMPARACIÓN entre estos conceptos (ej: "diferencia entre X e Y", "cómo funciona X vs Y", "cambiar X por Y") — debés responder ÚNICAMENTE con "NEEDS_TOOLS: " seguido de una razón breve, SALVO que la respuesta exacta a esa pregunta específica ya esté transcripta literalmente en el cacheHint o historial arriba (no basta con que el término aparezca — debe estar la respuesta real).
@@ -4753,6 +4781,22 @@ async function runChatTurn(
 
   // ── Simple path: Groq triage (text-only, no tools) ───────────────────────────
   if (complexity === 'simple') {
+    const groqHistory = groqHistoryFromMessages(history);
+
+    // ── Rama trivial: saludo / agradecimiento / charla genérica ─────────────────
+    // Detectada antes de llamar al triage de dominio para evitar que un saludo
+    // active NEEDS_TOOLS por "falta de contexto del repo". Se responde con Groq
+    // pero usando un prompt conversacional minimalista — sin ninguna regla de
+    // escalado, sin DEEP, sin Haiku. El usuario no ve ningún action event.
+    if (isTrivialMessage(userMessage)) {
+      const trivialPrompt = `Sos un asistente de programación. El usuario te está hablando de forma informal o social. Respondé de manera breve, natural y conversacional — sin mencionar herramientas, código ni búsquedas. Si te saludan, saludá de vuelta. Si te agradecen, respondé amablemente.`;
+      const trivialAnswer = await callGroqAgent(userMessage, trivialPrompt, 256, groqHistory);
+      send('chat_message', { text: trivialAnswer });
+      messages.push({ role: 'assistant', content: [{ type: 'text', text: trivialAnswer }] });
+      await saveChatHistory(sessionId, messages);
+      return;
+    }
+
     send('action', { text: '⚡ Modo rápido — Groq' });
     send('model_active', { model: 'Groq (Llama 3.3 70B)', tier: 'fast' });
     // Convert the stored session history (Anthropic format) to the flat {role, content}
@@ -4760,7 +4804,6 @@ async function runChatTurn(
     // sees the conversational text thread, not the raw code-search internals.
     // `cacheHint` (DEEP evidence, shared summaries) stays in the system prompt as
     // complementary context on top of the real turn history.
-    const groqHistory = groqHistoryFromMessages(history);
     const groqAnswer = await callGroqAgent(
       userMessage,
       buildTriagePrompt(cacheHint),
