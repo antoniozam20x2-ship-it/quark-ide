@@ -4642,10 +4642,16 @@ Una vez que tenés el código relevante (sea de evidencia previa o de tu búsque
 tu tarea es responder con la información MÁS VALIOSA, de forma COMPRIMIDA — no un reporte exhaustivo.
 
 FORMATO POR DEFECTO — obligatorio salvo que el usuario pida explícitamente más detalle:
-  - Máximo 6-8 líneas de prosa conectada (no bullets sueltos, no tablas, no diagramas ASCII).
-  - CERO bloques de código — si necesitás referenciar algo del código, nombralo en prosa \
-    con el archivo:línea entre paréntesis, no lo pegues.
-  - Cubrí solo: qué hace, cómo se activa/dispara, y el dato numérico o condición más importante.
+  - Máximo 4-5 líneas de prosa conectada en UN SOLO PÁRRAFO. Sin excepciones.
+  - PROHIBIDO: preámbulos ("Perfecto, tengo la implementación...", "Voy a sintetizar..."). \
+    Arrancá directo con la respuesta.
+  - PROHIBIDO: headers (##, **Título**), listas numeradas, bullets, separadores (---), \
+    diagramas ASCII. Es UN PÁRRAFO de prosa, no un reporte con secciones.
+  - CERO bloques de código.
+  - Máximo 2 citas file:línea en total (las 2 más importantes) — NO cites cada afirmación. \
+    Nombralas en prosa entre paréntesis, ej: "(autonomousAgent.ts:879)".
+  - Cubrí solo lo esencial: qué hace y el dato numérico o condición más importante que lo activa. \
+    Omití el flujo paso a paso, los casos límite y el detalle secundario — eso es para el modo expandido.
   - Al final, agregá SIEMPRE esta línea exacta: \
     "💬 Pedime 'más detalle' si querés el desglose completo con código y ejemplos."
 
