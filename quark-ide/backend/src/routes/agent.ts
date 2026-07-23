@@ -120,6 +120,56 @@ function hasFastTopicOverlap(current: string[], previous: string[]): boolean {
   return current.some(k => prevSet.has(k.toLowerCase()));
 }
 
+// ── DEEP session: persistir última evidencia para pedidos de "ver más" ────────
+const DEEP_SESSION_NS = 'quark-deep-session';
+
+interface DeepSessionEntry { path: string; startLine: number; endLine: number; }
+
+async function loadDeepSession(sessionId: string): Promise<DeepSessionEntry | null> {
+  try {
+    const r = await pool.query<{ content: string }>(
+      `SELECT content FROM memory_entries WHERE key = $1 AND namespace = $2 LIMIT 1`,
+      [`deep-${sessionId}`, DEEP_SESSION_NS],
+    );
+    return r.rows[0]?.content ? JSON.parse(r.rows[0].content) as DeepSessionEntry : null;
+  } catch { return null; }
+}
+
+async function saveDeepSession(sessionId: string, entry: DeepSessionEntry): Promise<void> {
+  await pool.query(
+    `INSERT INTO memory_entries (key, content, namespace)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
+    [`deep-${sessionId}`, JSON.stringify(entry), DEEP_SESSION_NS],
+  );
+}
+
+/**
+ * Detecta si el prompt es un pedido de continuación de DEEP (ver más líneas, seguir desde ahí).
+ * Devuelve las líneas explícitas si las hay, o solo isContinuation=true para "siguiente bloque".
+ */
+function isDeepContinuation(prompt: string): { isContinuation: boolean; fromLine?: number; toLine?: number } {
+  const msg = prompt.trim();
+  // Rango explícito: "líneas 1150 a 1200", "desde 1150 hasta 1200", "1150-1200"
+  const rangeMatch =
+    msg.match(/l[íi]neas?\s+(\d+)\s*(?:a|al|-|hasta)\s*(\d+)/i) ??
+    msg.match(/(?:desde|from)\s+(?:l[íi]nea\s+)?(\d+)\s+(?:a|al|hasta|to)\s+(?:l[íi]nea\s+)?(\d+)/i) ??
+    msg.match(/\b(\d{3,})\s*[-–]\s*(\d{3,})\b/);
+  if (rangeMatch) {
+    return { isContinuation: true, fromLine: parseInt(rangeMatch[1]), toLine: parseInt(rangeMatch[2]) };
+  }
+  // Frases de continuación sin rango explícito
+  const CONT = [
+    /\b(mostr[aá](me)?|muestra(me)?|ver)\s+(m[aá]s|el?\s+resto|m[aá]s\s+abajo|siguiente\s+parte|bloque\s+siguiente)/i,
+    /\b(segu[ií](s|d)?(\s+desde\s+ah[íi])?|continu[aá](\s+desde\s+ah[íi])?|m[aá]s\s+abajo|sigue\s+desde\s+ah[íi])\b/i,
+    /\bver\s+m[aá]s\s+contexto\b/i,
+    /\bm[aá]s\s+(contexto|c[oó]digo|l[íi]neas?)\b/i,
+    /\b(next|more|continue|keep going)\s*(lines?|context|below)?\b/i,
+  ];
+  if (CONT.some(p => p.test(msg))) return { isContinuation: true };
+  return { isContinuation: false };
+}
+
 async function summarizeForCache(preloadedFiles: { path: string; content: string }[]): Promise<string> {
   const keys = getGroqKeys();
   if (keys.length === 0 || preloadedFiles.length === 0) return '';
@@ -1738,6 +1788,64 @@ sobre código que NO está en el fragmento — no para lo que sí está visible.
       // Step 2: symbol_index + fuzzy-match + ripgrep — stops at first confirmed hit.
       // Step 3: extract literal fragments with exact file:line citations.
       // Output: raw evidence only — NO interpretation, NO diagnosis, NO "probablemente".
+
+      // ── DEEP session continuity — "ver más líneas" / continuación ────────────
+      // Si el prompt es un pedido de continuación y hay evidencia previa en sesión,
+      // leer directamente el archivo ya identificado sin rehacer el pipeline completo.
+      {
+        const deepPrev = sessionId ? await loadDeepSession(sessionId) : null;
+        const deepCont = isDeepContinuation(prompt);
+
+        if (deepCont.isContinuation && deepPrev) {
+          send('action', { text: `📂 DEEP — continuación detectada, leyendo ${deepPrev.path}...` });
+          let continuationOk = false;
+          try {
+            const fullContent = await getFileContent(deepPrev.path, repo);
+            const fileLines   = fullContent.split('\n');
+            const totalLines  = fileLines.length;
+
+            // Rango: explícito en el prompt o siguiente bloque a partir del fin anterior
+            let fromLine = deepCont.fromLine ?? (deepPrev.endLine + 1);
+            let toLine   = deepCont.toLine   ?? Math.min(fromLine + 60, totalLines);
+            fromLine = Math.max(1, Math.min(fromLine, totalLines));
+            toLine   = Math.max(fromLine, Math.min(toLine, totalLines));
+
+            const excerpt = fileLines
+              .slice(fromLine - 1, toLine)
+              .map((l, i) => `${fromLine + i}: ${l}`)
+              .join('\n');
+
+            const citationHeader = `${deepPrev.path}:${fromLine}\n${excerpt}`;
+            send('action', { text: `📍 ${deepPrev.path}:${fromLine}-${toLine}` });
+
+            // Actualizar sesión con el nuevo rango para encadenamiento
+            if (sessionId) {
+              await saveDeepSession(sessionId, { path: deepPrev.path, startLine: fromLine, endLine: toLine }).catch(() => {});
+            }
+
+            send('confidence', {
+              level: 'high',
+              reason: `DEEP mode — cita directa ${deepPrev.path}:${fromLine}-${toLine} (continuación de sesión, sin búsqueda)`,
+              suggestedAction: 'chat',
+              files: [deepPrev.path],
+              diagnosis: citationHeader,
+            });
+            continuationOk = true;
+          } catch {
+            send('action', { text: `⚠️ No se pudo leer el archivo — relanzando búsqueda completa...` });
+          }
+
+          if (continuationOk) {
+            send('done', { files: [], commitMessage: '', mainComponent: deepPrev.path, mainContent: '', repo, branch });
+            await new Promise(r => setTimeout(r, 100));
+            res.end();
+            return;
+          }
+          // Si falló la lectura directa, cae al pipeline completo
+        }
+      }
+      // ─────────────────────────────────────────────────────────────────────────
+
       send('action', { text: '🔭 DEEP — explorando estructura del repo...' });
 
       // Step 1: generate structural skeletons of the top repo files (sorted by
@@ -1875,6 +1983,16 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
 
       await saveContextSummary(repo, deepEvidenceSummary || 'DEEP read — sin evidencia', 'agent', deepEvidence.map(e => e.path))
         .catch(() => {});
+
+      // Guardar evidencia primaria en sesión DEEP para pedidos de continuación futuros
+      if (sessionId && deepEvidence.length > 0) {
+        const primary = deepEvidence[0];
+        await saveDeepSession(sessionId, {
+          path:      primary.path,
+          startLine: primary.line,
+          endLine:   (primary as any).endLine ?? primary.line + 40,
+        }).catch(() => {});
+      }
 
       // Persist agent context so follow-up CHAT/DEEP turns can reuse file list
       await saveAgentContext({

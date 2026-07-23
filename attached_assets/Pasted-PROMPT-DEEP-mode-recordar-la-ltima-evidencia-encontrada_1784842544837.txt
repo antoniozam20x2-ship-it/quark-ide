@@ -1,0 +1,18 @@
+PROMPT — DEEP mode: recordar la última evidencia encontrada para responder pedidos de “ver más líneas” sin rehacer la búsqueda completa
+
+Contexto: Hoy DEEP mode no tiene ningún concepto de sesión — cada pregunta dispara el pipeline completo (skeleton + symbol_index + extracción) desde cero. Si el usuario, después de que DEEP encuentra algo en la línea ~1140, pide “mostrame las líneas 1150 a 1200”, DEEP no tiene forma de saber que se refiere al mismo archivo que acaba de citar — no hay continuidad.
+
+Objetivo: que DEEP recuerde su última evidencia (archivo + rango de líneas) por sesión, y que un pedido de seguimiento tipo “mostrame más”, “ver desde X hasta Y”, “seguí desde ahí” haga una lectura directa y puntual del archivo ya identificado, sin rehacer el pipeline completo de búsqueda.
+
+Comportamiento esperado:
+
+	1.	Persistir la última evidencia de DEEP por sesión (archivo, línea de inicio, línea de fin) — puede reusar el mecanismo de loadFastHistory/saveFastHistory con un namespace propio (ej. quark-deep-session), guardando solo el path y el rango, no hace falta guardar el fragmento completo de nuevo.
+	2.	Detectar en el mensaje del usuario un patrón de seguimiento: menciona un rango de líneas explícito (“líneas 1150 a 1200”, “desde 1150 hasta 1200”) o una frase de continuación (“mostrame más”, “seguí desde ahí”, “ver más contexto”) combinada con que exista evidencia previa de DEEP en esa misma sesión.
+	3.	Si se detecta: leer directamente el archivo ya identificado (getFileContent + slice del rango pedido, o el rango siguiente inmediato si no especifica números) y mostrarlo con el mismo formato de cita archivo:línea que ya usa DEEP — sin volver a correr generateStructuralSkeleton, unifiedGrepSearch ni el multi-hop.
+	4.	Si no hay evidencia previa en la sesión, o el pedido no es claramente una continuación, DEEP sigue funcionando como hoy (pipeline completo desde cero).
+	5.	Actualizar el rango guardado en la sesión después de cada respuesta, para que pedidos encadenados (“y ahora más abajo”) sigan funcionando.
+
+Restricciones generales:
+
+	•	Esto es específico de DEEP mode — no tocar el pipeline de FAST ni CHAT.
+	•	Mantener DEEP fiel a su naturaleza (solo cita cruda, sin interpretación) — esta mejora es de continuidad de contexto, no le agrega razonamiento a DEEP.
