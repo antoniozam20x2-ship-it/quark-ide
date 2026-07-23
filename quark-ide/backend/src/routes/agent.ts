@@ -2887,6 +2887,131 @@ function classifyComplexity(message: string): 'simple' | 'complex' {
   return isComplex ? 'complex' : 'simple';
 }
 
+// ── Tool-result compression ───────────────────────────────────────────────────
+// Tool results from closed turns (all except the most recent one) accumulate
+// unboundedly across multi-step sessions: a single read_file can be 10 KB, and
+// 5 turns × 4 tools = 20 full tool_result blocks re-sent on every API call.
+// These functions compress those stale blocks to ~60-char summaries while
+// leaving all conversational text (user/assistant messages) completely intact.
+//
+// Only the LAST user message with tool_result content is kept uncompressed —
+// that is the freshest evidence Haiku/Sonnet just gathered and still needs
+// verbatim. Everything older is already "used" and can be summarized.
+const TOOL_RESULT_COMPRESS_THRESHOLD = 500; // chars — below this, keep as-is
+
+function summarizeToolResult(
+  content: string,
+  toolInfo?: { name: string; input: Record<string, unknown> },
+): string {
+  const lines = content.split('\n');
+  const lc = lines.length;
+  const cc = content.length;
+  switch (toolInfo?.name) {
+    case 'read_file': {
+      const fp =
+        (toolInfo.input?.file_path as string) ??
+        (toolInfo.input?.path as string) ??
+        '?';
+      return `[read_file: ~${lc} líneas de ${fp} — comprimido]`;
+    }
+    case 'grep_code':
+    case 'search_code': {
+      const pat =
+        (toolInfo.input?.pattern as string) ??
+        (toolInfo.input?.query as string) ??
+        '?';
+      const matchCount = lines.filter(l => /^[^:]+:\d+:/.test(l)).length;
+      return `[grep_code: ~${matchCount} coincidencias para "${pat}" — comprimido]`;
+    }
+    case 'list_files':
+    case 'list_directory': {
+      const dir =
+        (toolInfo.input?.path as string) ??
+        (toolInfo.input?.directory as string) ??
+        '?';
+      return `[list_files: ${lc} entradas en ${dir} — comprimido]`;
+    }
+    default:
+      return `[tool_result: ~${cc} chars, ${lc} líneas — comprimido]`;
+  }
+}
+
+// Returns a shallow-copy of messages with old tool_result blocks compressed.
+// Does NOT mutate the original array — the caller's in-memory state stays intact.
+function compressOldToolResults(messages: any[]): any[] {
+  // Build tool_use_id → {name, input} from all assistant messages
+  const toolUseMap = new Map<string, { name: string; input: Record<string, unknown> }>();
+  for (const msg of messages) {
+    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+      for (const block of msg.content as any[]) {
+        if (block.type === 'tool_use') {
+          toolUseMap.set(block.id as string, {
+            name: block.name as string,
+            input: (block.input as Record<string, unknown>) ?? {},
+          });
+        }
+      }
+    }
+  }
+
+  // Find the index of the LAST user message whose content is a tool_result array.
+  // This is the most recent closed turn — keep it uncompressed.
+  let lastToolResultIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (
+      msg.role === 'user' &&
+      Array.isArray(msg.content) &&
+      (msg.content as any[]).some((b: any) => b.type === 'tool_result')
+    ) {
+      lastToolResultIdx = i;
+      break;
+    }
+  }
+
+  // Nothing old to compress (0 or 1 tool_result messages total)
+  if (lastToolResultIdx <= 0) return messages;
+
+  let compressedChars = 0;
+  const result = messages.map((msg, idx) => {
+    // Keep most-recent tool_result message and all non-tool-result messages intact
+    if (
+      idx === lastToolResultIdx ||
+      msg.role !== 'user' ||
+      !Array.isArray(msg.content) ||
+      !(msg.content as any[]).some((b: any) => b.type === 'tool_result')
+    ) {
+      return msg;
+    }
+
+    const compressedContent = (msg.content as any[]).map((block: any) => {
+      if (
+        block.type !== 'tool_result' ||
+        typeof block.content !== 'string' ||
+        block.content.length <= TOOL_RESULT_COMPRESS_THRESHOLD
+      ) {
+        return block;
+      }
+      compressedChars += block.content.length;
+      return {
+        ...block,
+        content: summarizeToolResult(
+          block.content as string,
+          toolUseMap.get(block.tool_use_id as string),
+        ),
+      };
+    });
+
+    return { ...msg, content: compressedContent };
+  });
+
+  if (compressedChars > 2000) {
+    console.log(`[compressOldToolResults] −${compressedChars} chars de tool_results de turnos pasados`);
+  }
+
+  return result;
+}
+
 function buildTriagePrompt(cacheHint: string): string {
   return `Responde de forma breve y directa, usando SOLO tu conocimiento general — no tienes acceso a herramientas ni al código real del repo.
 ${cacheHint}
@@ -4652,7 +4777,9 @@ async function runHaikuTier(
         tools: (allowPatch ? CHAT_TOOLS : CHAT_TOOLS.filter(t => t.name !== 'propose_patch' && t.name !== 'apply_patch')).map((t, i, arr) =>
           i === arr.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t
         ),
-        messages,
+        // Compress stale tool_result blocks from past turns before sending —
+        // keeps the current turn's results intact (last tool_result message).
+        messages: compressOldToolResults(messages),
       }),
     });
 
@@ -5001,7 +5128,8 @@ RESTRICCIÓN: NO uses grep_code, list_files ni read_file — el contexto ya est�
         tools: SONNET_SYNTHESIS_TOOLS.map((t, i) =>
           i === SONNET_SYNTHESIS_TOOLS.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t
         ),
-        messages,
+        // Compress stale tool_result blocks from past turns before sending.
+        messages: compressOldToolResults(messages),
       }),
     });
 
@@ -5046,7 +5174,9 @@ RESTRICCIÓN: NO uses grep_code, list_files ni read_file — el contexto ya est�
     messages.push({ role: 'user', content: toolResults });
   }
 
-  await saveChatHistory(sessionId, messages);
+  // Persist compressed history — stale tool_result blocks don't need to be
+  // reloaded verbatim in future sessions; summaries are sufficient context.
+  await saveChatHistory(sessionId, compressOldToolResults(messages));
 }
 
 // ── GET /chat/history/:sessionId ─────────────────────────────────────────────
