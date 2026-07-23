@@ -1,0 +1,154 @@
+# Prompt para Replit Agent — FAST mode: cerrar alucinación en la rama "chat" del clasificador
+
+## Bug encontrado (más grave que el de follow-up — prioridad alta)
+
+Al preguntar, en una sesión NUEVA (sin historial previo), "¿cómo funciona la señal S6?",
+el sistema respondió:
+
+> "La señal S6 se refiere a la función de trailing stop, que es una orden de stop loss
+> que se ajusta automáticamente según el movimiento del precio del activo..."
+
+Esto es **incorrecto y no viene del código real** — S6 es una señal distinta (Fair Value
+Gap / `checkS6Bull`), no trailing stop. No hay ningún log de búsqueda en la respuesta
+(sin "🧠 Paso 1", sin símbolo encontrado, sin badge de HIGH/MEDIUM CONFIDENCE) — lo que
+confirma que `classifyAndRespondFast` clasificó la pregunta como `type: 'chat'` en vez de
+`type: 'search'`, y el modelo, en la rama de charla, **generó una respuesta con
+conocimiento general/inventado** en vez de negarse a responder o forzar una búsqueda.
+
+## Causa raíz
+
+El prompt de `classifyAndRespondFast` (agregado en el fix anterior) tiene un límite (a)
+charla / (b) búsqueda técnica demasiado laxo para preguntas del tipo "¿cómo funciona X?"
+cuando X es un término de dominio propio del repo (S1–S7, FVG, circuit breaker, trailing
+stop, callbackRatio, etc.). A diferencia del clasificador de CHAT mode (`buildTriagePrompt`),
+que ya tiene resuelta esta ambigüedad con una regla explícita de "término de dominio →
+siempre NEEDS_TOOLS, nunca completar con conocimiento genérico", el clasificador nuevo de
+FAST no heredó esa regla.
+
+Además, el diseño actual es más peligroso que el viejo triage de CHAT: en CHAT, el
+triage solo decide sí/no buscar (nunca responde el contenido técnico él mismo si no está
+seguro). En FAST, la rama "chat" de `classifyAndRespondFast` SÍ genera la respuesta final
+directamente — así que una mala clasificación no solo pierde la oportunidad de buscar,
+sino que **inventa una respuesta con apariencia de autoridad**, sin ningún indicador visual
+de que no vino de código real.
+
+## Objetivo del fix
+
+1. Agregar una regla de dominio explícita al prompt de `classifyAndRespondFast`, igual en
+   espíritu a la que ya existe en `buildTriagePrompt`, para que cualquier término propio
+   del proyecto (señales S1–S7, indicadores de trading, nombres de función/variable
+   probables) fuerce `type: 'search'`, nunca `type: 'chat'`.
+2. Prohibir explícitamente que la rama `chat` responda con contenido técnico/de dominio
+   inventado — su único propósito es charla social/meta genuina.
+3. Ante ambigüedad, el default debe ser `search`, no `chat` — es mucho más barato buscar
+   de más (el pipeline ya maneja bien el caso "no encontré resultados") que alucinar.
+
+## Dónde tocar
+
+Misma función `classifyAndRespondFast` agregada en el fix anterior (cerca de
+`classifyIntentWithAI`, en el router de `/generate`).
+
+## Cambio 1 — reforzar el prompt de `classifyAndRespondFast`
+
+Ubicar el `systemPrompt` actual dentro de `classifyAndRespondFast` y reemplazarlo por
+esta versión (mantiene la estructura JSON de salida, agrega la regla de dominio y la
+prohibición de alucinar):
+
+```ts
+const systemPrompt = `Sos QUARK en modo FAST. Analizás el mensaje del usuario en el
+contexto de la conversación reciente y decidís en un solo paso:
+
+(a) Es CHARLA GENUINA — saludo, agradecimiento, pregunta puramente social o meta sobre
+    vos mismo como asistente (ej: "¿cómo estás?", "¿puedes mantener una conversación
+    coherente?", "¿en qué me podés ayudar en general?", "gracias", "genial"), SIN
+    ninguna referencia a código, señales, indicadores, funciones, archivos o comportamiento
+    del proyecto.
+    → Respondé directo, breve y natural, en el campo "answer". NUNCA menciones
+      herramientas, búsquedas ni código en esta respuesta.
+
+(b) Es una PREGUNTA TÉCNICA sobre el repo — pide entender, diagnosticar o ubicar
+    código real, incluyendo continuaciones técnicas como "¿por qué?" después de una
+    respuesta sobre código.
+    → Extraé 1-4 identificadores técnicos (camelCase/CONSTANT_CASE/snake_case) que
+      probablemente aparecen en el código relacionado, en el campo "terms".
+
+REGLA OBLIGATORIA — TÉRMINOS DE DOMINIO DEL PROYECTO (sin excepción):
+Si el mensaje menciona CUALQUIER término técnico de trading o del dominio de este
+proyecto — incluyendo pero no limitado a: señales (S1, S2, S3, S4, S5, S6, S7),
+FVG, imbalance, CHOCH, BOS, EMA, SMA, RSI, MACD, ADX, ATR, SuperTrend, SAR, Score,
+RVOL, trailing stop, circuit breaker, streak, screener, scanner, bias, o cualquier
+nombre que suene a función/variable de código — SIEMPRE es (b), NUNCA (a), sin importar
+qué tan conversacional suene la pregunta ("¿cómo funciona X?", "¿qué es X?", "explícame X").
+
+PROHIBIDO ABSOLUTO — ANTI-ALUCINACIÓN:
+Nunca respondas en el campo "answer" (rama chat) ninguna afirmación sobre CÓMO
+funciona algo del proyecto, qué hace una señal, qué significa una función, o cualquier
+dato técnico específico de este repo. Si no estás seguro de si el mensaje es charla o
+pregunta técnica, elegí SIEMPRE (b) — es preferible buscar de más que inventar una
+respuesta que suene correcta pero no venga del código real. Una mala clasificación hacia
+(b) solo cuesta una búsqueda sin resultados; una mala clasificación hacia (a) puede
+producir información falsa presentada como si fuera un hecho verificado.
+
+HISTORIAL RECIENTE DE LA SESIÓN:
+${histStr || '(sin historial previo)'}
+
+Respondé ÚNICAMENTE con este JSON, sin markdown ni texto adicional:
+{"type": "chat", "answer": "..."}
+o
+{"type": "search", "terms": ["...", "..."]}`;
+```
+
+## Cambio 2 — capa de seguridad adicional (defensa en profundidad, no confiar solo en el prompt)
+
+Los prompts pueden fallar. Agregar una validación programática después de recibir la
+respuesta parseada de Groq, ANTES de devolver `{ type: 'chat', answer }`:
+
+```ts
+// Lista de términos de dominio — mismo espíritu que el ANALYSIS_KEYWORDS ya existente
+// en el archivo, reusarlo si el nombre/contenido coincide en vez de duplicar.
+const DOMAIN_TERMS_RE = /\b(señal|signal|S1|S2|S3|S4|S5|S6|S7|FVG|imbalance|CHOCH|BOS|EMA|SMA|RSI|MACD|ADX|ATR|SuperTrend|SAR|Score|RVOL|trailing|circuit\s*breaker|streak|screener|scanner|bias)\b/i;
+
+// ... dentro de classifyAndRespondFast, después de parsear `parsed`:
+if (parsed.type === 'chat' && DOMAIN_TERMS_RE.test(prompt)) {
+  // El clasificador dijo "chat" pero el mensaje tiene vocabulario de dominio —
+  // no confiar en la clasificación, forzar 'search' con extracción de keywords
+  // como fallback (ya existe extractSearchKeywords en el archivo).
+  console.warn('[classifyAndRespondFast] override: clasificado como chat pero contiene término de dominio, forzando search');
+  return { type: 'search', terms: extractSearchKeywords(prompt) };
+}
+```
+
+Esta validación debe ir tanto en el camino exitoso (JSON parseado bien) como puede omitirse
+en el catch/fallback existente, porque ese fallback ya devuelve `search` por defecto.
+
+## Cambio 3 — mismo problema puede existir en `runChatTurn` (CHAT mode) — VERIFICAR, no asumir
+
+`buildTriagePrompt` en CHAT mode ya tiene la regla de dominio (`REGLA OBLIGATORIA —
+TÉRMINOS DE TRADING Y DOMINIO`), así que en principio CHAT mode no debería sufrir este
+mismo bug. No hacer cambios ahí — solo dejar constancia de que YA tiene esa protección,
+para no duplicar trabajo. Si en pruebas posteriores aparece el mismo síntoma en el tab de
+CHAT, sería un bug distinto (la regla existe pero algo la está evadiendo) y no se cubre
+con este prompt.
+
+## Qué NO tocar
+
+- El resto de `classifyAndRespondFast` (manejo de historial, shape de salida, fallback
+  sin Groq keys) queda igual.
+- El fix de follow-up del prompt anterior (reconexión con `_isFollowUp`, búsqueda
+  ampliada) no se toca — es independiente de este bug.
+- DEEP mode y GENERATION PATH no se tocan.
+
+## Verificación después del cambio
+
+En una sesión NUEVA (sin historial):
+
+1. `"¿Cómo funciona la señal S6?"` → debe clasificarse como `search`, mostrar el pipeline
+   completo (🧠 Paso 1, símbolo encontrado, etc.) y responder basado en `checkS6Bull` real,
+   no en trailing stop ni en ningún otro tema.
+2. `"¿Cómo estás?"` → debe seguir clasificándose como `chat` (no debe romperse la
+   detección de charla genuina por la regla nueva).
+3. `"¿Puedes mantener una conversación coherente?"` → debe seguir siendo `chat` (mismo
+   caso ya verificado en el fix anterior — confirmar que no regresionó).
+4. Repetir la prueba 1 pero con otros términos de dominio del repo (ej. "¿qué hace el
+   circuit breaker?", "¿cómo se calcula el RVOL?") para confirmar que la regla cubre el
+   vocabulario real usado, no solo el ejemplo de S6.

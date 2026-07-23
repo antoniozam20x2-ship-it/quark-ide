@@ -680,13 +680,39 @@ async function classifyAndRespondFast(
     return { type: 'search', terms: extractSearchKeywords(prompt) };
   }
 
-  const systemPrompt = `Sos QUARK en modo FAST. Analizás el mensaje del usuario en el contexto de la conversación reciente y decidís en un solo paso:
+  const systemPrompt = `Sos QUARK en modo FAST. Analizás el mensaje del usuario en el
+contexto de la conversación reciente y decidís en un solo paso:
 
-(a) Es CHARLA — saludo, agradecimiento, pregunta social o meta sobre vos mismo (ej: "¿cómo estás?", "¿puedes mantener una conversación coherente?", "¿en qué me podés ayudar?", "gracias", "genial"), o una continuación conversacional que NO requiere leer código.
-    → Respondé directo, breve y natural, en el campo "answer". NUNCA menciones herramientas, búsquedas ni código en esta respuesta.
+(a) Es CHARLA GENUINA — saludo, agradecimiento, pregunta puramente social o meta sobre
+    vos mismo como asistente (ej: "¿cómo estás?", "¿puedes mantener una conversación
+    coherente?", "¿en qué me podés ayudar en general?", "gracias", "genial"), SIN
+    ninguna referencia a código, señales, indicadores, funciones, archivos o comportamiento
+    del proyecto.
+    → Respondé directo, breve y natural, en el campo "answer". NUNCA menciones
+      herramientas, búsquedas ni código en esta respuesta.
 
-(b) Es una PREGUNTA TÉCNICA sobre el repo — pide entender, diagnosticar o ubicar código real (funciones, señales, comportamiento del bot, archivos, etc.), incluyendo continuaciones técnicas como "¿por qué?" después de una respuesta sobre código.
-    → Extraé 1-4 identificadores técnicos (camelCase/CONSTANT_CASE/snake_case) que probablemente aparecen en el código relacionado, en el campo "terms".
+(b) Es una PREGUNTA TÉCNICA sobre el repo — pide entender, diagnosticar o ubicar
+    código real, incluyendo continuaciones técnicas como "¿por qué?" después de una
+    respuesta sobre código.
+    → Extraé 1-4 identificadores técnicos (camelCase/CONSTANT_CASE/snake_case) que
+      probablemente aparecen en el código relacionado, en el campo "terms".
+
+REGLA OBLIGATORIA — TÉRMINOS DE DOMINIO DEL PROYECTO (sin excepción):
+Si el mensaje menciona CUALQUIER término técnico de trading o del dominio de este
+proyecto — incluyendo pero no limitado a: señales (S1, S2, S3, S4, S5, S6, S7),
+FVG, imbalance, CHOCH, BOS, EMA, SMA, RSI, MACD, ADX, ATR, SuperTrend, SAR, Score,
+RVOL, trailing stop, circuit breaker, streak, screener, scanner, bias, o cualquier
+nombre que suene a función/variable de código — SIEMPRE es (b), NUNCA (a), sin importar
+qué tan conversacional suene la pregunta ("¿cómo funciona X?", "¿qué es X?", "explícame X").
+
+PROHIBIDO ABSOLUTO — ANTI-ALUCINACIÓN:
+Nunca respondas en el campo "answer" (rama chat) ninguna afirmación sobre CÓMO
+funciona algo del proyecto, qué hace una señal, qué significa una función, o cualquier
+dato técnico específico de este repo. Si no estás seguro de si el mensaje es charla o
+pregunta técnica, elegí SIEMPRE (b) — es preferible buscar de más que inventar una
+respuesta que suene correcta pero no venga del código real. Una mala clasificación hacia
+(b) solo cuesta una búsqueda sin resultados; una mala clasificación hacia (a) puede
+producir información falsa presentada como si fuera un hecho verificado.
 
 HISTORIAL RECIENTE DE LA SESIÓN:
 ${histStr || '(sin historial previo)'}
@@ -696,12 +722,21 @@ Respondé ÚNICAMENTE con este JSON, sin markdown ni texto adicional:
 o
 {"type": "search", "terms": ["...", "..."]}`;
 
+  // Regex de dominio — defensa programática independiente del prompt
+  const DOMAIN_TERMS_RE = /\b(se[ñn]al|signal|S[1-7]|FVG|imbalance|CHOCH|BOS|EMA|SMA|RSI|MACD|ADX|ATR|SuperTrend|SAR|Score|RVOL|trailing|circuit\s*breaker|streak|screener|scanner|bias)\b/i;
+
   try {
     const raw = await callGroqAgent(prompt, systemPrompt, 300);
     const cleaned = raw.trim().replace(/^```json\s*/i, '').replace(/```\s*$/, '');
     const parsed = JSON.parse(cleaned) as FastClassification;
 
     if (parsed.type === 'chat' && typeof parsed.answer === 'string') {
+      // Capa de seguridad: si el clasificador dijo "chat" pero el mensaje
+      // contiene vocabulario de dominio, no confiar — forzar search.
+      if (DOMAIN_TERMS_RE.test(prompt)) {
+        console.warn('[classifyAndRespondFast] override: clasificado como chat pero contiene término de dominio, forzando search');
+        return { type: 'search', terms: extractSearchKeywords(prompt) };
+      }
       return parsed;
     }
     if (parsed.type === 'search' && Array.isArray(parsed.terms) && parsed.terms.length > 0) {
