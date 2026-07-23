@@ -1,0 +1,159 @@
+# Prompt para Replit Agent — FAST mode: eliminar fuga de prompt en el clasificador
+
+## Bug encontrado (nuevo, distinto a los dos anteriores)
+
+Secuencia real, en una sesión NUEVA:
+1. Usuario: "cómo funciona trailingstop" → responde bien, HIGH CONFIDENCE, sobre
+   `placeTrailingStop` real.
+2. Usuario: "por qué" → el sistema detecta correctamente que es follow-up, evalúa que
+   el contexto cacheado no alcanza, y dispara una búsqueda ampliada con estos términos:
+
+   `🧠 Paso 1 — buscando en índice de símbolos: [trailingstop, S6, placeTrailingStop]`
+
+`S6` no tiene ninguna relación con esta sesión — nunca se mencionó en ningún mensaje
+anterior. No puede venir del historial real de la conversación.
+
+## Causa raíz
+
+El prompt de `classifyAndRespondFast` (aplicado en el fix de anti-alucinación) incluye
+esta lista de ejemplos dentro de las instrucciones del sistema:
+
+```
+señales (S1, S2, S3, S4, S5, S6, S7), FVG, imbalance, CHOCH, BOS, EMA, SMA, RSI, MACD,
+ADX, ATR, SuperTrend, SAR, Score, RVOL, trailing stop, circuit breaker, streak, screener,
+scanner, bias
+```
+
+Con modelos rápidos vía Groq (Llama 3.3 70B), es un problema conocido de fuga de prompt:
+cuando se le pide al modelo "extraé términos técnicos relacionados" y las propias
+instrucciones del sistema contienen una lista literal de ejemplos de términos técnicos,
+el modelo puede copiar uno de esos ejemplos hacia el campo de salida — especialmente en
+mensajes cortos y ambiguos como "por qué", donde hay poco texto real del usuario para
+anclarse y el modelo "rellena" con contenido de las instrucciones en vez de extraer
+del mensaje real.
+
+Esto pasó en la rama de búsqueda ampliada del fix de follow-up, que reusa
+`classification.terms ?? fastKeywords` — el `classification.terms` de ese turno ya
+traía `S6` filtrado desde el propio prompt del clasificador.
+
+## Objetivo del fix
+
+Eliminar cualquier ejemplo literal y copiable de identificadores de señales del prompt
+del clasificador, sin perder la capacidad de detectar términos de dominio (necesaria
+para el fix de anti-alucinación anterior). La regla debe describir el *patrón* sin dar
+nombres concretos que el modelo pueda repetir por error.
+
+## Dónde tocar
+
+Misma función `classifyAndRespondFast`, específicamente el bloque
+`REGLA OBLIGATORIA — TÉRMINOS DE DOMINIO DEL PROYECTO` agregado en el fix de
+anti-alucinación anterior.
+
+## Cambio 1 — reescribir la regla de dominio sin ejemplos literales de señales
+
+Ubicar este bloque dentro del `systemPrompt`:
+
+```
+REGLA OBLIGATORIA — TÉRMINOS DE DOMINIO DEL PROYECTO (sin excepción):
+Si el mensaje menciona CUALQUIER término técnico de trading o del dominio de este
+proyecto — incluyendo pero no limitado a: señales (S1, S2, S3, S4, S5, S6, S7),
+FVG, imbalance, CHOCH, BOS, EMA, SMA, RSI, MACD, ADX, ATR, SuperTrend, SAR, Score,
+RVOL, trailing stop, circuit breaker, streak, screener, scanner, bias, o cualquier
+nombre que suene a función/variable de código — SIEMPRE es (b), NUNCA (a), sin importar
+qué tan conversacional suene la pregunta ("¿cómo funciona X?", "¿qué es X?", "explícame X").
+```
+
+Reemplazarlo por:
+
+```
+REGLA OBLIGATORIA — TÉRMINOS DE DOMINIO DEL PROYECTO (sin excepción):
+Si el mensaje menciona un término técnico de trading, un identificador de señal con
+formato letra+número (cualquier letra seguida de un dígito, ej. una señal etiquetada
+con una letra y un número), un indicador técnico de mercado, un nombre que suene a
+función/variable de código, o cualquier concepto específico de este proyecto de
+trading — SIEMPRE es (b), NUNCA (a), sin importar qué tan conversacional suene la
+pregunta ("¿cómo funciona X?", "¿qué es X?", "explícame X").
+
+IMPORTANTE: esta regla describe un PATRÓN a reconocer en el MENSAJE DEL USUARIO, no una
+lista de valores a repetir. Nunca copies ningún término de esta instrucción hacia el
+campo "terms" de tu respuesta — los términos de salida deben extraerse EXCLUSIVAMENTE
+del texto real que escribió el usuario (y del historial de sesión si es follow-up). Si
+el mensaje del usuario no contiene ningún identificador técnico explícito (ej. "por qué"
+sin más contexto), dejá que el término de continuación se resuelva por el historial de
+sesión provisto — no inventes ni completes con ningún término que no haya aparecido
+literalmente en el mensaje o en el historial.
+```
+
+## Cambio 2 — actualizar también la capa de seguridad programática (regex) del fix anterior
+
+El `DOMAIN_TERMS_RE` agregado como defensa en profundidad también lista señales
+literales (`S1|S2|...|S7`) — ese regex se queda igual (sirve para DETECTAR si el mensaje
+del usuario tiene vocabulario de dominio, no para generar salida, así que no tiene el
+mismo riesgo de fuga). No modificar `DOMAIN_TERMS_RE`. El problema estaba únicamente en
+el prompt de instrucciones que ve el modelo, no en el regex de post-validación.
+
+## Cambio 3 — endurecer el fallback de búsqueda ampliada del fix de follow-up
+
+En el bloque de búsqueda ampliada del fix de follow-up (`_isFollowUp` insuficiente),
+donde se arma `expandedPattern`:
+
+```ts
+const expandedPattern = (classification.terms ?? fastKeywords).join('|');
+```
+
+Agregar una validación simple: si algún término de `classification.terms` NO aparece
+(ni como substring, case-insensitive) en el mensaje actual del usuario NI en el
+historial de sesión reciente (`fastHistory`), descartarlo antes de armar el patrón de
+búsqueda — es señal de que pudo colarse por fuga de prompt u otro error de extracción:
+
+```ts
+function filterGroundedTerms(terms: string[], currentPrompt: string, history: any[]): string[] {
+  const historyText = history
+    .map((m: any) => typeof m.content === 'string' ? m.content : '')
+    .join(' ')
+    .toLowerCase();
+  const promptLower = currentPrompt.toLowerCase();
+  return terms.filter(t => {
+    const tLower = t.toLowerCase();
+    return promptLower.includes(tLower) || historyText.includes(tLower);
+  });
+}
+```
+
+Aplicar en el punto donde se arma `expandedPattern`:
+
+```ts
+const groundedTerms = filterGroundedTerms(classification.terms ?? fastKeywords, prompt, fastHistory);
+const expandedPattern = (groundedTerms.length > 0 ? groundedTerms : (classification.terms ?? fastKeywords)).join('|');
+```
+
+Nota: esta validación es una salvaguarda adicional, no un reemplazo del Cambio 1 — el
+prompt reescrito debería evitar la fuga en origen; este filtro solo la atrapa si vuelve
+a pasar por cualquier otra causa (ej. otro ejemplo agregado a futuro en algún prompt).
+
+## Qué NO tocar
+
+- El resto de `classifyAndRespondFast` (historial, shape de salida) no cambia.
+- `DOMAIN_TERMS_RE` (regex de post-validación del fix anterior) no cambia.
+- El resto del pipeline de follow-up (detección de `_isFollowUp`, mensaje de "contexto
+  no cubre", búsqueda ampliada) no cambia — solo se filtra qué términos alimentan esa
+  búsqueda.
+
+## Verificación después del cambio
+
+En una sesión NUEVA:
+
+1. `"cómo funciona trailingstop"` → responde bien, HIGH CONFIDENCE (regresión, debe
+   seguir funcionando igual que antes).
+2. `"por qué"` inmediatamente después → los términos de búsqueda ampliada deben incluir
+   SOLO variantes de `trailingstop`/`placeTrailingStop`/`callbackRatio` (lo real de la
+   sesión) — NO debe aparecer `S6` ni ningún otro término de señal que no se haya
+   mencionado.
+3. Repetir con otra pregunta inicial distinta (ej. "cómo funciona el circuit breaker")
+   seguida de "por qué", para confirmar que no aparece ningún término cruzado de otras
+   partes del prompt (ej. que no se cuele "RVOL" o "FVG" en una sesión sobre circuit
+   breaker).
+4. Confirmar que "¿cómo funciona la señal S6?" (el caso original del fix de
+   anti-alucinación) sigue clasificándose correctamente como `search` y buscando S6 real
+   — para asegurarse de que la reescritura del prompt no debilitó la regla de dominio,
+   solo le sacó los ejemplos copiables.

@@ -659,6 +659,22 @@ type FastClassification =
   | { type: 'chat'; answer: string }
   | { type: 'search'; terms: string[] };
 
+/**
+ * Filtra términos de clasificación que no aparecen ni en el mensaje actual
+ * ni en el historial de sesión — descarta fugas de prompt del clasificador.
+ */
+function filterGroundedTerms(terms: string[], currentPrompt: string, history: any[]): string[] {
+  const historyText = history
+    .map((m: any) => typeof m.content === 'string' ? m.content : '')
+    .join(' ')
+    .toLowerCase();
+  const promptLower = currentPrompt.toLowerCase();
+  return terms.filter(t => {
+    const tLower = t.toLowerCase();
+    return promptLower.includes(tLower) || historyText.includes(tLower);
+  });
+}
+
 async function classifyAndRespondFast(
   prompt: string,
   fastHistory: any[],
@@ -698,12 +714,21 @@ contexto de la conversación reciente y decidís en un solo paso:
       probablemente aparecen en el código relacionado, en el campo "terms".
 
 REGLA OBLIGATORIA — TÉRMINOS DE DOMINIO DEL PROYECTO (sin excepción):
-Si el mensaje menciona CUALQUIER término técnico de trading o del dominio de este
-proyecto — incluyendo pero no limitado a: señales (S1, S2, S3, S4, S5, S6, S7),
-FVG, imbalance, CHOCH, BOS, EMA, SMA, RSI, MACD, ADX, ATR, SuperTrend, SAR, Score,
-RVOL, trailing stop, circuit breaker, streak, screener, scanner, bias, o cualquier
-nombre que suene a función/variable de código — SIEMPRE es (b), NUNCA (a), sin importar
-qué tan conversacional suene la pregunta ("¿cómo funciona X?", "¿qué es X?", "explícame X").
+Si el mensaje menciona un término técnico de trading, un identificador de señal con
+formato letra+número (cualquier letra seguida de un dígito, ej. una señal etiquetada
+con una letra y un número), un indicador técnico de mercado, un nombre que suene a
+función/variable de código, o cualquier concepto específico de este proyecto de
+trading — SIEMPRE es (b), NUNCA (a), sin importar qué tan conversacional suene la
+pregunta ("¿cómo funciona X?", "¿qué es X?", "explícame X").
+
+IMPORTANTE: esta regla describe un PATRÓN a reconocer en el MENSAJE DEL USUARIO, no una
+lista de valores a repetir. Nunca copies ningún término de esta instrucción hacia el
+campo "terms" de tu respuesta — los términos de salida deben extraerse EXCLUSIVAMENTE
+del texto real que escribió el usuario (y del historial de sesión si es follow-up). Si
+el mensaje del usuario no contiene ningún identificador técnico explícito (ej. "por qué"
+sin más contexto), dejá que el término de continuación se resuelva por el historial de
+sesión provisto — no inventes ni completes con ningún término que no haya aparecido
+literalmente en el mensaje o en el historial.
 
 PROHIBIDO ABSOLUTO — ANTI-ALUCINACIÓN:
 Nunca respondas en el campo "answer" (rama chat) ninguna afirmación sobre CÓMO
@@ -1669,7 +1694,12 @@ Si no alcanza para responder, decilo en una oración y sugerí DEEP mode.`;
             send('action', { text: '🔍 El contexto ya leído no cubre esta pregunta — buscando en archivos adicionales...' });
             const alreadyReadPath = _lastFastUser?.path ?? (_lastFastAss as any)?.path;
             try {
-              const { matches: fuMatches } = await searchWithTestFallback(fastPattern, repo, send);
+              // Filtrar términos que no aparecen en el mensaje ni en el historial —
+              // descarta cualquier fuga de prompt del clasificador (ej. S6 colándose en
+              // una sesión sobre trailingstop por ser ejemplo en las instrucciones).
+              const groundedTerms = filterGroundedTerms(fastKeywords, prompt, fastHistory);
+              const fuPattern = (groundedTerms.length > 0 ? groundedTerms : fastKeywords).join('|');
+              const { matches: fuMatches } = await searchWithTestFallback(fuPattern, repo, send);
               const fuNewMatch = fuMatches.find(
                 m => m.path !== alreadyReadPath && !isTestMatch(m.path, m.text ?? ''),
               );
