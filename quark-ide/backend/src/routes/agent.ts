@@ -5277,7 +5277,14 @@ async function runChatTurn(
                     512,
                   );
                   send('chat_message', { text: groqSynthesis });
-                  messages.push({ role: 'assistant', content: [{ type: 'text', text: groqSynthesis }] });
+                  // Persist the exact file path(s) from preEv in a structured tag so
+                  // subsequent Haiku turns can call read_file with the full path instead
+                  // of trying to reconstruct it from free-text conversational output.
+                  // The tag is stored in DB history only — the user sees only groqSynthesis.
+                  const _evPaths = preEv.map(e => e.path).join('\n');
+                  const _assistantWithPaths =
+                    groqSynthesis + `\n\n<evidence_files>\n${_evPaths}\n</evidence_files>`;
+                  messages.push({ role: 'assistant', content: [{ type: 'text', text: _assistantWithPaths }] });
                   await saveChatHistory(sessionId, messages);
                   send('confidence', {
                     level: 'medium',
