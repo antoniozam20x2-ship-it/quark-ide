@@ -1,0 +1,224 @@
+# Prompt para Replit Agent — FAST mode: fusionar clasificación conversacional + búsqueda
+
+## Contexto del problema
+
+En el router de `/generate` (FAST mode, `deepMode === false`), el flujo actual es:
+
+1. `isTrivialMessage(prompt)` — regex fija que solo atrapa saludos/agradecimientos/confirmaciones
+   de una lista cerrada (hola, gracias, ok, dale, etc.)
+2. Si no matchea → `classifyIntentWithAI(prompt)` clasifica `read` vs `modify`
+3. Si es `read` → dispara búsqueda de símbolos con los términos extraídos del prompt
+
+**Bug real**: cualquier mensaje conversacional que no esté en la lista fija de regex
+(ej: "¿puedes mantener una conversación coherente?", "¿en qué me puedes ayudar?",
+cualquier chit-chat de más de 20 caracteres) no es detectado como trivial, cae en
+`classifyIntentWithAI`, se clasifica como `read`, y dispara una búsqueda literal de
+palabras sueltas del mensaje como si fueran símbolos de código — devolviendo
+"No encontré referencias directas a esos términos" en vez de responder conversacionalmente.
+
+No es un bug puntual — es una clase de bugs, porque el gate depende de una lista blanca
+de patrones que nunca cubre todos los casos de charla real.
+
+## Objetivo del cambio
+
+Reemplazar el gate de dos pasos (`isTrivialMessage` → `classifyIntentWithAI`) por
+**una sola llamada a Groq** que reciba el mensaje actual + el historial reciente de la
+sesión FAST, y devuelva en un mismo paso:
+
+- Si es conversacional: la respuesta directa lista para enviar.
+- Si necesita código: los términos de búsqueda a usar.
+
+Esto elimina la doble clasificación y el punto de fragilidad de las regex, y usa el
+historial de sesión para desambiguar casos como "¿por qué?" (continuación técnica) vs
+"¿cómo estás?" (charla), en vez de depender de listas de patrones separadas para cada uno.
+
+## Dónde tocar
+
+Archivo de rutas del agente (el mismo que contiene `router.post('/generate', ...)`,
+`isTrivialMessage`, `classifyIntentWithAI`, `loadFastHistory`, `callGroqAgent`).
+
+## Cambio 1 — nueva función `classifyAndRespondFast`
+
+Agregarla cerca de `classifyIntentWithAI` (misma zona del archivo). Reemplaza la
+necesidad de `isTrivialMessage` en el flujo de FAST mode (dejar `isTrivialMessage` intacta
+para donde se siga usando en otros lados, ej. `runChatTurn`, si aplica — no tocar esos usos).
+
+```ts
+type FastClassification =
+  | { type: 'chat'; answer: string }
+  | { type: 'search'; terms: string[] };
+
+async function classifyAndRespondFast(
+  prompt: string,
+  fastHistory: any[],
+): Promise<FastClassification> {
+  const keys = getGroqKeys();
+
+  // Historial reciente en formato legible para el prompt (últimos 3 turnos)
+  const histStr = fastHistory.slice(-6)
+    .map((m: any) => `${m.role === 'user' ? 'Usuario' : 'Asistente'}: ${
+      typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+    }`)
+    .join('\n');
+
+  // Fallback sin Groq: comportamiento actual (regex + intent) para no romper
+  // el flujo si no hay keys configuradas
+  if (keys.length === 0) {
+    if (isTrivialMessage(prompt)) {
+      return { type: 'chat', answer: '¡Hola! ¿En qué puedo ayudarte con el código?' };
+    }
+    return { type: 'search', terms: extractSearchKeywords(prompt) };
+  }
+
+  const systemPrompt = `Sos QUARK en modo FAST. Analizás el mensaje del usuario en el
+contexto de la conversación reciente y decidís en un solo paso:
+
+(a) Es CHARLA — saludo, agradecimiento, pregunta social o meta sobre vos mismo
+    (ej: "¿cómo estás?", "¿puedes mantener una conversación coherente?",
+    "¿en qué me podés ayudar?", "gracias", "genial"), o una continuación
+    conversacional que NO requiere leer código.
+    → Respondé directo, breve y natural, en el campo "answer". NUNCA menciones
+      herramientas, búsquedas ni código en esta respuesta.
+
+(b) Es una PREGUNTA TÉCNICA sobre el repo — pide entender, diagnosticar o ubicar
+    código real (funciones, señales, comportamiento del bot, archivos, etc.),
+    incluyendo continuaciones técnicas como "¿por qué?" después de una respuesta
+    sobre código.
+    → Extraé 1-4 identificadores técnicos (camelCase/CONSTANT_CASE/snake_case)
+      que probablemente aparecen en el código relacionado, en el campo "terms".
+
+HISTORIAL RECIENTE DE LA SESIÓN:
+${histStr || '(sin historial previo)'}
+
+Respondé ÚNICAMENTE con este JSON, sin markdown ni texto adicional:
+{"type": "chat", "answer": "..."}
+o
+{"type": "search", "terms": ["...", "..."]}`;
+
+  try {
+    const raw = await callGroqAgent(prompt, systemPrompt, 300);
+    const cleaned = raw.trim().replace(/^```json\s*/i, '').replace(/```\s*$/, '');
+    const parsed = JSON.parse(cleaned) as FastClassification;
+
+    if (parsed.type === 'chat' && typeof parsed.answer === 'string') {
+      return parsed;
+    }
+    if (parsed.type === 'search' && Array.isArray(parsed.terms) && parsed.terms.length > 0) {
+      return parsed;
+    }
+    throw new Error('shape inesperado');
+  } catch {
+    // Ante fallo de parseo/red: no bloquear investigación real — asumir
+    // que es técnico y dejar que el pipeline de búsqueda existente decida
+    return { type: 'search', terms: extractSearchKeywords(prompt) };
+  }
+}
+```
+
+## Cambio 2 — reemplazar el gate actual en `/generate`
+
+Ubicar este bloque (chequeo trivial actual, ANTES de `classifyIntentWithAI`):
+
+```ts
+if (isTrivialMessage(prompt)) {
+  const trivialPrompt = `Sos un asistente de programación...`;
+  const trivialAnswer = await callGroqAgent(prompt, trivialPrompt, 256);
+  send('action', { text: trivialAnswer });
+  send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+  await new Promise(r => setTimeout(r, 100));
+  res.end();
+  return;
+}
+```
+
+**Este bloque se elimina completo de `/generate`** (queda solo si `isTrivialMessage`
+se sigue usando en otro router — no tocar esos otros usos).
+
+## Cambio 3 — mover la clasificación fusionada al lugar correcto
+
+El nuevo `classifyAndRespondFast` necesita el historial de sesión (`loadFastHistory`),
+que actualmente solo se carga *dentro* del bloque `if (!deepMode)` del READ PATH, después
+de resolver `resolvedIntent`. Hay que adelantar esa carga y mover la clasificación fusionada
+al inicio del handler, antes de `classifyIntentWithAI`:
+
+Ubicar, dentro de `router.post('/generate', ...)`, el punto justo después de resolver
+`prompt` y `repo` (antes de `EXECUTION_KEYWORDS` o al inicio del `try`), e insertar:
+
+```ts
+// ── Clasificación fusionada: charla vs búsqueda técnica (reemplaza isTrivialMessage) ──
+if (!deepMode) {
+  const fastHistoryForClassify = sessionId ? await loadFastHistory(sessionId) : [];
+  const classification = await classifyAndRespondFast(prompt, fastHistoryForClassify);
+
+  if (classification.type === 'chat') {
+    send('action', { text: classification.answer });
+    send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+
+    // Persistir el turno en el historial FAST para que futuras preguntas
+    // técnicas tengan contexto de que hubo charla previa
+    if (sessionId) {
+      const updated = [
+        ...fastHistoryForClassify,
+        { role: 'user', content: prompt },
+        { role: 'assistant', content: classification.answer },
+      ];
+      await saveFastHistory(sessionId, updated).catch(() => {});
+    }
+
+    await new Promise(r => setTimeout(r, 100));
+    res.end();
+    return;
+  }
+
+  // classification.type === 'search' — guardar los términos para reusarlos
+  // más abajo en el READ PATH en vez de volver a llamar extractKeywordsForSearch
+  // desde cero (ver Cambio 4).
+}
+```
+
+**Importante**: esto debe ejecutarse solo cuando `!deepMode` (FAST), porque DEEP mode
+tiene su propio pipeline de exploración estructural que no necesita este gate.
+
+## Cambio 4 — evitar duplicar la extracción de keywords en el READ PATH
+
+Más abajo, dentro del bloque `if (!deepMode)` del READ PATH existente, hay una llamada a:
+
+```ts
+const fastKeywords = await extractKeywordsForSearch(prompt, repo);
+```
+
+Si ya tenemos `classification.terms` del paso anterior (Cambio 3), reusarlos ahí en vez
+de volver a pedirle a Groq que extraiga keywords — ahorra una llamada redundante:
+
+```ts
+const fastKeywords = classification.terms; // viene del Cambio 3, ya no se recalcula
+```
+
+Esto requiere que la variable `classification` (o directamente `terms`) esté disponible
+en el scope del READ PATH — ajustar el orden de declaración según haga falta, sin romper
+el resto del pipeline existente (fastPattern, searchWithTestFallback, etc. siguen igual).
+
+## Qué NO tocar
+
+- `classifyIntentWithAI` sigue existiendo para el flujo `modify`/GENERATION PATH —
+  no se elimina, solo deja de ser el primer paso para mensajes conversacionales en FAST READ.
+- `isTrivialMessage` no se borra del archivo — puede seguir usándose en `runChatTurn`
+  (CHAT mode) tal como está hoy; este cambio es exclusivo del router `/generate` (FAST).
+- DEEP mode (`deepMode === true`) no se toca.
+- El resto del pipeline de búsqueda (`searchWithTestFallback`, `readEnclosingFunction`,
+  `isFragmentInsufficient`, etc.) queda igual — solo cambia cómo se decide *si* se entra
+  a buscar y *con qué términos*.
+
+## Verificación después del cambio
+
+Probar en este orden, en la misma sesión (mismo `sessionId`) para confirmar que el
+historial se usa correctamente:
+
+1. `"Hola"` → debe responder charla, sin ningún log de búsqueda (🧠 Paso 1, 🔬 Paso 2, etc.)
+2. `"¿Puedes mantener una conversación coherente?"` → debe responder charla, no buscar
+   "conversación" ni "coherente" como símbolos.
+3. `"¿Cómo funciona el trailing stop?"` → debe clasificar como `search` y devolver
+   términos técnicos razonables (`trailingStop`, `TRAILING_STOP_ENABLED`, etc.), y
+   completar la búsqueda normalmente.
+4. `"¿Por qué?"` (inmediatamente después del punto 3) → debe reconocerse como
+   continuación técnica gracias al historial, no como charla.

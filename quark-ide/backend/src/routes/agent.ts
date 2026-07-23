@@ -650,6 +650,70 @@ Responde solo la palabra, sin explicación, sin puntuación.`;
   }
 }
 
+// ── Clasificación fusionada FAST: charla vs búsqueda técnica ─────────────────
+// Una sola llamada a Groq con historial de sesión. Reemplaza el ciclo
+// isTrivialMessage → classifyIntentWithAI para mensajes conversacionales en
+// el router /generate (FAST). DEEP mode y runChatTurn no se tocan.
+
+type FastClassification =
+  | { type: 'chat'; answer: string }
+  | { type: 'search'; terms: string[] };
+
+async function classifyAndRespondFast(
+  prompt: string,
+  fastHistory: any[],
+): Promise<FastClassification> {
+  const keys = getGroqKeys();
+
+  // Historial reciente en formato legible (últimos 3 turnos = 6 mensajes)
+  const histStr = fastHistory.slice(-6)
+    .map((m: any) => `${m.role === 'user' ? 'Usuario' : 'Asistente'}: ${
+      typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+    }`)
+    .join('\n');
+
+  // Fallback sin keys: comportamiento anterior para no romper el flujo
+  if (keys.length === 0) {
+    if (isTrivialMessage(prompt)) {
+      return { type: 'chat', answer: '¡Hola! ¿En qué puedo ayudarte con el código?' };
+    }
+    return { type: 'search', terms: extractSearchKeywords(prompt) };
+  }
+
+  const systemPrompt = `Sos QUARK en modo FAST. Analizás el mensaje del usuario en el contexto de la conversación reciente y decidís en un solo paso:
+
+(a) Es CHARLA — saludo, agradecimiento, pregunta social o meta sobre vos mismo (ej: "¿cómo estás?", "¿puedes mantener una conversación coherente?", "¿en qué me podés ayudar?", "gracias", "genial"), o una continuación conversacional que NO requiere leer código.
+    → Respondé directo, breve y natural, en el campo "answer". NUNCA menciones herramientas, búsquedas ni código en esta respuesta.
+
+(b) Es una PREGUNTA TÉCNICA sobre el repo — pide entender, diagnosticar o ubicar código real (funciones, señales, comportamiento del bot, archivos, etc.), incluyendo continuaciones técnicas como "¿por qué?" después de una respuesta sobre código.
+    → Extraé 1-4 identificadores técnicos (camelCase/CONSTANT_CASE/snake_case) que probablemente aparecen en el código relacionado, en el campo "terms".
+
+HISTORIAL RECIENTE DE LA SESIÓN:
+${histStr || '(sin historial previo)'}
+
+Respondé ÚNICAMENTE con este JSON, sin markdown ni texto adicional:
+{"type": "chat", "answer": "..."}
+o
+{"type": "search", "terms": ["...", "..."]}`;
+
+  try {
+    const raw = await callGroqAgent(prompt, systemPrompt, 300);
+    const cleaned = raw.trim().replace(/^```json\s*/i, '').replace(/```\s*$/, '');
+    const parsed = JSON.parse(cleaned) as FastClassification;
+
+    if (parsed.type === 'chat' && typeof parsed.answer === 'string') {
+      return parsed;
+    }
+    if (parsed.type === 'search' && Array.isArray(parsed.terms) && parsed.terms.length > 0) {
+      return parsed;
+    }
+    throw new Error('shape inesperado');
+  } catch {
+    // Ante fallo de parseo/red: asumir técnico y dejar que el pipeline decida
+    return { type: 'search', terms: extractSearchKeywords(prompt) };
+  }
+}
+
 function extractFunctionBlock(
   content: string,
   functionName: string
@@ -1345,16 +1409,37 @@ router.post('/generate', async (req, res) => {
   };
 
   try {
-    // ── Chequeo trivial — igual que CHAT — debe ir antes de classifyIntentWithAI ──
-    // Sin esto, "Hola" se clasifica como 'read' y dispara una búsqueda literal.
-    if (isTrivialMessage(prompt)) {
-      const trivialPrompt = `Sos un asistente de programación. El usuario te está hablando de forma informal o social. Respondé de manera breve, natural y conversacional — sin mencionar herramientas, código ni búsquedas. Si te saludan, saludá de vuelta. Si te agradecen, respondé amablemente.`;
-      const trivialAnswer = await callGroqAgent(prompt, trivialPrompt, 256);
-      send('action', { text: trivialAnswer });
-      send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
-      await new Promise(r => setTimeout(r, 100));
-      res.end();
-      return;
+    // ── Clasificación fusionada FAST: charla vs búsqueda técnica ─────────────
+    // Una sola llamada a Groq (con historial) reemplaza el ciclo
+    // isTrivialMessage → classifyIntentWithAI para mensajes conversacionales.
+    // Solo en FAST mode (!deepMode); DEEP tiene su propio pipeline.
+    let _fastClassification: FastClassification | null = null;
+    let _fastHistoryForClassify: any[] = [];
+
+    if (!deepMode) {
+      _fastHistoryForClassify = sessionId ? await loadFastHistory(sessionId) : [];
+      const classification = await classifyAndRespondFast(prompt, _fastHistoryForClassify);
+      _fastClassification = classification;
+
+      if (classification.type === 'chat') {
+        send('action', { text: classification.answer });
+        send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+
+        // Persistir el turno para que preguntas técnicas futuras tengan contexto
+        if (sessionId) {
+          const updated = [
+            ..._fastHistoryForClassify,
+            { role: 'user', content: prompt },
+            { role: 'assistant', content: classification.answer },
+          ];
+          await saveFastHistory(sessionId, updated).catch(() => {});
+        }
+
+        await new Promise(r => setTimeout(r, 100));
+        res.end();
+        return;
+      }
+      // classification.type === 'search' — continúa; términos disponibles abajo
     }
 
     const resolvedIntent = forceModifyIntent ? 'modify' : await classifyIntentWithAI(prompt);
@@ -1461,17 +1546,18 @@ router.post('/generate', async (req, res) => {
       if (!deepMode) {
         send('action', { text: '⚡ FAST — localizando símbolo...' });
 
-        const fastKeywords = await extractKeywordsForSearch(prompt, repo);
+        // Reusar términos e historial ya computados por classifyAndRespondFast
+        // (evita llamadas duplicadas a extractKeywordsForSearch y loadFastHistory).
+        const fastKeywords = (_fastClassification?.type === 'search' && _fastClassification.terms.length > 0)
+          ? _fastClassification.terms
+          : await extractKeywordsForSearch(prompt, repo);
         const fastPattern = fastKeywords.length > 0
           ? fastKeywords.join('|')
           : prompt.split(/\s+/).filter(w => w.length > 4).slice(0, 3).join('|');
 
         // ── FAST session continuity ──────────────────────────────────────────
-        // Cargar historial de la sesión FAST (namespace separado de CHAT).
-        let fastHistory: any[] = [];
-        if (sessionId) {
-          fastHistory = await loadFastHistory(sessionId);
-        }
+        // Reusar historial cargado por classifyAndRespondFast (namespace FAST).
+        const fastHistory: any[] = _fastHistoryForClassify;
         const _lastFastUser = fastHistory.slice().reverse().find((m: any) => m.role === 'user');
         const _lastFastAss  = fastHistory.slice().reverse().find((m: any) => m.role === 'assistant');
         const _isFollowUp   = !!sessionId &&
