@@ -4138,6 +4138,7 @@ async function runDeepSearchPipeline(
   repo: string,
   send: (event: string, data: Record<string, unknown>) => void,
   maxHops = 2,
+  showRawPreview = true,
 ): Promise<{ path: string; line: number; endLine: number; fragment: string }[]> {
   // Extract literal fragments — no AI, no interpretation
   const deepEvidence: { path: string; line: number; endLine: number; fragment: string }[] = [];
@@ -4174,9 +4175,13 @@ async function runDeepSearchPipeline(
       );
       for (const note of patternNotes) send('action', { text: `🔍 ${note}` });
       deepEvidence.push({ path: match.path, line: section.startLine, endLine: section.endLine, fragment: annotatedFragment });
-      send('action', { text: `📌 ${match.path}:${section.startLine}-${section.endLine}` });
-      const preview = section.excerpt.split('\n').slice(0, 20);
-      for (const fl of preview) send('action', { text: fl });
+      if (showRawPreview) {
+        send('action', { text: `📌 ${match.path}:${section.startLine}-${section.endLine}` });
+        const preview = section.excerpt.split('\n').slice(0, 20);
+        for (const fl of preview) send('action', { text: fl });
+      } else {
+        send('action', { text: `📌 Evidencia leída — ${match.path}` });
+      }
     } catch { /* skip unfetchable files */ }
   }
 
@@ -4286,9 +4291,13 @@ async function runDeepSearchPipeline(
             );
             for (const note of hopNotes) send('action', { text: `🔍 ${note}` });
             deepEvidence.push({ path: callerMatch.path, line: section.startLine, endLine: section.endLine, fragment: annotatedFragment });
-            send('action', { text: `📌 [hop ${hop + 1}↑] ${callerMatch.path}:${section.startLine}-${section.endLine}` });
-            const preview = section.excerpt.split('\n').slice(0, 20);
-            for (const fl of preview) send('action', { text: fl });
+            if (showRawPreview) {
+              send('action', { text: `📌 [hop ${hop + 1}↑] ${callerMatch.path}:${section.startLine}-${section.endLine}` });
+              const preview = section.excerpt.split('\n').slice(0, 20);
+              for (const fl of preview) send('action', { text: fl });
+            } else {
+              send('action', { text: `📌 Evidencia leída [hop ${hop + 1}↑] — ${callerMatch.path}` });
+            }
             callerFound = true;
             break;
           } catch { /* skip if file unreadable */ }
@@ -4329,9 +4338,13 @@ async function runDeepSearchPipeline(
         );
         for (const note of hopNotes) send('action', { text: `🔍 ${note}` });
         deepEvidence.push({ path: bestMatch.path, line: section.startLine, endLine: section.endLine, fragment: annotatedFragment });
-        send('action', { text: `📌 [hop ${hop + 1}] ${bestMatch.path}:${section.startLine}-${section.endLine}` });
-        const preview = section.excerpt.split('\n').slice(0, 20);
-        for (const fl of preview) send('action', { text: fl });
+        if (showRawPreview) {
+          send('action', { text: `📌 [hop ${hop + 1}] ${bestMatch.path}:${section.startLine}-${section.endLine}` });
+          const preview = section.excerpt.split('\n').slice(0, 20);
+          for (const fl of preview) send('action', { text: fl });
+        } else {
+          send('action', { text: `📌 Evidencia leída [hop ${hop + 1}] — ${bestMatch.path}` });
+        }
       } catch { /* skip if file unreadable */ }
     }
   }
@@ -4989,7 +5002,7 @@ async function runChatTurn(
           if (preResult.matches.length > 0) {
             const preProd   = preResult.matches.filter(m => !isTestMatch(m.path, m.text));
             const preRanked = preProd.length > 0 ? preProd : preResult.matches;
-            const preEv     = await runDeepSearchPipeline(preRanked, allKws, repo, send);
+            const preEv     = await runDeepSearchPipeline(preRanked, allKws, repo, send, 2, false);
             if (preEv.length > 0) {
               const evidenceSummary = preEv.map(e => `${e.path}:${e.line}\n${e.fragment}`).join('\n\n---\n\n');
               const deepCtx =
