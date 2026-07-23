@@ -4510,7 +4510,7 @@ async function executeChatTool(
       if (prod.length === 0) {
         send('action', { text: '⚠️ deep_search — solo resultados de test/dev. Ampliando a todos los matches.' });
       }
-      return { matches: ranked, evidence: await runDeepSearchPipeline(ranked, terms, repo, send) };
+      return { matches: ranked, evidence: await runDeepSearchPipeline(ranked, terms, repo, send, 2, false) };
     };
 
     // ── Attempt 1 ────────────────────────────────────────────────────────────
