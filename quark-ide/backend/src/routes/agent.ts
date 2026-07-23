@@ -1295,6 +1295,18 @@ router.post('/generate', async (req, res) => {
   };
 
   try {
+    // ── Chequeo trivial — igual que CHAT — debe ir antes de classifyIntentWithAI ──
+    // Sin esto, "Hola" se clasifica como 'read' y dispara una búsqueda literal.
+    if (isTrivialMessage(prompt)) {
+      const trivialPrompt = `Sos un asistente de programación. El usuario te está hablando de forma informal o social. Respondé de manera breve, natural y conversacional — sin mencionar herramientas, código ni búsquedas. Si te saludan, saludá de vuelta. Si te agradecen, respondé amablemente.`;
+      const trivialAnswer = await callGroqAgent(prompt, trivialPrompt, 256);
+      send('action', { text: trivialAnswer });
+      send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
+      await new Promise(r => setTimeout(r, 100));
+      res.end();
+      return;
+    }
+
     const resolvedIntent = forceModifyIntent ? 'modify' : await classifyIntentWithAI(prompt);
     console.log(`[Agent/generate] resolvedIntent="${resolvedIntent}" forceModify=${forceModifyIntent}`);
 
