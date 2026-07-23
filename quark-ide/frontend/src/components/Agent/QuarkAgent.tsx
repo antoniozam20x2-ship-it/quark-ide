@@ -577,6 +577,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           projectName: activeProject.name,
           deepMode:    mode === 'deep',
           findingId:   mode === 'deep' ? findingId : undefined,
+          sessionId:   chatSessionId,
         }),
       });
 

@@ -89,6 +89,37 @@ async function saveChatHistory(sessionId: string, messages: any[]): Promise<void
   );
 }
 
+// ── FAST session history (namespace separado de CHAT para no mezclar) ────────
+const FAST_SESSION_NS = 'quark-fast-session';
+
+async function loadFastHistory(sessionId: string): Promise<any[]> {
+  try {
+    const r = await pool.query<{ content: string }>(
+      `SELECT content FROM memory_entries WHERE key = $1 AND namespace = $2 LIMIT 1`,
+      [`fast-${sessionId}`, FAST_SESSION_NS],
+    );
+    return r.rows[0]?.content ? JSON.parse(r.rows[0].content) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveFastHistory(sessionId: string, messages: any[]): Promise<void> {
+  await pool.query(
+    `INSERT INTO memory_entries (key, content, namespace)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
+    [`fast-${sessionId}`, JSON.stringify(messages.slice(-6)), FAST_SESSION_NS], // últimos 3 turnos
+  );
+}
+
+/** Devuelve true si al menos un keyword del turno actual coincide con keywords del turno anterior. */
+function hasFastTopicOverlap(current: string[], previous: string[]): boolean {
+  if (!current.length || !previous.length) return false;
+  const prevSet = new Set(previous.map(k => k.toLowerCase()));
+  return current.some(k => prevSet.has(k.toLowerCase()));
+}
+
 async function summarizeForCache(preloadedFiles: { path: string; content: string }[]): Promise<string> {
   const keys = getGroqKeys();
   if (keys.length === 0 || preloadedFiles.length === 0) return '';
@@ -1210,8 +1241,8 @@ router.post('/auto', async (req, res) => {
 
 router.post('/generate', async (req, res) => {
   // Auto-detectar deepMode desde prefijos del prompt
-  let { prompt: rawPrompt, repo: bodyRepo, branch = 'main', projectName, deepMode, findingId } = req.body as {
-    prompt?: string; repo?: string; branch?: string; projectName?: string; deepMode?: boolean; findingId?: string;
+  let { prompt: rawPrompt, repo: bodyRepo, branch = 'main', projectName, deepMode, findingId, sessionId } = req.body as {
+    prompt?: string; repo?: string; branch?: string; projectName?: string; deepMode?: boolean; findingId?: string; sessionId?: string;
   };
 
   // Auto-detect mode from prefixes — takes priority over toggle
@@ -1372,6 +1403,78 @@ router.post('/generate', async (req, res) => {
         const fastPattern = fastKeywords.length > 0
           ? fastKeywords.join('|')
           : prompt.split(/\s+/).filter(w => w.length > 4).slice(0, 3).join('|');
+
+        // ── FAST session continuity ──────────────────────────────────────────
+        // Cargar historial de la sesión FAST (namespace separado de CHAT).
+        let fastHistory: any[] = [];
+        if (sessionId) {
+          fastHistory = await loadFastHistory(sessionId);
+        }
+        const _lastFastUser = fastHistory.slice().reverse().find((m: any) => m.role === 'user');
+        const _lastFastAss  = fastHistory.slice().reverse().find((m: any) => m.role === 'assistant');
+        const _isFollowUp   = !!sessionId &&
+          hasFastTopicOverlap(fastKeywords, _lastFastUser?.keywords ?? []) &&
+          !!_lastFastAss?.fragment;
+
+        if (_isFollowUp) {
+          // FAST FOLLOW-UP PATH — mismo tema detectado, reusar fragmento anterior.
+          send('action', { text: '⚡ FAST — pregunta de seguimiento, reutilizando contexto...' });
+
+          // Armar contexto: historial reciente + fragmento ya extraído
+          const histStr = fastHistory.slice(-6)
+            .map((m: any) => `${m.role === 'user' ? 'Usuario' : 'Asistente'}: ${m.content}`)
+            .join('\n');
+          const followUpCombined =
+            `Historial reciente de la sesión:\n${histStr}\n\n` +
+            `Fragmento de código (mismo contexto del turno anterior):\n${_lastFastAss!.fragment}`;
+
+          try {
+            const fuAnalysis = await generateWithFallback(
+              `El usuario hace una pregunta de seguimiento: "${prompt}"\n\n${followUpCombined}`,
+              `Eres un experto analista de código de trading respondiendo en FAST mode (pregunta de seguimiento).
+
+REGLA DE VOCABULARIO — obligatoria:
+Usá los términos técnicos de trading tal como los usa un trader profesional, en inglés cuando corresponda: \
+**FVG**, **EMA**, **SMA**, **RSI**, **ADX**, **ATR**, **SuperTrend**, **VWAP**, **RVOL**, **Score**, etc. \
+NUNCA los parafrasees con descripciones genéricas.
+
+REGLA DE FORMATO — sin excepciones:
+- Escribí en párrafos de prosa conectada (NO bullets sueltos, NO listas).
+- Aplicá **negrita** a cada término técnico de trading y a cada valor numérico clave.
+- PROHIBIDO: bloques de código con triple backtick, líneas de código sueltas, expresiones con operadores crudos.
+- Máximo 3 párrafos cortos (2-3 oraciones cada uno).
+
+ESTRUCTURA:
+Párrafo 1 — respuesta directa a la pregunta de seguimiento, referenciando lo ya discutido.
+Párrafo 2 — detalle adicional con valores y condiciones concretos en **negrita**.
+Párrafo 3 — contexto o restricciones relevantes (omitir si no agrega nada nuevo).
+
+REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está en el historial o el fragmento de código provisto. \
+Si no alcanza para responder, decilo en una oración y sugerí DEEP mode.`,
+            );
+
+            const fuLines = fuAnalysis.split('\n').map((l: string) => l.trim()).filter(Boolean);
+            for (const line of fuLines) {
+              send('action', { text: `💡 ${line}` });
+            }
+
+            // Guardar turno en historial de sesión FAST
+            const updatedFastHistory = [
+              ...fastHistory,
+              { role: 'user',      content: prompt,     keywords: fastKeywords },
+              { role: 'assistant', content: fuAnalysis, fragment: _lastFastAss!.fragment, path: _lastFastUser?.path },
+            ];
+            await saveFastHistory(sessionId!, updatedFastHistory).catch(() => {});
+          } catch {
+            send('action', { text: '⚠️ Análisis no disponible — intenta reformular la pregunta' });
+          }
+
+          send('done', { files: [], commitMessage: '', mainComponent: _lastFastUser?.path ?? '', mainContent: '', repo, branch });
+          await new Promise(r => setTimeout(r, 100));
+          res.end();
+          return;
+        }
+        // ─────────────────────────────────────────────────────────────────────
 
         // searchWithTestFallback: first pass → if all test → retry without test paths.
         // Returns matches sorted production-first; allTest=true when retry also failed.
@@ -1598,6 +1701,16 @@ sobre código que NO está en el fragmento — no para lo que sí está visible.
           const fastSharedSummary = await summarizeForSharedContext(fastAnalysis);
           await saveContextSummary(repo, fastSharedSummary || `FAST read: ${best.path}`, 'agent', [best.path])
             .catch(() => {});
+
+          // Guardar turno en historial de sesión FAST (para follow-ups futuros)
+          if (sessionId) {
+            const updatedFastHistory = [
+              ...fastHistory,
+              { role: 'user',      content: prompt,       keywords: fastKeywords },
+              { role: 'assistant', content: fastAnalysis,  fragment: combinedContext, path: best.path },
+            ];
+            await saveFastHistory(sessionId, updatedFastHistory).catch(() => {});
+          }
         } catch {
           send('action', { text: '⚠️ Análisis no disponible — intenta reformular la pregunta' });
         }

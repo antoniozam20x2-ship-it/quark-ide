@@ -1,0 +1,17 @@
+PROMPT — Dar a FAST mode continuidad de conversación (sesión + follow-ups sin re-buscar si el tema es el mismo)
+
+Contexto: Hoy FAST mode (router.post('/generate'), rama !deepMode) no tiene ningún concepto de sesión — cada pregunta es una llamada aislada. No guarda ni reutiliza el texto de preguntas/respuestas anteriores de FAST, a diferencia de CHAT que ya usa sessionId + loadChatHistory/saveChatHistory.
+
+Objetivo: que FAST pueda mantener una conversación — que una pregunta de seguimiento relacionada con la anterior no dispare una búsqueda nueva desde cero, y que la síntesis considere lo que ya se dijo antes en la misma sesión de FAST.
+
+Comportamiento esperado:
+
+	1.	FAST debe aceptar y persistir un sessionId (puede reusar el mismo mecanismo de loadChatHistory/saveChatHistory ya existente, con un namespace distinto para no mezclar con el historial de CHAT — ej. quark-fast-session).
+	2.	Al recibir una pregunta nueva en FAST, cargar el historial reciente de esa sesión (últimos 2-3 turnos alcanza, FAST no necesita arrastrar mucho).
+	3.	Evaluar si la pregunta actual está relacionada con el símbolo/tema del turno anterior (ej. mismo símbolo encontrado, keywords con overlap significativo — similar al criterio que ya usamos para el multi-hop de DEEP). Si está relacionada: no repetir la búsqueda (unifiedGrepSearch/searchWithTestFallback), reusar el fragmento ya extraído en el turno anterior y sintetizar la respuesta nueva sobre esa base + el texto de la pregunta de seguimiento. Si no está relacionada (tema nuevo): buscar de cero como hoy.
+	4.	Guardar cada turno (pregunta + respuesta de texto, no hace falta guardar el fragmento crudo completo si ya se resumió en la respuesta) en el historial de la sesión de FAST.
+
+Restricciones generales:
+
+	•	No mezclar el historial de FAST con el de CHAT — son sesiones y contextos distintos, aunque puedan compartir el mecanismo de guardado en DB.
+	•	Mantener todas las reglas actuales de FAST (vocabulario técnico, formato con negrita, sin código crudo, regla de fidelidad parcial).
