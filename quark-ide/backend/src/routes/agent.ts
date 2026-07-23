@@ -5013,7 +5013,20 @@ REGLAS:
 - Citá el archivo:línea entre paréntesis para respaldar afirmaciones puntuales, sin pegar el código.
 - No inventes nada que no esté literalmente en el fragmento.
 - Si el fragmento no alcanza para responder la pregunta completa, decilo en una oración.
-- Terminá siempre con esta línea exacta: "💬 Pedime 'más detalle' si querés el desglose completo con código y ejemplos."`;
+- Terminá siempre con esta línea exacta: "💬 Pedime 'más detalle' si querés el desglose completo con código y ejemplos."
+
+VARIABLES DE DOMINIO — convenciones fijas en repos de trading (Signal OS, Ahorar, etc.):
+  • \`st\`, \`stDir\`, \`stDirArr\` → dirección del indicador SuperTrend (NO Parabolic SAR — son indicadores distintos, nunca los intercambies).
+  • \`sa\`, \`sb\` → Score alcista y Score bajista (índice numérico de momentum/dirección). NUNCA los asocies con "SAR" — son scores.
+  • \`fvgBull\`, \`fvgBear\` → FVG (Fair Value Gap) alcista / bajista. Nombralo siempre como FVG, nunca parafrasees.
+  • \`noAgot\` → sin agotamiento de momentum (booleano).
+  • \`ema\`, \`emaFast\`, \`emaSlow\` → EMA. \`rsi\`/\`rsiVal\` → RSI. \`adx\`/\`adxVal\` → ADX. \`atr\`/\`atrVal\` → ATR.
+
+REGLA ANTI-CONFUSIÓN — variables cortas (\`sa\`, \`sb\`, \`st\`, \`rr\`, \`sl\`, \`tp\`, etc.) tienen alto riesgo de confundirse con acrónimos de trading por parecido visual.
+Si una variable corta NO está en la tabla de arriba ni tiene definición visible en el fragmento, escribí exactamente: "no pude confirmar qué representa \`[var]\` en este fragmento — no la renombro."
+PROHIBIDO deducir su significado por similitud de nombre.
+
+REGLA DE INCERTIDUMBRE — si el fragmento cubre parcialmente la pregunta (ej: muestra el uso de una variable pero no su cálculo), mencioná explícitamente qué parte quedó sin confirmar antes de la línea de cierre. No omitas la incertidumbre ni completes con conocimiento general.`;
 
 // Tools available for Sonnet synthesis turn — no search tools, only read + patch
 // Sonnet only gets propose_patch — it must not re-investigate with search tools.
