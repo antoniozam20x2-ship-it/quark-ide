@@ -4756,6 +4756,16 @@ de lógica (ej: "¿conviene reemplazar FVG por imbalance?"). Podés opinar con c
 qué gana y qué pierde el sistema — pero SIEMPRE aclarando que estás hablando del concepto de \
 mercado general, y que cualquier impacto concreto en el código requiere ver la implementación real.`;
 
+const GROQ_SINGLE_FRAGMENT_SYSTEM = `Sos un asistente que explica código de trading a partir de UN fragmento ya confirmado como evidencia real (lectura literal del código fuente, con cita file:línea).
+
+REGLAS:
+- Sintetizá en máximo 6-8 líneas de prosa conectada, sin bullets ni bloques de código.
+- Usá los nombres técnicos de trading exactos (FVG, EMA, SuperTrend, RSI, ADX, ATR, Score, etc.) — nunca los parafrasees.
+- Citá el archivo:línea entre paréntesis para respaldar afirmaciones puntuales, sin pegar el código.
+- No inventes nada que no esté literalmente en el fragmento.
+- Si el fragmento no alcanza para responder la pregunta completa, decilo en una oración.
+- Terminá siempre con esta línea exacta: "💬 Pedime 'más detalle' si querés el desglose completo con código y ejemplos."`;
+
 // Tools available for Sonnet synthesis turn — no search tools, only read + patch
 // Sonnet only gets propose_patch — it must not re-investigate with search tools.
 // Haiku already gathered all context; Sonnet's job is to write the patch.
@@ -5005,6 +5015,33 @@ async function runChatTurn(
             const preEv     = await runDeepSearchPipeline(preRanked, allKws, repo, send, 2, false);
             if (preEv.length > 0) {
               const evidenceSummary = preEv.map(e => `${e.path}:${e.line}\n${e.fragment}`).join('\n\n---\n\n');
+
+              // Enrutamiento Groq vs Haiku: 1 fragmento autocontenido + intención de
+              // EXPLICACIÓN (no generación de código) → Groq interpreta directo, sin Haiku.
+              // 2+ fragmentos (requieren cruzarse) o intención de GENERAR código → sigue a Haiku.
+              if (preEv.length === 1 && classifyIntent(userMessage) === 'explain') {
+                send('action', { text: '⚡ 1 fragmento autocontenido — Groq interpreta directo (sin Haiku)' });
+                try {
+                  const groqSynthesis = await callGroqAgent(
+                    `Pregunta: "${userMessage}"\n\nEvidencia confirmada (DEEP mode):\n${evidenceSummary}`,
+                    GROQ_SINGLE_FRAGMENT_SYSTEM,
+                    512,
+                  );
+                  send('chat_message', { text: groqSynthesis });
+                  messages.push({ role: 'assistant', content: [{ type: 'text', text: groqSynthesis }] });
+                  await saveChatHistory(sessionId, messages);
+                  send('confidence', {
+                    level: 'medium',
+                    reason: 'CHAT — Groq interpretó 1 fragmento autocontenido de evidencia DEEP',
+                    suggestedAction: 'none',
+                  });
+                  return;
+                } catch {
+                  send('action', { text: '⚠️ Groq synthesis falló — escalando a Haiku' });
+                  // cae al flujo normal (inyecta evidencia y sigue a Haiku)
+                }
+              }
+
               const deepCtx =
                 `\n\nEVIDENCIA VERIFICADA (DEEP mode — disparado por Groq pre-escalación, ` +
                 `lectura real del código fuente). Si esta evidencia responde la pregunta original ` +
