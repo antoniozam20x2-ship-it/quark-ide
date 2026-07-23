@@ -1425,12 +1425,14 @@ router.post('/generate', async (req, res) => {
         send('action', { text: classification.answer });
         send('done', { files: [], commitMessage: '', mainComponent: '', mainContent: '', repo, branch });
 
-        // Persistir el turno para que preguntas técnicas futuras tengan contexto
+        // Persistir el turno para que preguntas técnicas futuras tengan contexto.
+        // keywords: [] en turnos de charla — hasFastTopicOverlap no genera falso positivo
+        // con un array vacío (devuelve false), pero el shape queda consistente.
         if (sessionId) {
           const updated = [
             ..._fastHistoryForClassify,
-            { role: 'user', content: prompt },
-            { role: 'assistant', content: classification.answer },
+            { role: 'user', content: prompt, keywords: [] },
+            { role: 'assistant', content: classification.answer },  // fragment omitido — no hubo lectura de código
           ];
           await saveFastHistory(sessionId, updated).catch(() => {});
         }
@@ -1565,21 +1567,19 @@ router.post('/generate', async (req, res) => {
           !!_lastFastAss?.fragment;
 
         if (_isFollowUp) {
-          // FAST FOLLOW-UP PATH — mismo tema detectado, reusar fragmento anterior.
-          send('action', { text: '⚡ FAST — pregunta de seguimiento, reutilizando contexto...' });
+          // FAST FOLLOW-UP PATH — mismo tema detectado, evaluar si el fragmento alcanza.
+          send('action', { text: '⚡ FAST — pregunta de seguimiento, evaluando contexto ya leído...' });
 
-          // Armar contexto: historial reciente + fragmento ya extraído
-          const histStr = fastHistory.slice(-6)
-            .map((m: any) => `${m.role === 'user' ? 'Usuario' : 'Asistente'}: ${m.content}`)
-            .join('\n');
-          const followUpCombined =
-            `Historial reciente de la sesión:\n${histStr}\n\n` +
-            `Fragmento de código (mismo contexto del turno anterior):\n${_lastFastAss!.fragment}`;
+          const cachedFragment = _lastFastAss!.fragment as string;
+          const fragmentCovers = !isFragmentInsufficient(cachedFragment, fastKeywords);
 
-          try {
-            const fuAnalysis = await generateWithFallback(
-              `El usuario hace una pregunta de seguimiento: "${prompt}"\n\n${followUpCombined}`,
-              `Eres un experto analista de código de trading respondiendo en FAST mode (pregunta de seguimiento).
+          // Prompt compartido entre ambas ramas — incluye REGLA DE CONTINUIDAD (Cambio 4)
+          const fuSystemPrompt =
+            `Eres un experto analista de código de trading respondiendo en FAST mode (pregunta de seguimiento).
+
+REGLA DE CONTINUIDAD — obligatoria:
+Esta es una pregunta de SEGUIMIENTO sobre algo que ya se explicó en el turno anterior.
+Tu respuesta DEBE arrancar reconociendo esa continuidad de forma natural (ej. "Retomando la función placeTrailingStop..." o "Sobre eso que preguntás..."), y debe responder PUNTUALMENTE la pregunta de seguimiento — NO repitas la explicación general completa que ya diste. Si la pregunta es "¿por qué?", identificá a qué afirmación específica del turno anterior se refiere y explicá la razón concreta de esa afirmación, citando el fragmento que la sustenta.
 
 REGLA DE VOCABULARIO — obligatoria:
 Usá los términos técnicos de trading tal como los usa un trader profesional, en inglés cuando corresponda: \
@@ -1598,23 +1598,82 @@ Párrafo 2 — detalle adicional con valores y condiciones concretos en **negrit
 Párrafo 3 — contexto o restricciones relevantes (omitir si no agrega nada nuevo).
 
 REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está en el historial o el fragmento de código provisto. \
-Si no alcanza para responder, decilo en una oración y sugerí DEEP mode.`,
-            );
+Si no alcanza para responder, decilo en una oración y sugerí DEEP mode.`;
 
-            const fuLines = fuAnalysis.split('\n').map((l: string) => l.trim()).filter(Boolean);
-            for (const line of fuLines) {
-              send('action', { text: `💡 ${line}` });
+          if (fragmentCovers) {
+            // ── Camino principal: fragmento cacheado cubre la pregunta ──────────
+            const histStr = fastHistory.slice(-6)
+              .map((m: any) => `${m.role === 'user' ? 'Usuario' : 'Asistente'}: ${m.content}`)
+              .join('\n');
+            const followUpCombined =
+              `Historial reciente de la sesión:\n${histStr}\n\n` +
+              `Fragmento de código (mismo contexto del turno anterior):\n${cachedFragment}`;
+
+            try {
+              const fuAnalysis = await generateWithFallback(
+                `El usuario hace una pregunta de seguimiento: "${prompt}"\n\n${followUpCombined}`,
+                fuSystemPrompt,
+              );
+
+              const fuLines = fuAnalysis.split('\n').map((l: string) => l.trim()).filter(Boolean);
+              for (const line of fuLines) {
+                send('action', { text: `💡 ${line}` });
+              }
+
+              const updatedFastHistory = [
+                ...fastHistory,
+                { role: 'user',      content: prompt,     keywords: fastKeywords },
+                { role: 'assistant', content: fuAnalysis, fragment: cachedFragment, path: _lastFastUser?.path },
+              ];
+              await saveFastHistory(sessionId!, updatedFastHistory).catch(() => {});
+            } catch {
+              send('action', { text: '⚠️ Análisis no disponible — intenta reformular la pregunta' });
             }
+          } else {
+            // ── Fallback: fragmento cacheado insuficiente — buscar archivo adicional ──
+            send('action', { text: '🔍 El contexto ya leído no cubre esta pregunta — buscando en archivos adicionales...' });
+            const alreadyReadPath = _lastFastUser?.path ?? (_lastFastAss as any)?.path;
+            try {
+              const { matches: fuMatches } = await searchWithTestFallback(fastPattern, repo, send);
+              const fuNewMatch = fuMatches.find(
+                m => m.path !== alreadyReadPath && !isTestMatch(m.path, m.text ?? ''),
+              );
 
-            // Guardar turno en historial de sesión FAST
-            const updatedFastHistory = [
-              ...fastHistory,
-              { role: 'user',      content: prompt,     keywords: fastKeywords },
-              { role: 'assistant', content: fuAnalysis, fragment: _lastFastAss!.fragment, path: _lastFastUser?.path },
-            ];
-            await saveFastHistory(sessionId!, updatedFastHistory).catch(() => {});
-          } catch {
-            send('action', { text: '⚠️ Análisis no disponible — intenta reformular la pregunta' });
+              if (fuNewMatch) {
+                send('action', { text: `📍 Fragmento adicional: ${fuNewMatch.path}${fuNewMatch.line ? `:${fuNewMatch.line}` : ''}` });
+                const fuContent = await getFileContent(fuNewMatch.path, repo);
+                const fuSection = fuNewMatch.line
+                  ? (readEnclosingFunction(fuContent, fuNewMatch.line) ?? smartReadSection(fuContent, fuNewMatch.line, 60))
+                  : smartReadSection(fuContent, fuNewMatch.text ?? '', 60);
+
+                const combinedFollowUpContext = fuSection
+                  ? `Fragmento ya conocido — ${alreadyReadPath}:\n${cachedFragment}\n\n` +
+                    `Fragmento adicional (nueva búsqueda) — ${fuNewMatch.path} (líneas ${fuSection.startLine}-${fuSection.endLine}):\n${fuSection.excerpt}`
+                  : `Fragmento ya conocido — ${alreadyReadPath}:\n${cachedFragment}`;
+
+                const fuAnalysis = await generateWithFallback(
+                  `El usuario hace una pregunta de seguimiento: "${prompt}"\n\n${combinedFollowUpContext}`,
+                  fuSystemPrompt,
+                );
+
+                const fuLines = fuAnalysis.split('\n').map((l: string) => l.trim()).filter(Boolean);
+                for (const line of fuLines) {
+                  send('action', { text: `💡 ${line}` });
+                }
+
+                const updatedFastHistory = [
+                  ...fastHistory,
+                  { role: 'user',      content: prompt,     keywords: fastKeywords },
+                  { role: 'assistant', content: fuAnalysis, fragment: combinedFollowUpContext, path: fuNewMatch.path },
+                ];
+                await saveFastHistory(sessionId!, updatedFastHistory).catch(() => {});
+              } else {
+                send('action', { text: '💡 Lo que ya vimos no cubre esa parte específica, y no encontré otro archivo relacionado. Reformulá con más detalle o probá DEEP mode para una búsqueda más extensiva.' });
+              }
+            } catch (fuErr) {
+              console.warn('[agent/fu-fallback] búsqueda adicional fallida:', fuErr instanceof Error ? fuErr.message : fuErr);
+              send('action', { text: '⚠️ Búsqueda adicional fallida — reformulá la pregunta o probá DEEP mode' });
+            }
           }
 
           send('done', { files: [], commitMessage: '', mainComponent: _lastFastUser?.path ?? '', mainContent: '', repo, branch });

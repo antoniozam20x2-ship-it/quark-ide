@@ -1,0 +1,220 @@
+# Prompt para Replit Agent — FAST mode: reconectar follow-up real tras la fusión de clasificación
+
+## Contexto del problema (regresión detectada en pruebas)
+
+El fix anterior (`classifyAndRespondFast`) resolvió correctamente el gate charla/técnico,
+pero rompió una ruta de optimización que YA EXISTÍA en el código antes del cambio: el
+bloque `_isFollowUp` dentro del READ PATH de FAST mode.
+
+**Comportamiento esperado (el que existía)**: cuando el usuario hace una pregunta de
+seguimiento sobre el mismo tema (ej. "¿por qué?" después de preguntar por `trailingStop`),
+el sistema debería:
+1. Detectar overlap de tema con el turno anterior (`hasFastTopicOverlap`)
+2. Reutilizar el fragmento de código YA LEÍDO (`_lastFastAss.fragment`) sin re-buscar
+3. Generar una respuesta CORTA y puntual a la pregunta de seguimiento (usa un prompt
+   específico, `fuAnalysis`, distinto del análisis inicial — más enfocado, no repite
+   toda la explicación general)
+
+**Comportamiento observado ahora (regresión)**: al preguntar "¿por qué?" después de
+una pregunta sobre `trailingStop`, el sistema:
+- SÍ clasificó bien el tema (los términos de búsqueda quedaron idénticos a la consulta
+  anterior — la clasificación funciona)
+- pero NO entró en `_isFollowUp` — volvió a ejecutar el pipeline completo de búsqueda
+  (`unifiedGrepSearch` desde cero) y devolvió el mismo texto genérico de 3 párrafos,
+  casi idéntico a la respuesta anterior, sin responder nada específico al "por qué"
+
+## Causa raíz
+
+`_isFollowUp` depende de dos cosas que el nuevo gate fusionado probablemente rompió:
+
+```ts
+const _lastFastUser = fastHistory.slice().reverse().find((m: any) => m.role === 'user');
+const _lastFastAss  = fastHistory.slice().reverse().find((m: any) => m.role === 'assistant');
+const _isFollowUp   = !!sessionId &&
+  hasFastTopicOverlap(fastKeywords, _lastFastUser?.keywords ?? []) &&
+  !!_lastFastAss?.fragment;
+```
+
+Esto necesita que los mensajes guardados en `fastHistory` tengan exactamente esta forma:
+- turno `user`: `{ role: 'user', content: prompt, keywords: fastKeywords }`
+- turno `assistant`: `{ role: 'assistant', content: fastAnalysis, fragment: combinedContext, path: best.path }`
+
+Si el nuevo gate fusionado (`classifyAndRespondFast` + su guardado de historial en el
+Cambio 3) está guardando el historial con un shape distinto (sin `keywords` en el turno
+user, o sin `fragment` en el turno assistant, o usando una key distinta), `hasFastTopicOverlap`
+y el chequeo de `_lastFastAss?.fragment` fallan silenciosamente — sin tirar error, solo
+devuelven `false` — y el flujo cae al camino largo de búsqueda completa en vez de al
+follow-up corto.
+
+**Además**, `fastKeywords` en el READ PATH ahora viene de `classification.terms` (Cambio 4
+del fix anterior) en vez de `extractKeywordsForSearch(prompt, repo)`. Hay que confirmar
+que el shape y el contenido de esos términos siguen siendo compatibles con lo que
+`hasFastTopicOverlap` espera comparar.
+
+## Objetivo de este fix
+
+1. **Restaurar el enganche con `_isFollowUp`** — que el historial que guarda el nuevo gate
+   fusionado tenga el mismo shape que consume `_isFollowUp`, para que la detección de
+   overlap de tema vuelva a funcionar y las respuestas de seguimiento sean cortas y
+   puntuales en vez de repetir la explicación completa.
+
+2. **Hacer explícita la relación con lo ya buscado** — cuando SÍ es follow-up, la respuesta
+   generada (`fuAnalysis`) debe dejar explícito que está retomando lo ya explicado, no
+   sonar como una respuesta nueva desconectada. Ajustar el prompt de síntesis del
+   follow-up para que empiece reconociendo la continuidad (ej. "Retomando la función
+   `placeTrailingStop` que vimos antes...") en vez de re-explicar todo desde cero.
+
+3. **Fallback a búsqueda nueva SOLO si el caché no alcanza** — si el fragmento cacheado
+   (`_lastFastAss.fragment`) no contiene información suficiente para responder la pregunta
+   de seguimiento específica (ej. el "por qué" pregunta por algo que no está en el
+   fragmento ya leído), el sistema debe poder buscar en OTROS archivos distintos de los
+   ya leídos — no simplemente fallar o repetir el mismo análisis. Actualmente el camino
+   de follow-up no tiene ningún fallback: si el fragmento cacheado no alcanza, no hay
+   plan B dentro de esa rama.
+
+## Dónde tocar
+
+Mismo archivo del router de FAST mode. Zonas relevantes:
+- El bloque de guardado de historial dentro del nuevo gate fusionado (Cambio 3 del fix anterior)
+- El bloque `_isFollowUp` existente dentro del READ PATH (`if (!deepMode) { ... }`)
+- El prompt de síntesis `fuAnalysis` (system prompt "pregunta de seguimiento")
+
+## Cambio 1 — unificar el shape del historial guardado
+
+En el gate fusionado (donde se llama `saveFastHistory` tras una respuesta de tipo `chat`),
+y en el guardado que ya existe más abajo tras una respuesta de tipo `search` (dentro del
+READ PATH, después de generar `fastAnalysis`), asegurar que AMBOS puntos de guardado usen
+la misma forma:
+
+```ts
+// Turno user — SIEMPRE con keywords, incluso en turnos de charla (array vacío si no aplica)
+{ role: 'user', content: prompt, keywords: fastKeywords ?? [] }
+
+// Turno assistant — con fragment SOLO cuando hubo una lectura real de código;
+// en turnos de charla, fragment queda undefined/omitido (no rompe el check `!!_lastFastAss?.fragment`)
+{ role: 'assistant', content: answer, fragment: combinedContext /* o undefined en charla */, path: best?.path }
+```
+
+Revisar el guardado de historial que se agregó en el Cambio 3 del fix anterior (dentro
+del bloque `if (classification.type === 'chat')`) — probablemente está guardando
+`{ role: 'user', content: prompt }` sin `keywords`, y `{ role: 'assistant', content: classification.answer }`
+sin `fragment`. Ajustarlo a la forma de arriba (con `keywords: []` para turnos de charla,
+así `hasFastTopicOverlap` no rompe al leer `_lastFastUser?.keywords` de un turno anterior
+que fue charla).
+
+## Cambio 2 — confirmar `fastKeywords` compatible con `hasFastTopicOverlap`
+
+`hasFastTopicOverlap` hace un match case-insensitive de solapamiento de sets. Verificar
+que `classification.terms` (usado ahora como `fastKeywords` en el READ PATH, según el
+Cambio 4 del fix anterior) tenga el mismo tipo de contenido que antes generaba
+`extractKeywordsForSearch` — identificadores técnicos tipo camelCase/CONSTANT_CASE, no
+frases largas ni texto libre. Si `classifyAndRespondFast` está devolviendo términos con
+formato distinto (ej. con espacios, o frases completas en vez de identificadores), ajustar
+el prompt de `classifyAndRespondFast` (del fix anterior) para que los términos de `search`
+sigan el mismo formato que antes.
+
+## Cambio 3 — fallback dentro de `_isFollowUp` cuando el fragmento cacheado no alcanza
+
+Ubicar el bloque `_isFollowUp` en el READ PATH (dentro de `if (_isFollowUp) { ... }`).
+Actualmente genera `fuAnalysis` directo desde el fragmento cacheado sin ningún chequeo de
+suficiencia. Agregar una validación de contenido ANTES de sintetizar: reutilizar
+`isFragmentInsufficient` (ya existe en el archivo, se usa en el camino de búsqueda normal)
+para decidir si el fragmento cacheado alcanza para la pregunta de seguimiento actual:
+
+```ts
+if (_isFollowUp) {
+  send('action', { text: '⚡ FAST — pregunta de seguimiento, evaluando contexto ya leído...' });
+
+  const cachedFragment = _lastFastAss!.fragment;
+  const fragmentCovers = !isFragmentInsufficient(cachedFragment, fastKeywords);
+
+  if (fragmentCovers) {
+    // ── Camino existente: responder desde el fragmento cacheado ──────────────
+    // (mantener el bloque actual de fuAnalysis tal cual, con el ajuste de
+    // prompt del Cambio 4 más abajo)
+    ...
+  } else {
+    // ── Nuevo fallback: el fragmento cacheado no alcanza, buscar en archivos
+    // DISTINTOS de los ya leídos ──────────────────────────────────────────────
+    send('action', { text: '🔍 El contexto ya leído no cubre esta pregunta — buscando en archivos adicionales...' });
+
+    const alreadyReadPath = _lastFastUser?.path ?? _lastFastAss?.path;
+    const { matches: fuMatches } = await searchWithTestFallback(fastPattern, repo, send);
+    const fuNewMatch = fuMatches.find(m => m.path !== alreadyReadPath && !isTestMatch(m.path, m.text ?? ''));
+
+    if (fuNewMatch) {
+      // Leer el nuevo archivo y combinar con el fragmento cacheado para dar
+      // contexto completo (patrón ya usado en el fallback hop del camino normal)
+      const fuContent = await getFileContent(fuNewMatch.path, repo);
+      const fuSection = fuNewMatch.line
+        ? (readEnclosingFunction(fuContent, fuNewMatch.line) ?? smartReadSection(fuContent, fuNewMatch.line, 60))
+        : smartReadSection(fuContent, fuNewMatch.text ?? '', 60);
+
+      const combinedFollowUpContext = fuSection
+        ? `Fragmento ya conocido — ${alreadyReadPath}:\n${cachedFragment}\n\n` +
+          `Fragmento adicional (nueva búsqueda) — ${fuNewMatch.path} (líneas ${fuSection.startLine}-${fuSection.endLine}):\n${fuSection.excerpt}`
+        : `Fragmento ya conocido — ${alreadyReadPath}:\n${cachedFragment}`;
+
+      // Generar la respuesta con el mismo prompt de fuAnalysis (ver Cambio 4),
+      // pero pasando combinedFollowUpContext en vez de solo cachedFragment
+      ...
+    } else {
+      // No se encontró nada adicional — responder honestamente con lo que hay,
+      // aclarando la limitación en vez de repetir la explicación general
+      send('action', { text: '💡 Lo que ya vimos no cubre esa parte específica, y no encontré otro archivo relacionado. Reformulá con más detalle o probá DEEP mode para una búsqueda más extensiva.' });
+      // no continuar con fuAnalysis genérico — cortar acá
+    }
+  }
+}
+```
+
+Adaptar el pseudocódigo de arriba a la estructura real del bloque `_isFollowUp` existente
+(reutilizar los `send`, el guardado en `saveFastHistory` al final, y el `send('done', ...)`
+que ya tiene ese bloque — no duplicar esa lógica, solo insertar el chequeo de suficiencia
+y la rama de fallback antes de llegar al `generateWithFallback` actual).
+
+## Cambio 4 — hacer explícita la continuidad en el prompt de `fuAnalysis`
+
+En el system prompt actual de la rama de seguimiento (el que arma `fuAnalysis`), agregar
+una instrucción explícita de continuidad al principio:
+
+```
+REGLA DE CONTINUIDAD — obligatoria:
+Esta es una pregunta de SEGUIMIENTO sobre algo que ya se explicó en el turno anterior.
+Tu respuesta DEBE arrancar reconociendo esa continuidad de forma natural (ej. "Retomando
+la función placeTrailingStop..." o "Sobre eso que preguntás..."), y debe responder
+PUNTUALMENTE la pregunta de seguimiento — NO repitas la explicación general completa que
+ya diste. Si la pregunta es "¿por qué?", identificá a qué afirmación específica del turno
+anterior se refiere y explicá la razón concreta de esa afirmación, citando el fragmento
+que la sustenta.
+```
+
+Esto va antes o junto a la `REGLA DE VOCABULARIO` que ya existe en ese prompt — no
+reemplaza el resto de las reglas de formato (prosa, negrita en términos técnicos, etc.),
+solo agrega la exigencia de continuidad y especificidad.
+
+## Qué NO tocar
+
+- El camino de búsqueda normal (cuando NO es follow-up) queda igual.
+- `classifyAndRespondFast` en sí no cambia su lógica de decisión chat/search — solo se
+  ajusta, si hace falta, el formato de los términos que devuelve (Cambio 2).
+- DEEP mode no se toca.
+
+## Verificación después del cambio
+
+En la misma sesión (mismo `sessionId`):
+
+1. `"¿Cómo funciona el trailing stop?"` → búsqueda normal, HIGH CONFIDENCE, guarda
+   `fragment` y `keywords` en el historial con el shape correcto.
+2. `"¿Por qué?"` (inmediatamente después) → debe entrar en `_isFollowUp`, NO debe mostrar
+   de nuevo "🧠 Paso 1 — buscando en índice de símbolos" (evidencia de que no re-buscó
+   desde cero), y la respuesta debe:
+   - Empezar reconociendo la continuidad ("Retomando..." o similar)
+   - Ser más corta y puntual que la respuesta original, no repetir los 3 párrafos completos
+3. Una pregunta de seguimiento que SÍ requiera info fuera del fragmento cacheado
+   (ej. "¿y cómo se calcula el callbackRatio exactamente en otro archivo de config?")
+   → debe activar el fallback del Cambio 3: buscar en un archivo nuevo, distinto del ya
+   leído, y combinar ambos fragmentos en la respuesta.
+4. `"Hola"` seguido de `"¿por qué?"` → el turno de charla previo no debe romper el chequeo
+   de `_isFollowUp` en el siguiente turno técnico (confirma que el Cambio 1 —
+   `keywords: []` en turnos de charla— no genera falsos positivos de overlap).
