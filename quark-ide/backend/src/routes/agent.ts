@@ -4958,12 +4958,31 @@ async function runDeepSearchPipeline(
 
           send('action', { text: `🔗 Salto ${hop + 1} (call site de "${defSym}")…` });
           try {
-            const callerRaw = await rgSearch(`\\b${defSym}\\s*\\(`, repo);
-            const callerProd = callerRaw.filter(h =>
-              !isTestMatch(h.path, h.text) &&
-              !(h.path === ev.path && h.line >= ev.line && h.line <= ev.endLine)
-            );
-            const callerMatch = callerProd[0];
+            // ── Graph-first: callers of defSym ──────────────────────────
+            let callerMatch: { path: string; line: number } | null = null;
+            let s2Source = 'ripgrep-fallback';
+            try {
+              const g2 = await pool.query<{ caller_file: string; caller_line: number }>(
+                `SELECT caller_file, caller_line FROM symbol_calls
+                 WHERE repo = $1 AND callee_name = $2
+                   AND NOT (caller_file = $3 AND caller_line BETWEEN $4 AND $5)
+                 ORDER BY caller_file, caller_line LIMIT 20`,
+                [repo, defSym, ev.path, ev.line, ev.endLine]
+              );
+              const g2prod = g2.rows.filter(h => !isTestMatch(h.caller_file, ''));
+              const g2hit = g2prod[0] ?? g2.rows[0];
+              if (g2hit) { callerMatch = { path: g2hit.caller_file, line: g2hit.caller_line }; s2Source = 'grafo'; }
+            } catch { /* graph unavailable — fall through */ }
+            if (!callerMatch) {
+              const callerRaw = await rgSearch(`\\b${defSym}\\s*\\(`, repo);
+              const callerProd = callerRaw.filter(h =>
+                !isTestMatch(h.path, h.text) &&
+                !(h.path === ev.path && h.line >= ev.line && h.line <= ev.endLine)
+              );
+              const rg = callerProd[0];
+              if (rg?.line) callerMatch = { path: rg.path, line: rg.line };
+            }
+            console.log(`[DEEP hop] fuente=${s2Source} hop=${hop + 1} strategy=2 sym="${defSym}"`);
             if (!callerMatch?.line) continue;
 
             const fc = await getFileContent(callerMatch.path, repo);
@@ -5029,48 +5048,98 @@ async function runDeepSearchPipeline(
 
       send('action', { text: `🔗 Salto ${hop + 1}: buscando "${bestSym}"…` });
       try {
-        const hopMatches = await unifiedGrepSearch(bestSym, repo, send);
-        const prodMatches = hopMatches.filter(h => !isTestMatch(h.path, h.text));
-        const bestMatch = (prodMatches.length > 0 ? prodMatches : hopMatches)[0];
-        if (!bestMatch) continue;
-
-        const fc = await getFileContent(bestMatch.path, repo);
-        let section = bestMatch.line
-          ? (readEnclosingFunction(fc, bestMatch.line) ?? smartReadSection(fc, bestMatch.line, 60))
-          : null;
-        if (!section) continue;
-
-        if (!section.excerpt.toLowerCase().includes(bestSymLower)) {
-          const fallback = bestMatch.line ? smartReadSection(fc, bestMatch.line, 50) : null;
-          if (!fallback || !fallback.excerpt.toLowerCase().includes(bestSymLower)) {
-            send('action', { text: `⚠️ Salto ${hop + 1}: "${bestSym}" no confirmado en fragmento, descartado` });
-            continue;
+        // ── Graph-first: find call sites of bestSym from pre-built index ─
+        let s1Source = 'ripgrep-fallback';
+        let hitProcessed = false;
+        try {
+          const g1 = await pool.query<{ caller_file: string; caller_line: number }>(
+            `SELECT caller_file, caller_line FROM symbol_calls
+             WHERE repo = $1 AND callee_name = $2
+             ORDER BY caller_file, caller_line LIMIT 20`,
+            [repo, bestSym]
+          );
+          const g1prod = g1.rows.filter(h => !isTestMatch(h.caller_file, ''));
+          const g1hit = g1prod[0] ?? g1.rows[0];
+          if (g1hit) {
+            s1Source = 'grafo';
+            const fc = await getFileContent(g1hit.caller_file, repo);
+            let section = readEnclosingFunction(fc, g1hit.caller_line)
+              ?? smartReadSection(fc, g1hit.caller_line, 60);
+            if (section?.excerpt.toLowerCase().includes(bestSymLower)) {
+              relevanceSet.add(bestSymLower);
+              const { annotatedFragment, notes: hopNotes } = annotateTradingPatterns(
+                section.excerpt, section.startLine, g1hit.caller_file,
+              );
+              for (const note of hopNotes) send('action', { text: `🔍 ${note}` });
+              deepEvidence.push({
+                path: g1hit.caller_file,
+                line: section.startLine,
+                endLine: section.endLine,
+                fragment: annotatedFragment,
+                fragmentType: 'CALL_SITE',
+                confidence: 'HIGH',
+                purpose: `Invoca o define ${bestSym}`,
+                relatedSymbols: extractRelatedSymbols(annotatedFragment),
+                hopLevel: hop + 1,
+              });
+              if (showRawPreview) {
+                send('action', { text: `📌 [hop ${hop + 1}] ${g1hit.caller_file}:${section.startLine}-${section.endLine}` });
+                for (const fl of section.excerpt.split('\n').slice(0, 20)) send('action', { text: fl });
+              } else {
+                send('action', { text: `📌 Evidencia leída [hop ${hop + 1}] — ${g1hit.caller_file}` });
+              }
+              hitProcessed = true;
+            }
           }
-          section = fallback;
-        }
+        } catch { /* graph unavailable — fall through to ripgrep */ }
+        console.log(`[DEEP hop] fuente=${s1Source} hop=${hop + 1} strategy=1 sym="${bestSym}"`);
 
-        relevanceSet.add(bestSymLower);
-        const { annotatedFragment, notes: hopNotes } = annotateTradingPatterns(
-          section.excerpt, section.startLine, bestMatch.path,
-        );
-        for (const note of hopNotes) send('action', { text: `🔍 ${note}` });
-        deepEvidence.push({
-          path: bestMatch.path,
-          line: section.startLine,
-          endLine: section.endLine,
-          fragment: annotatedFragment,
-          fragmentType: 'CALL_SITE',
-          confidence: 'HIGH',
-          purpose: `Invoca o define ${bestSym}`,
-          relatedSymbols: extractRelatedSymbols(annotatedFragment),
-          hopLevel: hop + 1,
-        });
-        if (showRawPreview) {
-          send('action', { text: `📌 [hop ${hop + 1}] ${bestMatch.path}:${section.startLine}-${section.endLine}` });
-          const preview = section.excerpt.split('\n').slice(0, 20);
-          for (const fl of preview) send('action', { text: fl });
-        } else {
-          send('action', { text: `📌 Evidencia leída [hop ${hop + 1}] — ${bestMatch.path}` });
+        if (!hitProcessed) {
+          // ── Ripgrep fallback ────────────────────────────────────────────
+          const hopMatches = await unifiedGrepSearch(bestSym, repo, send);
+          const prodMatches = hopMatches.filter(h => !isTestMatch(h.path, h.text));
+          const bestMatch = (prodMatches.length > 0 ? prodMatches : hopMatches)[0];
+          if (bestMatch) {
+            const fc = await getFileContent(bestMatch.path, repo);
+            let section = bestMatch.line
+              ? (readEnclosingFunction(fc, bestMatch.line) ?? smartReadSection(fc, bestMatch.line, 60))
+              : null;
+            if (section) {
+              if (!section.excerpt.toLowerCase().includes(bestSymLower)) {
+                const fallback = bestMatch.line ? smartReadSection(fc, bestMatch.line, 50) : null;
+                if (fallback?.excerpt.toLowerCase().includes(bestSymLower)) {
+                  section = fallback;
+                } else {
+                  send('action', { text: `⚠️ Salto ${hop + 1}: "${bestSym}" no confirmado en fragmento, descartado` });
+                  section = null;
+                }
+              }
+              if (section) {
+                relevanceSet.add(bestSymLower);
+                const { annotatedFragment, notes: hopNotes } = annotateTradingPatterns(
+                  section.excerpt, section.startLine, bestMatch.path,
+                );
+                for (const note of hopNotes) send('action', { text: `🔍 ${note}` });
+                deepEvidence.push({
+                  path: bestMatch.path,
+                  line: section.startLine,
+                  endLine: section.endLine,
+                  fragment: annotatedFragment,
+                  fragmentType: 'CALL_SITE',
+                  confidence: 'HIGH',
+                  purpose: `Invoca o define ${bestSym}`,
+                  relatedSymbols: extractRelatedSymbols(annotatedFragment),
+                  hopLevel: hop + 1,
+                });
+                if (showRawPreview) {
+                  send('action', { text: `📌 [hop ${hop + 1}] ${bestMatch.path}:${section.startLine}-${section.endLine}` });
+                  for (const fl of section.excerpt.split('\n').slice(0, 20)) send('action', { text: fl });
+                } else {
+                  send('action', { text: `📌 Evidencia leída [hop ${hop + 1}] — ${bestMatch.path}` });
+                }
+              }
+            }
+          }
         }
       } catch { /* skip if file unreadable */ }
       // Confidence check after Strategy 1 hop

@@ -1,0 +1,70 @@
+Feature — consumir symbol_calls como primera fuente en los hops de DEEP, 
+con ripgrep como fallback (complementario, no reemplazo)
+
+Contexto: symbol_calls ya está poblada y validada (11543 filas para 
+quark-ide, confirmado con datos reales). Ahora hay que conectarla a 
+Strategy 1 y Strategy 2 en agent.ts (runDeepSearchPipeline), que hoy 
+resuelven "quién llama a X" / "qué llama X" únicamente vía 
+unifiedGrepSearch/rgSearch en vivo.
+
+Cambio — Strategy 1 (callee search, línea ~4924)
+
+Antes de llamar unifiedGrepSearch(bestSym, repo, send), consultar primero 
+el grafo:
+
+const graphHits = await pool.query(
+  `SELECT caller_file, caller_line, caller_name 
+   FROM symbol_calls 
+   WHERE repo = $1 AND callee_name = $2 
+   ORDER BY caller_file, caller_line LIMIT 20`,
+  [repo, bestSym]
+);
+
+Si graphHits.rows.length > 0: usar esos resultados directamente para 
+construir los AnnotatedFragment del hop (leyendo el contexto alrededor 
+de caller_line con la misma lógica que ya existe para formatear 
+fragmentos), marcando fragmentType/confidence como ya se hace, pero 
+agregando un campo o log que indique que vino del grafo (para poder medir 
+después cuánto se está usando cada fuente).
+
+Si graphHits.rows.length === 0: caer al comportamiento actual 
+(unifiedGrepSearch/rgSearch) sin cambios — esto cubre símbolos que el 
+grafo no capturó (callbacks sin (), símbolos definidos después de la 
+última indexación, etc.)
+
+Cambio — Strategy 2 (caller search, línea ~4947)
+
+Mismo patrón, pero invertido: para "qué llama X" (encontrar caller_name 
+de un archivo/función dada), consultar:
+
+const graphHits = await pool.query(
+  `SELECT callee_name, caller_line 
+   FROM symbol_calls 
+   WHERE repo = $1 AND caller_name = $2 
+   ORDER BY caller_line LIMIT 20`,
+  [repo, defSym]
+);
+
+Mismo criterio: usar si hay resultados, fallback a rgSearch si no.
+
+No tocar: el schema de symbol_calls, el builder buildCallGraph(), 
+AnnotatedFragment, evaluateSearchConfidence, ni el formato de salida para 
+Haiku — este cambio solo cambia LA FUENTE de los hops, no su estructura 
+de salida.
+
+Logging: agregar algo simple tipo 
+console.log(`[DEEP hop] fuente=grafo` / `fuente=ripgrep-fallback`) para 
+poder confirmar en producción cuál se está usando en cada hop.
+
+Verificación esperada:
+1. tsc --noEmit limpio.
+2. Repetir "Cómo funciona el circuit breaker y en qué se relaciona con 
+   el trailing stop" — como esta pregunta es sobre Ahorar (no quark-ide), 
+   confirmar primero si Ahorar también tiene symbol_calls poblada (si no, 
+   esta prueba caerá a fallback y no prueba nada nuevo — puede hacer 
+   falta forzar full re-index de Ahorar también).
+3. Probar una pregunta sobre el propio quark-ide, ej. "qué funciones 
+   llaman a evaluateSearchConfidence" — confirmar en logs que aparece 
+   fuente=grafo y que la respuesta es rápida y precisa.
+4. Confirmar que el tiempo de respuesta de DEEP no empeoró (la consulta 
+   a Postgres debería ser más rápida que un spawn de rg).
