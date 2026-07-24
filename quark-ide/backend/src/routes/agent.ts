@@ -5524,9 +5524,15 @@ async function runChatTurn(
       send('action', { text: `🔍 Búsqueda rápida — lookup directo (${groqReason.slice(0, 60)})` });
       let fastPathHandled = false;
       try {
-        const chatFastTerms = extractSearchKeywords(userMessage);
-        if (chatFastTerms.length > 0) {
-          const { matches: chatFastMatches } = await searchWithTestFallback(chatFastTerms.join('|'), repo, send);
+        // Misma lógica de extracción que FAST mode:
+        // 1. extractKeywordsForSearch (async, usa AI si hay keys) como fuente principal.
+        // 2. Fallback: palabras de más de 4 chars del propio mensaje (igual que FAST).
+        const chatFastTerms = await extractKeywordsForSearch(userMessage, repo);
+        const chatFastPattern = chatFastTerms.length > 0
+          ? chatFastTerms.join('|')
+          : userMessage.split(/\s+/).filter(w => w.length > 4).slice(0, 3).join('|');
+        if (chatFastPattern.length > 0) {
+          const { matches: chatFastMatches } = await searchWithTestFallback(chatFastPattern, repo, send);
           const chatFastBest = chatFastMatches.find(m => !isTestMatch(m.path, m.text ?? '')) ?? chatFastMatches[0];
           if (chatFastBest) {
             send('action', { text: `📍 Símbolo encontrado: ${chatFastBest.path}${chatFastBest.line ? `:${chatFastBest.line}` : ''}` });
