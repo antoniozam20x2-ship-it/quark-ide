@@ -2143,17 +2143,18 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
         deepKeywords.length > 0 ? deepKeywords : deepPattern.split('|').map(t => t.trim()).filter(Boolean),
         repo,
         send,
+        determineMaxHops(prompt),
       );
 
       if (deepEvidence.length === 0) {
         send('action', { text: '⚠️ Match encontrado en índice pero no se pudo leer el fragmento del archivo.' });
       }
 
-      // Persist raw evidence — diagnosis field holds the FULL function fragment so
-      // CHAT/Haiku receives the complete body, not a truncated preview.
-      const deepEvidenceSummary = deepEvidence
-        .map(e => `${e.path}:${e.line}\n${e.fragment}`)
-        .join('\n\n');
+      // Persist evidence — diagnosis holds the FULL annotated brief so
+      // CHAT/Haiku receives structured context (labeled by type), not a raw code dump.
+      const deepEvidenceSummary = deepEvidence.length > 0
+        ? formatDeepEvidenceForHaiku(deepEvidence, prompt, repo)
+        : '';
 
       // Assess whether evidence is from test/dev code — affects confidence label.
       const deepAllTest  = deepEvidence.length > 0 && deepEvidence.every(e => isTestMatch(e.path, e.fragment));
@@ -4626,6 +4627,150 @@ async function unifiedGrepSearch(
   return resolved;
 }
 
+// ── DEEP mode: fragment annotation types & helpers ────────────────────────────
+
+/** Extended fragment type produced by runDeepSearchPipeline — includes annotation
+ *  fields so Haiku receives structured context instead of a raw code dump. */
+interface AnnotatedFragment {
+  path: string;
+  line: number;
+  endLine: number;
+  fragment: string;
+  // ── Annotation fields (new) ──
+  fragmentType: 'DEFINITION' | 'CALL_SITE' | 'INTERACTION' | 'PATTERN' | 'CONFIG';
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  /** Brief description in Spanish: what this fragment does/defines */
+  purpose: string;
+  /** Function/variable names referenced inside the fragment */
+  relatedSymbols: string[];
+  /** 0 = initial search; 1+ = which multi-hop step found this */
+  hopLevel: number;
+}
+
+/** Returns 2 for simple queries, 4 for complex multi-concept queries. */
+function determineMaxHops(query: string): number {
+  const multiConceptKeywords = /\b(y|con|versus|vs|adem[aá]s|tambi[eé]n|juntos|relaciona|interacci[oó]n|flujo|entre|relacionado|relacionados)\b/i;
+  return multiConceptKeywords.test(query) ? 4 : 2;
+}
+
+/** Extract identifiers called/referenced inside a code fragment (for relatedSymbols). */
+function extractRelatedSymbols(code: string): string[] {
+  const CALL_PATTERN = /\b(?:await\s+)?([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(/g;
+  const BUILTINS_SET = new Set([
+    'if','for','while','switch','return','const','let','var','new','typeof',
+    'instanceof','async','await','function','class','import','export','default',
+    'throw','catch','try','super','this','void','null','true','false','undefined',
+    'console','Math','Object','Array','Promise','JSON','parseInt','parseFloat',
+    'String','Number','Boolean','Date','Set','Map','Error','Symbol','fetch',
+    'setTimeout','setInterval','clearTimeout','clearInterval','require',
+  ]);
+  const seen = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = CALL_PATTERN.exec(code)) !== null) {
+    if (!BUILTINS_SET.has(m[1])) seen.add(m[1]);
+  }
+  return [...seen].slice(0, 8);
+}
+
+/** Detects whether two fragments represent an interaction (f1 conditionally depends on f2).
+ *  If detected, reclassifies f2 (the callee) to INTERACTION in place. */
+function detectInteraction(f1: AnnotatedFragment, f2: AnnotatedFragment): boolean {
+  const interactionPatterns = [
+    /if\s*\([^)]*check/i,
+    /unless\s+/i,
+    /while\s*\([^)]*check/i,
+    /await.*return/i,
+  ];
+  const hasConditional = interactionPatterns.some(p => p.test(f1.fragment));
+  const calledSymbol = f2.relatedSymbols[0] ?? '';
+  if (hasConditional && calledSymbol && f1.fragment.includes(calledSymbol)) {
+    f2.fragmentType = 'INTERACTION';
+    return true;
+  }
+  return false;
+}
+
+/** Groups annotated fragments by type and renders a structured brief for Haiku. */
+function formatDeepEvidenceForHaiku(
+  fragments: AnnotatedFragment[],
+  userQuery: string,
+  repo: string,
+): string {
+  let output = '';
+  output += `═══════════════════════════════════════════════════════════════\n`;
+  output += `BÚSQUEDA PROFUNDA (DEEP MODE)\n`;
+  output += `Pregunta: "${userQuery}"\n`;
+  output += `Repo: ${repo}\n`;
+  output += `═══════════════════════════════════════════════════════════════\n\n`;
+
+  const byType: Record<string, AnnotatedFragment[]> = {};
+  for (const f of fragments) {
+    if (!byType[f.fragmentType]) byType[f.fragmentType] = [];
+    byType[f.fragmentType].push(f);
+  }
+
+  const TYPE_EMOJI: Record<string, string> = {
+    DEFINITION: '📌',
+    CALL_SITE:  '🔗',
+    INTERACTION:'⚡',
+    PATTERN:    '🔍',
+    CONFIG:     '⚙️',
+  };
+
+  const ORDER = ['DEFINITION', 'CALL_SITE', 'INTERACTION', 'PATTERN', 'CONFIG'];
+  for (const type of ORDER) {
+    const frags = byType[type] ?? [];
+    if (frags.length === 0) continue;
+    output += `\n${'─'.repeat(65)}\n`;
+    output += `${TYPE_EMOJI[type] ?? '📄'} ${type}\n`;
+    output += `${'─'.repeat(65)}\n`;
+    frags.forEach((f, idx) => {
+      output += `\n[${idx + 1}/${frags.length}] ${f.purpose}\n`;
+      output += `Archivo: ${f.path}:${f.line}–${f.endLine}\n`;
+      output += `Confianza: ${f.confidence} | Hop: ${f.hopLevel}\n`;
+      if (f.relatedSymbols.length > 0) {
+        output += `Símbolos relacionados: ${f.relatedSymbols.join(', ')}\n`;
+      }
+      output += `\n${f.fragment}\n\n`;
+    });
+  }
+
+  // Relationship context — the structural insight DEEP provides so Haiku synthesizes
+  output += `\n${'═'.repeat(65)}\n`;
+  output += `CONTEXTO DE RELACIÓN (para que Haiku sintetice)\n`;
+  output += `${'═'.repeat(65)}\n\n`;
+  output += generateRelationshipContext(fragments);
+  output += `\n\nNOTA: Haiku debe EXPLICAR esta estructura, no repetirla.`;
+  output += `\nHaiku: convertí esto en prosa clara y narrativa (máx 4 párrafos).`;
+  output += `\nDEEP: ya encontró y estructuró — Haiku solo sintetiza.`;
+
+  return output;
+}
+
+/** Generates a relationship summary from the set of annotated fragments. */
+function generateRelationshipContext(fragments: AnnotatedFragment[]): string {
+  const hasDefinition  = fragments.some(f => f.fragmentType === 'DEFINITION');
+  const hasCallSite    = fragments.some(f => f.fragmentType === 'CALL_SITE');
+  const hasPattern     = fragments.some(f => f.fragmentType === 'PATTERN');
+  const hasInteraction = fragments.some(f => f.fragmentType === 'INTERACTION');
+  const callSiteCount  = fragments.filter(f => f.fragmentType === 'CALL_SITE').length;
+
+  let context = '';
+  if (hasDefinition && hasCallSite) {
+    context += `• La definición se usa en múltiples call sites (implementación distribuida)\n`;
+  }
+  if (hasDefinition && hasPattern) {
+    context += `• La definición implementa un patrón detectado (patrón de diseño/trading)\n`;
+  }
+  if (hasInteraction) {
+    context += `• Hay una interacción condicional entre componentes (uno condiciona el comportamiento del otro)\n`;
+  }
+  if (hasCallSite && callSiteCount > 1) {
+    context += `• El componente se usa en contextos distintos (${callSiteCount} call sites)\n`;
+  }
+  return context || `• Fragmentos del codebase relacionados con la pregunta (ver estructura arriba)\n`;
+}
+
 // ── runDeepSearchPipeline ─────────────────────────────────────────────────────
 // Shared between the DEEP route handler and the deep_search tool exposed to Haiku.
 // Accepts pre-ranked GrepMatch results and a list of query terms (already expanded
@@ -4638,9 +4783,9 @@ async function runDeepSearchPipeline(
   send: (event: string, data: Record<string, unknown>) => void,
   maxHops = 2,
   showRawPreview = true,
-): Promise<{ path: string; line: number; endLine: number; fragment: string }[]> {
+): Promise<AnnotatedFragment[]> {
   // Extract literal fragments — no AI, no interpretation
-  const deepEvidence: { path: string; line: number; endLine: number; fragment: string }[] = [];
+  const deepEvidence: AnnotatedFragment[] = [];
   for (const match of matches.slice(0, 5)) {
     try {
       const fc = await getFileContent(match.path, repo);
@@ -4672,8 +4817,20 @@ async function runDeepSearchPipeline(
       const { annotatedFragment, notes: patternNotes } = annotateTradingPatterns(
         section.excerpt, section.startLine, match.path,
       );
+      const isPattern = patternNotes.length > 0;
       for (const note of patternNotes) send('action', { text: `🔍 ${note}` });
-      deepEvidence.push({ path: match.path, line: section.startLine, endLine: section.endLine, fragment: annotatedFragment });
+      deepEvidence.push({
+        path: match.path,
+        line: section.startLine,
+        endLine: section.endLine,
+        fragment: annotatedFragment,
+        // ── Annotation fields ──
+        fragmentType: isPattern ? 'PATTERN' : 'DEFINITION',
+        confidence: 'HIGH',
+        purpose: `Define ${match.text?.slice(0, 60) ?? match.path.split('/').pop() ?? 'símbolo'}`,
+        relatedSymbols: extractRelatedSymbols(annotatedFragment),
+        hopLevel: 0,
+      });
       if (showRawPreview) {
         send('action', { text: `📌 ${match.path}:${section.startLine}-${section.endLine}` });
         const preview = section.excerpt.split('\n').slice(0, 20);
@@ -4789,7 +4946,17 @@ async function runDeepSearchPipeline(
               section.excerpt, section.startLine, callerMatch.path,
             );
             for (const note of hopNotes) send('action', { text: `🔍 ${note}` });
-            deepEvidence.push({ path: callerMatch.path, line: section.startLine, endLine: section.endLine, fragment: annotatedFragment });
+            deepEvidence.push({
+              path: callerMatch.path,
+              line: section.startLine,
+              endLine: section.endLine,
+              fragment: annotatedFragment,
+              fragmentType: 'CALL_SITE',
+              confidence: 'HIGH',
+              purpose: `Invoca ${defSym}; contexto de uso`,
+              relatedSymbols: extractRelatedSymbols(annotatedFragment),
+              hopLevel: hop + 1,
+            });
             if (showRawPreview) {
               send('action', { text: `📌 [hop ${hop + 1}↑] ${callerMatch.path}:${section.startLine}-${section.endLine}` });
               const preview = section.excerpt.split('\n').slice(0, 20);
@@ -4836,7 +5003,17 @@ async function runDeepSearchPipeline(
           section.excerpt, section.startLine, bestMatch.path,
         );
         for (const note of hopNotes) send('action', { text: `🔍 ${note}` });
-        deepEvidence.push({ path: bestMatch.path, line: section.startLine, endLine: section.endLine, fragment: annotatedFragment });
+        deepEvidence.push({
+          path: bestMatch.path,
+          line: section.startLine,
+          endLine: section.endLine,
+          fragment: annotatedFragment,
+          fragmentType: 'CALL_SITE',
+          confidence: 'HIGH',
+          purpose: `Invoca o define ${bestSym}`,
+          relatedSymbols: extractRelatedSymbols(annotatedFragment),
+          hopLevel: hop + 1,
+        });
         if (showRawPreview) {
           send('action', { text: `📌 [hop ${hop + 1}] ${bestMatch.path}:${section.startLine}-${section.endLine}` });
           const preview = section.excerpt.split('\n').slice(0, 20);
@@ -4848,6 +5025,21 @@ async function runDeepSearchPipeline(
     }
   }
   // ── end multi-hop ─────────────────────────────────────────────────────────────
+
+  // ── Interaction detection pass ────────────────────────────────────────────────
+  // After all hops: check whether any DEFINITION conditionally drives a CALL_SITE.
+  // If so, reclassify the callee as INTERACTION for clearer Haiku context.
+  {
+    const defs  = deepEvidence.filter(f => f.fragmentType === 'DEFINITION');
+    const calls = deepEvidence.filter(f => f.fragmentType === 'CALL_SITE');
+    for (const def of defs) {
+      for (const call of calls) {
+        if (detectInteraction(def, call)) {
+          send('action', { text: `⚡ Interacción detectada: ${call.path.split('/').pop()}` });
+        }
+      }
+    }
+  }
 
   return deepEvidence;
 }
@@ -4997,7 +5189,7 @@ async function executeChatTool(
     const queryTerms = query.split('|').map((t: string) => t.trim()).filter(Boolean);
 
     // Shared search+extract helper — used for both attempt 1 and internal retry.
-    type DeepEvidence = { path: string; line: number; endLine: number; fragment: string };
+    type DeepEvidence = AnnotatedFragment;
     const deepAttempt = async (
       q: string,
       terms: string[],
@@ -5009,7 +5201,7 @@ async function executeChatTool(
       if (prod.length === 0) {
         send('action', { text: '⚠️ deep_search — solo resultados de test/dev. Ampliando a todos los matches.' });
       }
-      return { matches: ranked, evidence: await runDeepSearchPipeline(ranked, terms, repo, send, 2, false) };
+      return { matches: ranked, evidence: await runDeepSearchPipeline(ranked, terms, repo, send, determineMaxHops(query), false) };
     };
 
     // ── Attempt 1 ────────────────────────────────────────────────────────────
@@ -5055,8 +5247,8 @@ async function executeChatTool(
     if (evidence.length === 0) {
       return `deep_search: ${matches.length} match(es) encontrado(s) pero ningún fragmento superó la validación BUG-2 (símbolo no aparece en el fragmento extraído). Intentá con grep_code + read_file más específicos.`;
     }
-    const summary = evidence.map(e => `${e.path}:${e.line}\n${e.fragment}`).join('\n\n---\n\n');
-    send('action', { text: `✅ deep_search — ${evidence.length} fragmento(s) extraído(s)` });
+    const summary = formatDeepEvidenceForHaiku(evidence, query, repo);
+    send('action', { text: `✅ deep_search — ${evidence.length} fragmento(s) extraído(s) y anotados` });
     return summary;
   }
   return `Tool desconocida: ${name}`;
@@ -5070,8 +5262,16 @@ Tu objetivo principal es responder la pregunta del usuario de forma completa y e
 
 ━━━ PASO 0 (OBLIGATORIO — hacerlo ANTES de cualquier tool call) ━━━
 Revisá si el contexto de la conversación ya contiene evidencia que responda la pregunta:
-  • Si hay una sección "EVIDENCIA CONFIRMADA (DEEP mode)" o "EVIDENCIA VERIFICADA (DEEP mode)":
-    esas citas de archivo:línea son lecturas reales del código fuente — HECHOS, no suposiciones.
+  • Si hay una sección "EVIDENCIA VERIFICADA (DEEP mode)" o "BÚSQUEDA PROFUNDA (DEEP MODE)":
+    esas citas de archivo:línea son lecturas REALES del código fuente — HECHOS, no suposiciones.
+
+    La evidencia puede venir en formato ESTRUCTURADO con etiquetas por tipo:
+      📌 DEFINITION  → donde se define el símbolo
+      🔗 CALL_SITE   → dónde se invoca (contexto de uso)
+      ⚡ INTERACTION → componente que condiciona el comportamiento de otro
+      🔍 PATTERN     → patrón de trading detectado (FVG, trailing, etc.)
+    Si ves esas secciones, DEEP ya hizo el trabajo de búsqueda y clasificación.
+    Tu trabajo es SINTETIZAR en prosa, NO repetir la estructura ni listar archivos.
 
     REGLA DE SÍNTESIS — si el fragmento cierra con \`};\` (función completa):
       → El cuerpo de la función está completo. NUNCA lo releas con el mismo rango ni con uno más amplio.
@@ -5137,6 +5337,12 @@ Si deep_search + fallbacks no encontraron nada, terminá con el texto EXACTO: \
 "BÚSQUEDA_SIN_RESULTADOS". No rellenes con conocimiento general que no venga del código real.
 
 ━━━ ROL DE HAIKU — síntesis y límites ━━━
+CUANDO RECIBÍS EVIDENCIA DEEP ESTRUCTURADA (secciones 📌 DEFINITION / 🔗 CALL_SITE / ⚡ INTERACTION / 🔍 PATTERN):
+  DEEP ya hizo el trabajo duro — encontró, leyó y clasificó el código.
+  Tu tarea es convertir esa estructura en prosa clara y narrativa. NUNCA la repitas ni la parafrasees como lista.
+  Usá el "CONTEXTO DE RELACIÓN" del brief como guía para el ángulo de tu síntesis.
+  Si el usuario pide 'más detalle', podés expandir con código/ejemplos de lo que ya está en el historial.
+
 Una vez que tenés el código relevante (sea de evidencia previa o de tu búsqueda), \
 tu tarea es responder con la información MÁS VALIOSA, de forma COMPRIMIDA — no un reporte exhaustivo.
 
@@ -5590,9 +5796,12 @@ async function runChatTurn(
           if (preResult.matches.length > 0) {
             const preProd   = preResult.matches.filter(m => !isTestMatch(m.path, m.text));
             const preRanked = preProd.length > 0 ? preProd : preResult.matches;
-            const preEv     = await runDeepSearchPipeline(preRanked, allKws, repo, send, 2, false);
+            const preEv     = await runDeepSearchPipeline(preRanked, allKws, repo, send, determineMaxHops(userMessage), false);
             if (preEv.length > 0) {
-              const evidenceSummary = preEv.map(e => `${e.path}:${e.line}\n${e.fragment}`).join('\n\n---\n\n');
+              // Formatted evidence: structured for Haiku (groups by type, labels each fragment)
+              const evidenceSummary = formatDeepEvidenceForHaiku(preEv, userMessage, repo);
+              // Plain evidence for Groq single-fragment path (simpler model, just needs raw code)
+              const evidencePlain = preEv.map(e => `${e.path}:${e.line}\n${e.fragment}`).join('\n\n---\n\n');
 
               // Enrutamiento Groq vs Haiku: 1 fragmento autocontenido + intención de
               // EXPLICACIÓN (no generación de código) → Groq interpreta directo, sin Haiku.
@@ -5601,7 +5810,7 @@ async function runChatTurn(
                 send('action', { text: '⚡ 1 fragmento autocontenido — Groq interpreta directo (sin Haiku)' });
                 try {
                   const groqSynthesis = await callGroqAgent(
-                    `Pregunta: "${userMessage}"\n\nEvidencia confirmada (DEEP mode):\n${evidenceSummary}`,
+                    `Pregunta: "${userMessage}"\n\nEvidencia confirmada (DEEP mode):\n${evidencePlain}`,
                     GROQ_SINGLE_FRAGMENT_SYSTEM,
                     512,
                   );
@@ -5629,13 +5838,14 @@ async function runChatTurn(
 
               const deepCtx =
                 `\n\nEVIDENCIA VERIFICADA (DEEP mode — disparado por Groq pre-escalación, ` +
-                `lectura real del código fuente). Si esta evidencia responde la pregunta original ` +
-                `por completo, sintetizá desde aquí (PASO 0) sin volver a buscar los mismos símbolos:\n` +
+                `lectura real del código fuente, fragmentos anotados por tipo). ` +
+                `Si esta evidencia responde la pregunta por completo, sintetizá en prosa desde aquí (PASO 0) ` +
+                `sin re-buscar. DEEP ya hizo el trabajo duro — vos explicás, no repetís la estructura:\n` +
                 evidenceSummary;
               // Append to the last user message so Haiku's PASO 0 detects it immediately
               const lastMsg = messages[messages.length - 1];
               if (typeof lastMsg?.content === 'string') lastMsg.content += deepCtx;
-              send('action', { text: `✅ DEEP pre-fetch — ${preEv.length} fragmento(s) listos para síntesis` });
+              send('action', { text: `✅ DEEP pre-fetch — ${preEv.length} fragmento(s) anotados y listos para síntesis` });
             } else {
               send('action', { text: `⚠️ DEEP pre-fetch — matches sin fragmentos válidos, Haiku investigará` });
             }
