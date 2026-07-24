@@ -5371,6 +5371,20 @@ Si la evidencia existente responde la pregunta completamente, pasá directo a la
 
 ━━━ PROCESO DE BÚSQUEDA (solo si el Paso 0 no alcanzó) ━━━
 
+Reglas de búsqueda, en orden de prioridad:
+1. Si ya tenés EVIDENCIA VERIFICADA (DEEP mode) en el contexto del mensaje, \
+evaluá primero si responde completamente la pregunta — incluyendo relaciones \
+entre conceptos si la pregunta las pide — ANTES de llamar cualquier tool.
+2. Si necesitás ampliar o verificar esa evidencia, o la pregunta involucra \
+cómo se relacionan 2+ conceptos, usá deep_search — NO grep_code. \
+deep_search explora con múltiples pasos verificados y solo se detiene \
+cuando la evidencia es suficiente.
+3. Usá grep_code SOLO para un lookup puntual de un símbolo específico ya \
+conocido por nombre exacto (ej. confirmar una línea, no para explorar \
+relaciones o entender comportamiento).
+4. Usá read_file solo para leer un archivo completo ya identificado por \
+nombre — no como método de exploración.
+
 HERRAMIENTA PRIMARIA — usá deep_search para cualquier investigación nueva de código:
   deep_search(query: "sym1|sym2|sym3") ejecuta en una sola llamada: symbol_index + extracción \
   de función completa + multi-hop caller/callee + anotación de patrones. \

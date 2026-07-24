@@ -1,0 +1,55 @@
+Feature — priorizar deep_search sobre grep_code en Haiku (CHAT camino B)
+
+Contexto (confirmado por diagnóstico previo): Haiku en runHaikuTier tiene 
+5 tools: read_file, grep_code, list_files, task_complete, deep_search. 
+Solo deep_search pasa por runDeepSearchPipeline + evaluateSearchConfidence 
+(hops estructurados, terminación por confianza). grep_code y read_file son 
+planas — sin hops, sin evaluación de confianza. El pre-fetch (línea 5862) 
+garantiza 1 llamada a runDeepSearchPipeline por request, pero todo lo que 
+Haiku hace DESPUÉS depende de qué tool elige, sin ningún criterio actual.
+
+Objetivo: agregar una jerarquía explícita de uso de herramientas al 
+system prompt de Haiku en runHaikuTier (ubicar la sección de reglas/PASO 0 
+ya existente para ese tier — no crear una nueva).
+
+Texto a incorporar (ajustar tono/formato al estilo ya usado en el prompt 
+existente):
+
+"Reglas de búsqueda, en orden de prioridad:
+1. Si ya tenés EVIDENCIA VERIFICADA (DEEP mode) en el contexto del mensaje, 
+   evaluá primero si responde completamente la pregunta — incluyendo 
+   relaciones entre conceptos si la pregunta las pide — ANTES de llamar 
+   cualquier tool.
+2. Si necesitás ampliar o verificar esa evidencia, o la pregunta involucra 
+   cómo se relacionan 2+ conceptos, usá deep_search — NO grep_code. 
+   deep_search explora con múltiples pasos verificados y solo se detiene 
+   cuando la evidencia es suficiente.
+3. Usá grep_code SOLO para un lookup puntual de un símbolo específico ya 
+   conocido por nombre exacto (ej. confirmar una línea, no para explorar 
+   relaciones o entender comportamiento).
+4. Usá read_file solo para leer un archivo completo ya identificado por 
+   nombre — no como método de exploración."
+
+No tocar: CHAT_TOOLS, la firma de ninguna tool, ni deep_search/grep_code 
+en sí — esto es puramente una instrucción de comportamiento en el system 
+prompt de Haiku, no un cambio de código en la lógica de búsqueda.
+
+No remover grep_code ni read_file de la lista de tools disponibles — 
+Haiku los sigue necesitando como respaldo (ej. si deep_search no 
+encuentra nada, o para confirmar un detalle puntual).
+
+Verificación esperada:
+1. Repetir "Cómo funciona el circuit breaker y en qué se relaciona con 
+   el trailing stop" 3 veces seguidas (sesiones nuevas cada vez, o forzar 
+   que no quede cacheada). Confirmar que las 3 respuestas son 
+   CONSISTENTES — no puede pasar que una diga "relación jerárquica" y 
+   otra "sin relación", sobre el mismo código sin cambios.
+2. En los logs, confirmar que quand Haiku necesita ampliar evidencia, 
+   aparece deep_search (con [DEEP confidence] logs) en vez de grep_code 
+   suelto.
+3. Confirmar que una pregunta de lookup simple ("¿dónde está definido 
+   CIRCUIT_BREAKER_THRESHOLD_PCT?") sigue resolviéndose rápido sin forzar 
+   deep_search de forma innecesaria — el criterio 3 de la jerarquía debe 
+   seguir permitiendo grep_code para esos casos.
+4. tsc --noEmit limpio (aunque este cambio es solo de texto en un prompt, 
+   confirmar que no rompió nada de la estructura del archivo).
