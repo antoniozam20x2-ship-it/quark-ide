@@ -1,0 +1,52 @@
+Diagnóstico — dos caminos DEEP distintos en CHAT mode
+
+Contexto: en tres pruebas recientes de CHAT (una pregunta simple, una 
+media, y "circuit breaker + trailing stop"), los logs de Railway muestran 
+un patrón AGÉNTICO — Haiku llamando grep_code y otras tools por su cuenta, 
+decidiendo cada búsqueda en tiempo real — sin que aparezca en ningún 
+momento runDeepSearchPipeline, "Salto 1"/"Salto 2", ni los logs 
+[DEEP confidence] que se agregaron hoy en ese pipeline.
+
+Sin embargo, en una prueba anterior de HOY MISMO (antes de estos cambios), 
+la misma pregunta de circuit breaker + trailing stop sí mostró el patrón 
+de runDeepSearchPipeline con "Salto 1", "Salto 2" y hops estructurados.
+
+Esto sugiere que existen DOS rutas distintas para responder preguntas 
+complejas en CHAT mode:
+  A) runDeepSearchPipeline — el pipeline de hops con Strategy 1/Strategy 2, 
+     AnnotatedFragment, y ahora evaluateSearchConfidence()
+  B) Un modo agéntico donde Haiku (o el modelo que esté en ese momento) 
+     llama tools libremente (grep_code, etc.) sin pasar por el pipeline 
+     de hops
+
+Preguntas a responder (solo lectura, no tocar código todavía):
+
+1. Ubicar en agent.ts (o donde corresponda) el punto de decisión que 
+   elige entre camino A y camino B para una query de CHAT. ¿Es una 
+   condición explícita (ej. basada en clasificación de intención, 
+   longitud de la pregunta, si Groq triage detectó "necesito código")? 
+   ¿O son dos sistemas que coexisten y compiten sin un criterio claro?
+
+2. ¿El camino B (agéntico) es el comportamiento por defecto de CHAT mode 
+   con tool-calling nativo del modelo, mientras que camino A 
+   (runDeepSearchPipeline) solo se dispara desde DEEP mode explícito o 
+   desde el botón/toggle de DEEP? Es decir — ¿las pruebas de hoy fallaron 
+   en activar A porque técnicamente estaban en CHAT, no en DEEP, y CHAT 
+   nunca invoca runDeepSearchPipeline salvo en el "DEEP pre-fetch" inicial?
+
+3. Revisar específicamente la lógica de "DEEP pre-fetch" mencionada en 
+   los logs ("🧠 Groq → necesito leer el código... ejecutando DEEP 
+   pre-fetch") — ¿ese pre-fetch SÍ llama a runDeepSearchPipeline una vez, 
+   y LUEGO Haiku sigue explorando por su cuenta con tools sueltas 
+   (camino B) para lo que venga después del pre-fetch inicial? Si es así, 
+   evaluateSearchConfidence() solo cubriría la primera llamada de 
+   pre-fetch, no las búsquedas posteriores que hace Haiku de forma 
+   agéntica.
+
+4. Confirmar cuántas veces se invocó runDeepSearchPipeline en cada una de 
+   las 3 pruebas de hoy (grep en los logs por el nombre de la función 
+   o por sus logs internos característicos) vs. cuántas veces se llamó 
+   grep_code/unifiedGrepSearch de forma directa fuera de ese pipeline.
+
+Reportar los 4 hallazgos con referencias a archivo:línea antes de proponer 
+ningún cambio.
