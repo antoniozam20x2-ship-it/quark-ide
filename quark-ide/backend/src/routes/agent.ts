@@ -5286,11 +5286,20 @@ async function executeChatTool(
       }
       throw e;
     }
+    // Cambio 3 — detect cross-line patterns (e.g. "circuitBreaker.*trailing") that
+    // search for a relationship across a single line. These almost never match
+    // cross-function relationships in multi-line code. Warn (don't block) so Haiku
+    // redirects to deep_search instead of iterating with the same unproductive pattern.
+    const isCrossLinePattern = /\w+\.\*\w+/.test(input.pattern);
+    const crossLineHint = isCrossLinePattern
+      ? ` ⚠️ PATRÓN CROSS-LÍNEA: "${input.pattern}" busca la relación entre dos términos en la MISMA línea — las relaciones entre funciones/variables en distintas líneas rara vez se pueden encontrar así. Si lo que buscás es cómo se relacionan estos símbolos, usá deep_search en su lugar.`
+      : '';
+
     if (matches.length === 0) {
       if (isCloned(repo)) {
-        return `Sin resultados para "${input.pattern}" en el clon local. El término puede no existir literalmente — revisá variantes o usá read_file en los archivos más probables.`;
+        return `Sin resultados para "${input.pattern}" en el clon local. El término puede no existir literalmente — revisá variantes o usá read_file en los archivos más probables.${crossLineHint}`;
       }
-      return `Sin resultados vía GitHub code search para "${input.pattern}". Causas posibles: delay de indexación de GitHub, rate limit silencioso, o caracteres especiales en el patrón (${input.pattern}). Si el término existe, usá read_file directamente en los archivos donde lo esperás encontrar, en vez de reintentar grep_code con el mismo término.`;
+      return `Sin resultados vía GitHub code search para "${input.pattern}". Causas posibles: delay de indexación de GitHub, rate limit silencioso, o caracteres especiales en el patrón (${input.pattern}). Si el término existe, usá read_file directamente en los archivos donde lo esperás encontrar, en vez de reintentar grep_code con el mismo término.${crossLineHint}`;
     }
     const lines = matches.map(m => {
       if (m.symbolType) return `${m.path} — línea ${m.line}: [${m.symbolType}] "${m.text}"`;
@@ -5301,6 +5310,9 @@ async function executeChatTool(
     // the user rather than treating test symbols as production implementations.
     if (allTest) {
       lines.push(`\n⚠️ Todos los resultados encontrados corresponden a archivos o funciones de test/dev. No se encontró implementación de producción para "${input.pattern}". Indicale al usuario que solo existe evidencia de test.`);
+    }
+    if (isCrossLinePattern) {
+      lines.push(crossLineHint);
     }
     return lines.join('\n');
   }
@@ -5381,6 +5393,17 @@ async function executeChatTool(
     }
     const summary = formatDeepEvidenceForHaiku(evidence, query, repo);
     send('action', { text: `✅ deep_search — ${evidence.length} fragmento(s) extraído(s) y anotados` });
+    // Cambio 1 — propagate confidence signal so Haiku stops searching immediately
+    // when deep_search internally evaluated the evidence as sufficient.
+    try {
+      const conf = await evaluateSearchConfidence(query, evidence, 99);
+      if (conf.sufficient) {
+        return summary +
+          `\n\n⚠️ SEÑAL DE CONFIANZA: La evidencia encontrada fue evaluada como SUFICIENTE ` +
+          `para responder la pregunta. Si ya tenés lo que necesitás, sintetizá la respuesta ` +
+          `ahora en vez de seguir buscando.`;
+      }
+    } catch { /* non-fatal — proceed without signal */ }
     return summary;
   }
   return `Tool desconocida: ${name}`;
@@ -5439,6 +5462,13 @@ Revisá si el contexto de la conversación ya contiene evidencia que responda la
 Si la evidencia existente responde la pregunta completamente, pasá directo a la síntesis (ver ROL).
 
 ━━━ PROCESO DE BÚSQUEDA (solo si el Paso 0 no alcanzó) ━━━
+
+⏱️ PRESUPUESTO DE PASOS: Tenés un presupuesto limitado de pasos de exploración. \
+Si ya hiciste 2+ búsquedas (deep_search o grep_code) sin encontrar información NUEVA y relevante, \
+DETENÉ la exploración y sintetizá una respuesta con la mejor evidencia disponible — \
+aunque sea parcial o concluya "estos componentes parecen operar de forma independiente \
+según el código revisado". Nunca es mejor agotar el límite de pasos sin responder \
+que dar una respuesta honesta con evidencia parcial.
 
 Reglas de búsqueda, en orden de prioridad:
 1. Si ya tenés EVIDENCIA VERIFICADA (DEEP mode) en el contexto del mensaje, \

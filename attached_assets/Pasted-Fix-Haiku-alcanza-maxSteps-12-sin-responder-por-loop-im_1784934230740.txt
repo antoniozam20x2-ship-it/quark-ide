@@ -1,0 +1,55 @@
+Fix — Haiku alcanza maxSteps=12 sin responder por loop improductivo de 
+grep_code después de agotar deep_search
+
+Contexto: en runHaikuTier, se observó un caso real donde Haiku llamó 
+deep_search 3 veces (cada una con evidencia útil real: checkCircuitBreaker, 
+placeTrailingStop, executeOrder, circuitBreakerActive), pero después siguió 
+buscando con grep_code usando patrones regex de una sola línea que no 
+pueden funcionar para relaciones cross-función (ej. "if.*circuitBreaker", 
+"circuitBreaker.*trailing" — cruzan líneas/funciones, regex de una línea 
+nunca los va a matchear). Agotó los 12 pasos sin sintetizar respuesta final.
+
+Cambio 1 — propagar confidence de deep_search a Haiku
+
+Cuando la tool deep_search internamente ya evaluó sufficient=true en 
+evaluateSearchConfidence() durante alguno de sus hops, incluir eso en el 
+resultado que recibe Haiku, ej:
+
+{
+  fragments: [...],
+  confidenceSignal: "La evidencia encontrada fue evaluada como SUFICIENTE 
+  para responder la pregunta. Si ya tenés lo que necesitás, sintetizá la 
+  respuesta ahora en vez de seguir buscando."
+}
+
+Cambio 2 — recordatorio de presupuesto de pasos en el system prompt de Haiku
+
+Agregar a la sección de reglas de runHaikuTier algo tipo:
+
+"Tenés un presupuesto limitado de pasos de exploración. Si ya hiciste 2+ 
+búsquedas (deep_search o grep_code) sin encontrar información NUEVA y 
+relevante, DETENÉ la exploración y sintetizá una respuesta con la mejor 
+evidencia disponible — aunque sea parcial o concluya 'estos dos 
+componentes parecen operar de forma independiente según el código 
+revisado'. Nunca es mejor agotar el límite de pasos sin responder que dar 
+una respuesta honesta con evidencia parcial."
+
+Cambio 3 — evitar regex cross-línea predeciblemente inútiles en grep_code
+
+Si es viable sin tocar mucho: cuando Haiku pase un patrón a grep_code que 
+contenga .* con dos identificadores conocidos a ambos lados (patrón típico 
+de "buscar relación"), considerar advertir en el resultado de la tool 
+(no bloquear, solo informar) que ese tipo de búsqueda cross-línea 
+raramente funciona con ripgrep de una sola línea, y sugerir usar 
+deep_search en su lugar para relaciones entre símbolos.
+
+No tocar: evaluateSearchConfidence() en sí, el pipeline de hops, 
+symbol_calls, ni MAX_HOPS.
+
+Verificación esperada:
+1. Repetir la misma pregunta (circuit breaker + trailing stop en Ahorar) 
+   varias veces — confirmar que NO vuelve a ocurrir "Haiku alcanzó el 
+   límite de pasos" sin respuesta.
+2. Confirmar que cuando deep_search marca confianza suficiente, Haiku 
+   efectivamente para de buscar en el siguiente paso (no en 3-4 pasos más).
+3. tsc --noEmit limpio.
