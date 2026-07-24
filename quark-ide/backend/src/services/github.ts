@@ -1,4 +1,7 @@
 import { Octokit } from '@octokit/rest';
+import nodePath from 'node:path';
+import fs from 'node:fs';
+import { isCloned, repoDir, isExcludedPath } from './localRepos.js';
 
 const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
 const OWNER          = process.env.GITHUB_OWNER!;
@@ -73,6 +76,45 @@ export async function getFileContentConditional(
 ): Promise<FileContentResult | null> {
   const r = requireRepo(repo);
   const b = branch ?? DEFAULT_BRANCH;
+
+  // ── Filesystem-first: attempt local clone before hitting GitHub API ──────
+  if (isCloned(r)) {
+    if (isExcludedPath(path, r)) {
+      console.log(`[getFileContentConditional] ⚠️  ruta excluida por seguridad, usando GitHub: ${path}`);
+    } else {
+      const repoRoot = repoDir(r);
+      // Resolve against repoRoot and verify the result stays inside it.
+      // nodePath.resolve treats absolute segments as new roots, so an absolute
+      // `path` or one with traversal segments ("../../etc/passwd") would escape
+      // the repo directory — we reject those explicitly.
+      const resolved = nodePath.resolve(repoRoot, path);
+      const repoRootNormalized = repoRoot.endsWith(nodePath.sep)
+        ? repoRoot
+        : repoRoot + nodePath.sep;
+      const confined =
+        resolved === repoRoot || resolved.startsWith(repoRootNormalized);
+
+      if (!confined) {
+        console.warn(
+          `[getFileContentConditional] ⛔ path traversal detectado, usando GitHub: "${path}" → "${resolved}" (root: "${repoRoot}")`,
+        );
+      } else {
+        try {
+          const content = await fs.promises.readFile(resolved, 'utf-8');
+          console.log(`[getFileContentConditional] ✅ leído de filesystem: ${resolved}`);
+          // etag:null → el caller debe tratar esto como "sin caché condicional"
+          return { content, etag: null };
+        } catch (err: unknown) {
+          const code = (err as NodeJS.ErrnoException).code;
+          console.warn(
+            `[getFileContentConditional] ⚠️  no se pudo leer del filesystem (${code ?? 'ERR'}), cayendo a GitHub: ${resolved}`,
+          );
+          // fall through to GitHub
+        }
+      }
+    }
+  }
+  // ────────────────────────────────────────────────────────────────────────
 
   const reqHeaders: Record<string, string> = {};
   if (ifNoneMatch) reqHeaders['If-None-Match'] = ifNoneMatch;
