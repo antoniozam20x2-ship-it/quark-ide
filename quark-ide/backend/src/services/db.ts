@@ -101,6 +101,18 @@ export async function initDb(): Promise<void> {
       updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS symbol_calls (
+      repo         TEXT NOT NULL,
+      caller_file  TEXT NOT NULL,
+      caller_line  INT  NOT NULL,
+      callee_name  TEXT NOT NULL,
+      caller_name  TEXT,
+      PRIMARY KEY (repo, caller_file, caller_line, callee_name)
+    );
+
+    CREATE INDEX IF NOT EXISTS symbol_calls_callee_idx ON symbol_calls (repo, callee_name);
+    CREATE INDEX IF NOT EXISTS symbol_calls_caller_idx ON symbol_calls (repo, caller_name);
+
     CREATE TABLE IF NOT EXISTS repo_sync_log (
       repo          TEXT        PRIMARY KEY,
       synced_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),

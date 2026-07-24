@@ -1,0 +1,60 @@
+Feature — grafo de relaciones symbol_calls (punto 3 de mejoras DEEP)
+
+Basado en el diagnóstico previo. Approach elegido: pase único de CALL_RE 
+sobre el texto de cada archivo durante el indexado (no rg-por-símbolo), 
+reusando la misma regex que ya usa Strategy 1 en agent.ts:
+
+const CALL_RE = /\b(?:await\s+)?([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(/g;
+
+Cambio 1 — nueva tabla (migration)
+
+CREATE TABLE IF NOT EXISTS symbol_calls (
+  repo         TEXT    NOT NULL,
+  caller_file  TEXT    NOT NULL,
+  caller_line  INT     NOT NULL,
+  callee_name  TEXT    NOT NULL,
+  caller_name  TEXT,
+  PRIMARY KEY (repo, caller_file, caller_line, callee_name)
+);
+CREATE INDEX IF NOT EXISTS symbol_calls_callee_idx ON symbol_calls (repo, callee_name);
+CREATE INDEX IF NOT EXISTS symbol_calls_caller_idx ON symbol_calls (repo, caller_name);
+
+Cambio 2 — builder en localRepos.ts, integrado a indexSymbols()
+
+Después de que ctags genera symbol_index (ya filtrado por isExcludedPath), 
+agregar un paso que:
+1. Tome solo símbolos con kind IN ('function','method','class') del batch 
+   recién indexado — estos son los "caller_name" candidatos por archivo.
+2. Para cada archivo objetivo (mismo set que ya se le pasa a ctags: 
+   full index o changedFiles), leer su contenido UNA vez, aplicar 
+   CALL_RE, y para cada match verificar si el nombre capturado existe 
+   en symbol_index para ese repo (evita registrar llamadas a funciones 
+   built-in de JS/TS como "console.log" o "map").
+3. Determinar caller_name ubicando la función/método envolvente más 
+   cercana hacia arriba en el archivo (usando las líneas de definición 
+   ya conocidas de symbol_index para ese archivo) — puede quedar null 
+   si no se encuentra (top-level code).
+4. INSERT en symbol_calls (batch, mismo patrón de chunks de 500 que ya 
+   usa indexSymbols para symbol_index).
+
+Cambio 3 — incremental en syncs normales
+
+En el camino de changedFiles (no full-index), antes de re-insertar:
+DELETE FROM symbol_calls WHERE repo = $1 AND caller_file = ANY($2::text[]);
+Mismo patrón que ya existe para symbol_index.
+
+No tocar todavía: Strategy 1/Strategy 2 en agent.ts, ni cómo DEEP navega 
+hops hoy — esto solo construye y puebla la tabla. Consumir el grafo desde 
+los hops de DEEP es un cambio SEPARADO, a implementar después de validar 
+que la tabla se puebla correctamente.
+
+Verificación esperada:
+1. tsc --noEmit limpio.
+2. Forzar full re-index de quark-ide (vía el botón manual o el endpoint 
+   admin ya existente) y confirmar tiempo total del sync — no debería 
+   superar unos pocos segundos extra sobre el indexado normal.
+3. SELECT COUNT(*) FROM symbol_calls WHERE repo='quark-ide'; — debería 
+   dar un número razonable (cientos, no cero, no explosivo).
+4. Query de ejemplo: SELECT * FROM symbol_calls WHERE repo='quark-ide' 
+   AND callee_name='checkCircuitBreaker'; — debería mostrar call sites 
+   reales conocidos.

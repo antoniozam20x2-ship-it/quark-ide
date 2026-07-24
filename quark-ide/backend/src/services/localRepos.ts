@@ -352,7 +352,149 @@ export async function indexSymbols(repo: string, changedFiles?: string[]): Promi
     }
   }
 
+  // ── Call graph: populate symbol_calls ─────────────────────────────────────
+  await buildCallGraph(repo, dir, rows, filesToIndex);
+
   return rows.length;
+}
+
+// ── Call graph builder ────────────────────────────────────────────────────────
+
+/** CALL_RE — same regex as Strategy 1 in agent.ts runDeepSearchPipeline. */
+const CALL_RE = /\b(?:await\s+)?([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(/g;
+
+const CALL_BUILTINS = new Set([
+  'if','for','while','switch','return','const','let','var','new','typeof',
+  'instanceof','async','await','function','class','import','export','default',
+  'throw','catch','try','super','this','void','null','true','false','undefined',
+  'console','Math','Object','Array','Promise','JSON','parseInt','parseFloat',
+  'String','Number','Boolean','Date','Set','Map','Error','Symbol','fetch',
+  'setTimeout','setInterval','clearTimeout','clearInterval','require',
+  'describe','it','test','expect','beforeEach','afterEach','beforeAll','afterAll',
+]);
+
+const CALLABLE_KINDS = new Set(['function', 'method', 'class']);
+
+/**
+ * Builds the symbol_calls table for the given indexed scope.
+ * Called after symbol_index rows are committed so that incremental syncs can
+ * query the full set of known symbol names from the DB.
+ *
+ * @param repo        - repo name
+ * @param dir         - absolute path to local clone root
+ * @param rows        - symbol_index rows just inserted ([repo, name, file, line, kind][])
+ * @param filesToIndex - null = full re-index; string[] = incremental (changedFiles)
+ */
+async function buildCallGraph(
+  repo: string,
+  dir: string,
+  rows: [string, string, string, number, string][],
+  filesToIndex: string[] | null,
+): Promise<void> {
+  // 1. Clear existing call edges for the affected scope
+  try {
+    if (filesToIndex) {
+      await pool.query(
+        'DELETE FROM symbol_calls WHERE repo = $1 AND caller_file = ANY($2::text[])',
+        [repo, filesToIndex]
+      );
+    } else {
+      await pool.query('DELETE FROM symbol_calls WHERE repo = $1', [repo]);
+    }
+  } catch (e: any) {
+    console.warn(`[localRepos] No se pudo limpiar symbol_calls para ${repo}:`, e.message);
+  }
+
+  // 2. Build set of known callee names for this repo.
+  //    Seed from just-indexed rows (covers full re-index).
+  //    For incremental, also pull existing names from DB so cross-file calls resolve.
+  const knownSymbols = new Set<string>(rows.map(r => r[1]));
+  if (filesToIndex) {
+    try {
+      const res = await pool.query<{ symbol_name: string }>(
+        'SELECT DISTINCT symbol_name FROM symbol_index WHERE repo = $1',
+        [repo]
+      );
+      for (const r of res.rows) knownSymbols.add(r.symbol_name);
+    } catch { /* non-fatal — falls back to rows-only set */ }
+  }
+
+  // 3. Per-file map of callable definitions sorted by line (for enclosing caller lookup).
+  const fileCallerDefs = new Map<string, { name: string; line: number }[]>();
+  for (const [, symName, filePath, lineNum, symKind] of rows) {
+    if (!CALLABLE_KINDS.has(symKind)) continue;
+    if (!fileCallerDefs.has(filePath)) fileCallerDefs.set(filePath, []);
+    fileCallerDefs.get(filePath)!.push({ name: symName, line: lineNum });
+  }
+  for (const defs of fileCallerDefs.values()) {
+    defs.sort((a, b) => a.line - b.line);
+  }
+
+  // Helper: find name of the innermost function/method enclosing a given line.
+  const findCallerName = (filePath: string, callLine: number): string | null => {
+    const defs = fileCallerDefs.get(filePath);
+    if (!defs || defs.length === 0) return null;
+    let best: string | null = null;
+    for (const d of defs) {
+      if (d.line <= callLine) best = d.name;
+      else break;
+    }
+    return best;
+  };
+
+  // 4. Determine which files to scan (same set passed to ctags).
+  //    Full re-index: derive from rows (files that actually had symbols).
+  //    Incremental: use filesToIndex directly.
+  const filesToScan: string[] = filesToIndex
+    ? filesToIndex
+    : [...new Set(rows.map(r => r[2]))];
+
+  // 5. Scan each file once with CALL_RE, collect call edges.
+  const callRows: [string, string, number, string, string | null][] = [];
+
+  for (const relPath of filesToScan) {
+    const absPath = path.join(dir, relPath);
+    let content: string;
+    try {
+      content = fs.readFileSync(absPath, 'utf8');
+    } catch { continue; }
+
+    CALL_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = CALL_RE.exec(content)) !== null) {
+      const callee = m[1];
+      if (CALL_BUILTINS.has(callee)) continue;
+      if (!knownSymbols.has(callee)) continue;
+
+      // Determine 1-based line number by counting newlines before match offset
+      const callLine = content.slice(0, m.index).split('\n').length;
+      const callerName = findCallerName(relPath, callLine);
+
+      callRows.push([repo, relPath, callLine, callee, callerName]);
+    }
+  }
+
+  if (callRows.length === 0) return;
+
+  // 6. Batch insert symbol_calls in chunks of 500.
+  const CALL_CHUNK = 500;
+  for (let i = 0; i < callRows.length; i += CALL_CHUNK) {
+    const chunk = callRows.slice(i, i + CALL_CHUNK);
+    const placeholders = chunk
+      .map((_, j) => `($${j * 5 + 1}, $${j * 5 + 2}, $${j * 5 + 3}, $${j * 5 + 4}, $${j * 5 + 5})`)
+      .join(', ');
+    try {
+      await pool.query(
+        `INSERT INTO symbol_calls (repo, caller_file, caller_line, callee_name, caller_name)
+         VALUES ${placeholders}
+         ON CONFLICT DO NOTHING`,
+        chunk.flat() as (string | number | null)[]
+      );
+    } catch (e: any) {
+      console.warn(`[localRepos] Error insertando symbol_calls (chunk ${i}):`, e.message);
+    }
+  }
+  console.log(`[localRepos] symbol_calls: ${callRows.length} relaciones indexadas para ${repo}`);
 }
 
 // ── Sync (clone/pull + index) ─────────────────────────────────────────────────
