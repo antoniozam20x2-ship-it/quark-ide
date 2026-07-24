@@ -43,6 +43,11 @@ const EXCLUDE_PATTERNS = [
   /\.min\.js$/,
   /[/\\]\.git[/\\]/,
   /[/\\]\.git$/,
+  // v3/ is a vendored claude-flow monorepo (1 400+ files, ~41 MB) — exclude from
+  // ctags indexing, ripgrep search, and filesystem reads to avoid buffer overflows
+  // and irrelevant results. Matches the bare entry "v3" (top-level dir) and any
+  // path under it ("v3/...").
+  /^v3([/\\]|$)/,
 ];
 
 const SENSITIVE_REPO_EXCLUDES: Record<string, RegExp[]> = {
@@ -261,10 +266,25 @@ export async function indexSymbols(repo: string, changedFiles?: string[]): Promi
     console.warn(`[localRepos] No se pudo limpiar symbol_index para ${repo}:`, e.message);
   }
 
-  // Build ctags target paths
+  // Build ctags target paths.
+  // Full-index: enumerate top-level entries and filter excluded dirs (e.g. v3/)
+  // BEFORE passing them to ctags, so ctags never recurses into vendored subtrees
+  // that would blow the maxBuffer. This is the primary exclusion layer; the
+  // isExcludedPath() check on each output line (below) is the secondary layer.
   const targets = filesToIndex
     ? filesToIndex.map(f => path.join(dir, f))
-    : [dir];
+    : (() => {
+        try {
+          const entries = fs.readdirSync(dir)
+            .filter(entry => !isExcludedPath(entry, repo))
+            .map(entry => path.join(dir, entry));
+          return entries.length > 0 ? entries : [dir]; // fallback: pass root if all filtered
+        } catch {
+          return [dir]; // fallback: if readdir fails, pass root as before
+        }
+      })();
+
+  if (targets.length === 0) return 0;
 
   let stdout = '';
   try {
