@@ -2144,6 +2144,8 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
         repo,
         send,
         determineMaxHops(prompt),
+        true,
+        prompt,
       );
 
       if (deepEvidence.length === 0) {
@@ -4771,6 +4773,42 @@ function generateRelationshipContext(fragments: AnnotatedFragment[]): string {
   return context || `• Fragmentos del codebase relacionados con la pregunta (ver estructura arriba)\n`;
 }
 
+// ── Confidence evaluation (DEEP early-stop) ───────────────────────────────────
+
+const SYSTEM_PROMPT_CONFIDENCE_CHECK =
+  'Eres un evaluador de evidencia de código. Responde ÚNICAMENTE con JSON válido, sin texto extra.';
+
+/**
+ * Asks Groq (same integration as triage) whether the evidence accumulated so far
+ * is sufficient to answer the user's query. Returns { sufficient, reason }.
+ * On any failure (network, bad JSON, etc.) returns sufficient=false as a fail-safe
+ * so we prefer one extra hop over cutting information short.
+ */
+async function evaluateSearchConfidence(
+  userQuery: string,
+  fragmentsSoFar: AnnotatedFragment[],
+  hopLevel: number,
+): Promise<{ sufficient: boolean; reason: string }> {
+  const summary = fragmentsSoFar.map(f =>
+    `- [${f.fragmentType}] ${f.purpose} (${f.path}:${f.line})`,
+  ).join('\n');
+
+  const prompt =
+    `Pregunta del usuario: "${userQuery}"\n\n` +
+    `Evidencia encontrada hasta el hop ${hopLevel}:\n${summary}\n\n` +
+    `¿Esta evidencia ya es suficiente para responder completamente la pregunta, ` +
+    `incluyendo CÓMO se relacionan los conceptos si la pregunta lo pide?\n` +
+    `Responde SOLO con JSON: {"sufficient": true|false, "reason": "una frase breve"}`;
+
+  try {
+    const response = await callGroqAgent(prompt, SYSTEM_PROMPT_CONFIDENCE_CHECK, 150);
+    return JSON.parse(response.trim()) as { sufficient: boolean; reason: string };
+  } catch {
+    // Fail-safe: prefer an extra hop over cutting information short
+    return { sufficient: false, reason: 'fallback — no se pudo evaluar' };
+  }
+}
+
 // ── runDeepSearchPipeline ─────────────────────────────────────────────────────
 // Shared between the DEEP route handler and the deep_search tool exposed to Haiku.
 // Accepts pre-ranked GrepMatch results and a list of query terms (already expanded
@@ -4783,6 +4821,7 @@ async function runDeepSearchPipeline(
   send: (event: string, data: Record<string, unknown>) => void,
   maxHops = 2,
   showRawPreview = true,
+  userQuery?: string,
 ): Promise<AnnotatedFragment[]> {
   // Extract literal fragments — no AI, no interpretation
   const deepEvidence: AnnotatedFragment[] = [];
@@ -4969,6 +5008,18 @@ async function runDeepSearchPipeline(
           } catch { /* skip if file unreadable */ }
         }
         if (!callerFound) break;
+        // Confidence check after Strategy 2 found a caller this hop
+        {
+          const newFragmentsThisHop = deepEvidence.slice(hopStart);
+          if (newFragmentsThisHop.length > 0 && userQuery) {
+            const conf = await evaluateSearchConfidence(userQuery, deepEvidence, hop + 1);
+            console.log(`[DEEP confidence] hop ${hop + 1}: sufficient=${conf.sufficient} — ${conf.reason}`);
+            if (conf.sufficient) {
+              console.log(`[DEEP confidence] deteniendo búsqueda temprano en hop ${hop + 1}/${maxHops}`);
+              break;
+            }
+          }
+        }
         continue;
       }
 
@@ -5022,6 +5073,18 @@ async function runDeepSearchPipeline(
           send('action', { text: `📌 Evidencia leída [hop ${hop + 1}] — ${bestMatch.path}` });
         }
       } catch { /* skip if file unreadable */ }
+      // Confidence check after Strategy 1 hop
+      {
+        const newFragmentsThisHop = deepEvidence.slice(hopStart);
+        if (newFragmentsThisHop.length > 0 && userQuery) {
+          const conf = await evaluateSearchConfidence(userQuery, deepEvidence, hop + 1);
+          console.log(`[DEEP confidence] hop ${hop + 1}: sufficient=${conf.sufficient} — ${conf.reason}`);
+          if (conf.sufficient) {
+            console.log(`[DEEP confidence] deteniendo búsqueda temprano en hop ${hop + 1}/${maxHops}`);
+            break;
+          }
+        }
+      }
     }
   }
   // ── end multi-hop ─────────────────────────────────────────────────────────────
@@ -5201,7 +5264,7 @@ async function executeChatTool(
       if (prod.length === 0) {
         send('action', { text: '⚠️ deep_search — solo resultados de test/dev. Ampliando a todos los matches.' });
       }
-      return { matches: ranked, evidence: await runDeepSearchPipeline(ranked, terms, repo, send, determineMaxHops(query), false) };
+      return { matches: ranked, evidence: await runDeepSearchPipeline(ranked, terms, repo, send, determineMaxHops(query), false, query) };
     };
 
     // ── Attempt 1 ────────────────────────────────────────────────────────────
@@ -5796,7 +5859,7 @@ async function runChatTurn(
           if (preResult.matches.length > 0) {
             const preProd   = preResult.matches.filter(m => !isTestMatch(m.path, m.text));
             const preRanked = preProd.length > 0 ? preProd : preResult.matches;
-            const preEv     = await runDeepSearchPipeline(preRanked, allKws, repo, send, determineMaxHops(userMessage), false);
+            const preEv     = await runDeepSearchPipeline(preRanked, allKws, repo, send, determineMaxHops(userMessage), false, userMessage);
             if (preEv.length > 0) {
               // Formatted evidence: structured for Haiku (groups by type, labels each fragment)
               const evidenceSummary = formatDeepEvidenceForHaiku(preEv, userMessage, repo);

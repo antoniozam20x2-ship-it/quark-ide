@@ -1,0 +1,104 @@
+Feature — terminación de DEEP por confianza en vez de MAX_HOPS fijo
+(punto 10 de la lista de mejoras de agent.ts: research layer)
+
+Contexto: actualmente determineMaxHops(query) decide de antemano 2 o 4 hops
+según un regex sobre la pregunta del usuario, sin mirar la evidencia real
+que se va encontrando. Esto puede parar demasiado pronto (pregunta compleja
+que solo matcheó el regex simple) o seguir buscando de más cuando ya con
+1-2 hops la evidencia alcanza para responder.
+
+Objetivo: después de CADA hop, evaluar si la evidencia acumulada ya es
+suficiente para responder la pregunta del usuario. Si sí, parar aunque
+queden hops disponibles. Si no, seguir hasta un tope duro de seguridad
+(mantener MAX_HOPS=4 como límite absoluto, nunca eliminarlo — es la red
+de seguridad contra loops infinitos o costos descontrolados).
+
+No tocar: Strategy 1, Strategy 2, DEF_SYM_RE, stripLineComments, el
+formato AnnotatedFragment ni formatDeepEvidenceForHaiku (ya implementados
+en la sesión anterior) — esto se integra ENCIMA de esos cambios, no los
+reemplaza.
+
+Cambio 1 — función de evaluación de confianza (nueva, en agent.ts)
+
+Después de cada hop dentro de runDeepSearchPipeline, antes de decidir si
+hacer el siguiente hop, llamar a una función liviana que use Groq (mismo
+modelo ya usado para triage/clasificación de intención — reusar esa misma
+integración, no agregar un proveedor nuevo) con un prompt corto:
+
+async function evaluateSearchConfidence(
+  userQuery: string,
+  fragmentsSoFar: AnnotatedFragment[],
+  hopLevel: number,
+): Promise<{ sufficient: boolean; reason: string }> {
+  const summary = fragmentsSoFar.map(f =>
+    `- [${f.fragmentType}] ${f.purpose} (${f.path}:${f.startLine})`
+  ).join('\n');
+
+  const prompt = `Pregunta del usuario: "${userQuery}"
+
+Evidencia encontrada hasta el hop ${hopLevel}:
+${summary}
+
+¿Esta evidencia ya es suficiente para responder completamente la pregunta,
+incluyendo CÓMO se relacionan los conceptos si la pregunta lo pide? 
+Responde SOLO con JSON: {"sufficient": true|false, "reason": "una frase breve"}`;
+
+  // usar la misma función/cliente Groq ya existente para triage
+  const response = await callGroqAgent(prompt, SYSTEM_PROMPT_CONFIDENCE_CHECK, 150);
+  try {
+    return JSON.parse(response.trim());
+  } catch {
+    // si Groq falla o responde mal, asumir que NO es suficiente
+    // (fail-safe: preferir un hop de más antes que cortar información)
+    return { sufficient: false, reason: 'fallback — no se pudo evaluar' };
+  }
+}
+
+Cambio 2 — integrar en el loop de hops
+
+Ubicar el loop actual (probablemente un for o while que va de hop 1 a
+determineMaxHops(query)) y modificarlo así:
+
+const maxHopsHardLimit = determineMaxHops(userMessage); // se mantiene como TOPE, no como objetivo fijo
+let allFragments: AnnotatedFragment[] = [...initialFragments];
+
+for (let hop = 1; hop <= maxHopsHardLimit; hop++) {
+  const hopFragments = await runHop(hop, allFragments /* o lo que ya use la lógica actual */);
+  allFragments = allFragments.concat(hopFragments);
+
+  // Solo evaluar confianza desde el hop 1 en adelante (no antes del primer hop)
+  // y solo si hay al menos 1 fragmento nuevo — no gastar una llamada Groq si el hop no encontró nada
+  if (hopFragments.length > 0) {
+    const confidence = await evaluateSearchConfidence(userMessage, allFragments, hop);
+    console.log(`[DEEP confidence] hop ${hop}: sufficient=${confidence.sufficient} — ${confidence.reason}`);
+    if (confidence.sufficient) {
+      console.log(`[DEEP confidence] deteniendo búsqueda temprano en hop ${hop}/${maxHopsHardLimit}`);
+      break;
+    }
+  }
+}
+
+Cambio 3 — logging para verificación
+
+Cada evaluación de confianza debe loguear claramente hop, resultado y razón
+(ya incluido arriba) para poder confirmar en producción que:
+(a) el corte temprano ocurre cuando corresponde (preguntas simples paran en
+    hop 1-2), y
+(b) no corta de más en preguntas legítimamente complejas.
+
+Verificación esperada después del cambio:
+1. Repetir "¿Cómo funciona el circuit breaker y en qué se relaciona con el
+   trailing stop?" — confirmar en logs cuántos hops corrió antes de parar,
+   y que la respuesta final mantiene la misma calidad que antes.
+2. Probar una pregunta MÁS simple, ej. "¿Dónde está definido
+   CIRCUIT_BREAKER_THRESHOLD_PCT?" — debería cortar en hop 1 con
+   sufficient=true, ahorrando hops innecesarios.
+3. Probar una pregunta MÁS compleja de 3+ conceptos para confirmar que NO
+   corta antes de tiempo y llega hasta 3-4 hops si hace falta.
+4. tsc --noEmit limpio.
+5. Confirmar que el costo extra de las llamadas a Groq por evaluación de
+   confianza es marginal (Groq es rápido/barato) — no debería impactar
+   perceptiblemente la latencia total de DEEP.
+
+No aplicar todavía nada del punto 11 (interfaz unificada) — eso depende de
+validar primero que este mecanismo de confianza funciona bien.
