@@ -3340,6 +3340,52 @@ function classifyComplexity(message: string): 'simple' | 'complex' {
   return isComplex ? 'complex' : 'simple';
 }
 
+/**
+ * Clasifica si una pregunta técnica (ya marcada NEEDS_TOOLS) requiere un lookup
+ * directo (simple → ripgrep + fragmento + Groq) o una búsqueda multi-hop
+ * (complex → DEEP pre-fetch + Haiku).
+ *
+ * Actúa DENTRO del bloque NEEDS_TOOLS, no como gate previo al triage de Groq.
+ */
+function classifySearchComplexity(
+  userMessage: string,
+  conversationHistory: Array<{ role: string; content: string }>,
+): 'simple' | 'complex' {
+  // Heurística 1: palabras que indican relaciones entre múltiples conceptos → complex
+  const hasRelationshipKeywords = /\b(relaci[oó]n|relaciona|relac|interacci[oó]n|junto|combo|ambos|trabajan|flujo completo|entre)\b/i.test(userMessage);
+  const multipleTopicsRegex = /\b(y|con|versus|vs|adem[aá]s|tambi[eé]n)\s+(?:el|la|los|las)\s+\w+\s*\(/i;
+
+  if (hasRelationshipKeywords || multipleTopicsRegex.test(userMessage)) {
+    return 'complex';
+  }
+
+  // Heurística 2: cambio de tema respecto al último mensaje del usuario → complex
+  const lastUserMessage = conversationHistory
+    .slice()
+    .reverse()
+    .find(m => m.role === 'user')?.content ?? '';
+
+  if (lastUserMessage && lastUserMessage !== userMessage) {
+    const topicShift = /^(?:ahora|cambiando|diferente|otro|next|siguient|pasando)/i.test(userMessage);
+    if (topicShift) return 'complex';
+  }
+
+  // Heurística 3: patrones que piden comparaciones o flujos completos → complex
+  const complexPatterns = [
+    /flujo\s+completo/i,
+    /paso\s+a\s+paso/i,
+    /c[oó]mo\s+se\s+relaciona/i,
+    /diferencia\s+entre/i,
+    /cuando\s+.*\s+entonces/i,
+  ];
+  if (complexPatterns.some(p => p.test(userMessage))) {
+    return 'complex';
+  }
+
+  // Default: lookup directo
+  return 'simple';
+}
+
 // ── Tool-result compression ───────────────────────────────────────────────────
 // Tool results from closed turns (all except the most recent one) accumulate
 // unboundedly across multi-step sessions: a single read_file can be 10 KB, and
@@ -5463,6 +5509,60 @@ async function runChatTurn(
     }
 
     const groqReason = groqAnswer.replace('NEEDS_TOOLS:', '').trim();
+
+    // ── Router de complejidad de búsqueda ─────────────────────────────────────
+    // Para preguntas de lookup directo (S1, trailing stop, etc.) evitamos el
+    // runDeepSearchPipeline completo — ripgrep + fragmento + Groq es suficiente
+    // y es la misma estrategia que FAST mode usa exitosamente.
+    // Si la ruta rápida falla o la pregunta es multi-hop, cae al DEEP pre-fetch.
+    const searchComplexity = classifySearchComplexity(
+      userMessage,
+      groqHistory.map((m: any) => ({ role: m.role as string, content: typeof m.content === 'string' ? m.content : '' })),
+    );
+
+    if (searchComplexity === 'simple' && classifyIntent(userMessage) === 'explain') {
+      send('action', { text: `🔍 Búsqueda rápida — lookup directo (${groqReason.slice(0, 60)})` });
+      let fastPathHandled = false;
+      try {
+        const chatFastTerms = extractSearchKeywords(userMessage);
+        if (chatFastTerms.length > 0) {
+          const { matches: chatFastMatches } = await searchWithTestFallback(chatFastTerms.join('|'), repo, send);
+          const chatFastBest = chatFastMatches.find(m => !isTestMatch(m.path, m.text ?? '')) ?? chatFastMatches[0];
+          if (chatFastBest) {
+            send('action', { text: `📍 Símbolo encontrado: ${chatFastBest.path}${chatFastBest.line ? `:${chatFastBest.line}` : ''}` });
+            const chatFastContent = await getFileContent(chatFastBest.path, repo);
+            const chatFastSection = chatFastBest.line
+              ? (readEnclosingFunction(chatFastContent, chatFastBest.line) ?? smartReadSection(chatFastContent, chatFastBest.line, 60))
+              : null;
+            if (chatFastSection) {
+              const chatFastFragment = chatFastSection.excerpt ?? '';
+              const chatFastSynthesis = await callGroqAgent(
+                `Pregunta: "${userMessage}"\n\nFragmento de código (${chatFastBest.path}, líneas ${chatFastSection.startLine}-${chatFastSection.endLine}):\n${chatFastFragment}`,
+                GROQ_SINGLE_FRAGMENT_SYSTEM,
+                512,
+              );
+              send('chat_message', { text: chatFastSynthesis });
+              const _cfPaths = chatFastBest.path;
+              const _cfAssistantWithPaths =
+                chatFastSynthesis + `\n\n<evidence_files>\n${_cfPaths}\n</evidence_files>`;
+              messages.push({ role: 'assistant', content: [{ type: 'text', text: _cfAssistantWithPaths }] });
+              await saveChatHistory(sessionId, messages);
+              send('confidence', {
+                level: 'medium',
+                reason: 'CHAT — ruta rápida: ripgrep + fragmento + Groq (lookup directo)',
+                suggestedAction: 'none',
+              });
+              send('done', { files: [{ path: chatFastBest.path, lineRanges: chatFastBest.line ? [{ start: chatFastSection.startLine, end: chatFastSection.endLine, matchedTerm: chatFastTerms[0] }] : [] }], commitMessage: '', mainComponent: chatFastBest.path, mainContent: '', repo, branch: '' });
+              fastPathHandled = true;
+            }
+          }
+        }
+      } catch (chatFastErr) {
+        console.warn('[chat-fast-path] ruta rápida falló, cayendo a DEEP pre-fetch:', chatFastErr instanceof Error ? chatFastErr.message : chatFastErr);
+      }
+      if (fastPathHandled) return;
+    }
+
     send('action', { text: `🧠 Groq → ${groqReason.slice(0, 80)} — ejecutando DEEP pre-fetch` });
 
     // ── DEEP pre-fetch: gather evidence before handing off to Haiku ──────────

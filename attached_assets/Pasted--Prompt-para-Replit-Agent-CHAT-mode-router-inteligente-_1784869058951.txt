@@ -1,0 +1,255 @@
+# Prompt para Replit Agent — CHAT mode: router inteligente de complejidad
+
+## Contexto y objetivo
+
+**Problema encontrado:**
+CHAT mode hoy dispara DEEP automáticamente en cualquier pregunta técnica (`NEEDS_TOOLS`),
+sin distinguir si es una búsqueda simple (lookup directo tipo "¿cómo funciona S1?") o
+compleja (multi-hop tipo "¿cómo se relaciona el circuit breaker con el trailing stop?").
+
+**Resultado:**
+- Preguntas simples como "¿cómo funciona S1?" entran en un loop de búsqueda manual en
+  DEEP, leen 800+ líneas sin encontrar el símbolo, agotan el limit de pasos, devuelven
+  nada.
+- Mientras que FAST mode en la misma pregunta: ripgrep → encuentra `checkS1Bull` en
+  línea 553 → fragmento → DeepSeek → HIGH CONFIDENCE en 2 segundos.
+
+**La raíz:**
+DEEP está diseñado para multi-hop (relaciones complejas entre funciones, hops 1/2/3).
+Para preguntas que se resuelven en un lookup directo, DEEP es **over-engineered** y
+destructivo.
+
+**Objetivo:**
+Agregar un **router de complejidad** en CHAT mode que decida:
+- ¿Búsqueda simple (lookup directo)? → ripgrep + índice (como FAST) → fragmento → Haiku
+- ¿Búsqueda compleja (multi-hop)? → DEEP con estrategia multi-hop → fragmentos → Haiku
+
+**Resultado esperado:**
+CHAT mode será la versión **robusta y superior** de FAST mode:
+- ✅ Igual de rápido para queries simples (usa la misma búsqueda rápida)
+- ✅ Más profundo para queries complejas (acceso a DEEP cuando lo necesita)
+- ✅ Groq solo intenta interpretar si hay código real para interpretar
+
+## Dónde tocar
+
+Router de CHAT mode, típicamente en `/chat` endpoint o su handler equivalente en el
+backend (buscar `runChatTurn` o `router.post('/chat')` según la estructura actual).
+
+## Cambio 1 — agregar clasificador de complejidad
+
+Nueva función que decide si una pregunta es búsqueda simple o compleja, sin pasar por
+Groq (es una heurística rápida, no un LLM call):
+
+```ts
+function classifySearchComplexity(
+  userMessage: string,
+  conversationHistory: Array<{ role: string; content: string }>,
+): 'simple' | 'complex' {
+  // Heurística 1: si pregunta sobre UNA sola función/concepto técnico sin relaciones
+  // ("¿cómo funciona X?", "¿qué es X?", "explícame X") → simple
+  // si pregunta sobre RELACIONES entre múltiples ("X en relación con Y", "cómo se
+  // relacionan X e Y") → complex
+
+  const hasRelationshipKeywords = /\b(relación|relaciona|relac|interacción|junto|combo|ambos|trabajan|flujo completo|entre)\b/i.test(userMessage);
+  const multipleTopicsRegex = /\b(y|con|versus|vs|además|también)\s+(?:el|la|los|las)\s+\w+\s*\(/i;
+
+  if (hasRelationshipKeywords || multipleTopicsRegex.test(userMessage)) {
+    return 'complex';
+  }
+
+  // Heurística 2: si el historial de sesión tiene preguntas previas muy distintas
+  // al tema actual → posible multi-hop para context cruzado
+  // (ej: preguntó sobre circuit breaker, ahora pregunta sobre trailing stop) → complex
+  const lastUserMessage = conversationHistory
+    .slice()
+    .reverse()
+    .find(m => m.role === 'user')?.content ?? '';
+
+  if (lastUserMessage && lastUserMessage !== userMessage) {
+    const topicShift = /^(?:ahora|cambiando|diferente|otro|next|siguient|pasando)/i.test(userMessage);
+    if (topicShift) return 'complex';
+  }
+
+  // Heurística 3: preguntas que típicamente piden comparaciones o flujos
+  const complexPatterns = [
+    /flujo\s+completo/i,
+    /paso\s+a\s+paso/i,
+    /cómo\s+se\s+relaciona/i,
+    /diferencia\s+entre/i,
+    /cuando\s+.*\s+entonces/i,
+  ];
+  if (complexPatterns.some(p => p.test(userMessage))) {
+    return 'complex';
+  }
+
+  // Default: simple
+  return 'simple';
+}
+```
+
+## Cambio 2 — ruta rápida en CHAT para búsquedas simples
+
+Ubicar el punto en `runChatTurn` (o el handler de `/chat`) donde se decide lanzar DEEP.
+Hoy probablemente dice algo como:
+
+```ts
+if (resolvedIntent === 'NEEDS_TOOLS') {
+  const deepResult = await runDeepSearch(userMessage, repo);
+  // ... procesa deepResult
+}
+```
+
+Modificar para:
+
+```ts
+if (resolvedIntent === 'NEEDS_TOOLS') {
+  const complexity = classifySearchComplexity(userMessage, conversationHistory);
+
+  if (complexity === 'simple') {
+    // ────────────────────────────────────────────────────────────
+    // RUTA RÁPIDA: ripgrep + índice (igual que FAST mode)
+    // ────────────────────────────────────────────────────────────
+    send('action', { text: '🔍 Búsqueda rápida...' });
+
+    // Extraer términos técnicos del mensaje (reusar extractSearchKeywords de FAST)
+    const searchTerms = extractSearchKeywords(userMessage);
+    if (searchTerms.length === 0) {
+      send('action', { text: '⚠️ No se identificaron términos técnicos en tu pregunta.' });
+      send('done', { text: 'Reformulá con nombres de funciones o conceptos del código.' });
+      res.end();
+      return;
+    }
+
+    try {
+      // Usar ripgrep + índice (reusar la lógica de FAST's searchWithTestFallback)
+      const { matches, source } = await searchWithTestFallback(searchTerms.join('|'), repo, send);
+
+      if (!matches || matches.length === 0) {
+        send('action', { text: `❌ No encontré: ${searchTerms.join(', ')}` });
+        send('done', { text: 'Probá DEEP mode para una búsqueda más extensiva.' });
+        res.end();
+        return;
+      }
+
+      // Extraer el mejor fragmento (igual que FAST mode)
+      const best = matches[0];
+      const fileContent = await getFileContent(best.path, repo);
+      const fragment = best.line
+        ? (readEnclosingFunction(fileContent, best.line) ??
+           smartReadSection(fileContent, best.line, 100))
+        : null;
+
+      if (!fragment) {
+        send('action', { text: `⚠️ Fragmento en ${best.path} incompleto.` });
+        send('done', { text: 'Probá DEEP mode para contexto adicional.' });
+        res.end();
+        return;
+      }
+
+      // Pasar fragmento pequeño a Haiku (no a Groq) para interpretación
+      const systemPrompt = `Sos un experto en trading y análisis de código. El usuario pregunta sobre
+una función o concepto específico del código. Lee el fragmento proporcionado y explica,
+de forma precisa y concisa (máximo 3 párrafos), qué hace, cómo funciona, y qué es
+importante saber sobre él.
+
+Si el fragmento no contiene la respuesta, decilo en una oración.
+Siempre cita las líneas o nombres exactos de código que respaldan tu explicación.`;
+
+      const haikuAnswer = await callAnthropicAPI(
+        prompt: `Fragmento del código (${best.path}:${fragment.startLine}-${fragment.endLine}):\n\n${fragment.excerpt}\n\nPregunta del usuario: "${userMessage}"`,
+        systemPrompt,
+        model: 'claude-3-5-haiku-20241022',
+        maxTokens: 500,
+      );
+
+      // Enviar respuesta de Haiku directamente
+      send('action', { text: haikuAnswer });
+      send('done', { files: [], commitMessage: '', mainComponent: best.path, mainContent: '', repo, branch });
+      res.end();
+      return;
+
+    } catch (fastErr) {
+      console.warn('[chat-fast-path] búsqueda rápida falló:', fastErr);
+      // Fallback a DEEP si ripgrep falla
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // RUTA PROFUNDA: DEEP multi-hop (si es compleja o si la ruta rápida falló)
+  // ────────────────────────────────────────────────────────────
+  send('action', { text: '🧠 Búsqueda profunda (multi-hop)...' });
+
+  const deepResult = await runDeepSearch(userMessage, repo);
+  // ... resto del código DEEP existente sin cambios
+}
+```
+
+## Cambio 3 — reutilizar funciones de FAST en CHAT
+
+Las funciones que FAST mode usa para búsqueda rápida necesitan estar disponibles en el
+scope de CHAT. Verificar que estas funciones existan y sean accesibles:
+
+- `extractSearchKeywords(prompt)` — extrae términos técnicos del mensaje
+- `searchWithTestFallback(pattern, repo, send)` — ripgrep + índice
+- `getFileContent(path, repo)` — lee archivo
+- `readEnclosingFunction(content, lineNumber)` — extrae función completa
+- `smartReadSection(content, lineNumber, contextLines)` — extrae sección con contexto
+
+Si estas funciones están en un módulo separado de FAST, importarlas o moverlas a un
+módulo compartido (`search.ts` o similar) para que CHAT pueda usarlas.
+
+## Cambio 4 — ajustar el prompt de Haiku para la ruta rápida
+
+El prompt que Haiku usa para interpretar fragmentos de FAST (u otros) debe ser
+consistente. Si existe un prompt de síntesis en FAST mode, reutilizarlo en CHAT:
+
+```ts
+const systemPrompt = `Sos un experto en trading y análisis de código. Tu objetivo es explicar
+qué hace un fragmento de código o función específica, de forma clara y precisa.
+
+REGLAS:
+- Máximo 3 párrafos cortos (usuario puede pedir "más detalle" si lo necesita)
+- Cita siempre las líneas o valores numéricos exactos del código: "línea 553", "RVOL >= 1.5"
+- Si el fragmento no alcanza para responder completamente, decilo en una oración clara
+- Enfoque: QUÉ hace (resultado/efecto) y POR QUÉ (si es evidente del código)
+`;
+```
+
+## Qué NO tocar
+
+- FAST mode queda idéntico — esta es una **adopción en CHAT de la estrategia de FAST**,
+  no un cambio a FAST mismo.
+- DEEP mode queda idéntico — solo se activa cuando `complexity === 'complex'` ahora.
+- El triage de Groq (`NEEDS_TOOLS` vs no) queda igual — este router actúa *después* de
+  que Groq dice "necesito código".
+
+## Verificación después del cambio
+
+En CHAT mode (no FAST), en una sesión nueva:
+
+1. **"¿Cómo funciona S1?"** → debe usar ruta rápida:
+   - ✅ Encuentra `checkS1Bull` en línea 553 en ripgrep (no entra a DEEP)
+   - ✅ Responde en <3 segundos (no 30+ segundos esperando loops)
+   - ✅ HIGH CONFIDENCE o similar, explica RVOL, EMA, SuperTrend
+
+2. **"¿Cómo funciona el trailing stop?"** → debe usar ruta rápida:
+   - ✅ Encuentra `placeTrailingStop` en línea 879
+   - ✅ Respuesta precisa con números (1.001, 0.999, buffer 0.1%)
+
+3. **"¿Cómo se relaciona el circuit breaker con el trailing stop?"** → debe disparar DEEP:
+   - ✅ Detecta `complejidad === 'complex'` (keyword "se relaciona")
+   - ✅ Entra a DEEP multi-hop (hops 1, 2 encontrando call sites)
+   - ✅ Respuesta conectando ambos mecanismos (global vs por posición)
+
+4. **"¿Cómo funciona S1 junto con S6?"** → debe disparar DEEP:
+   - ✅ Detecta multi-topic (keyword "junto con")
+   - ✅ DEEP busca ambas señales y sus interacciones
+   - ✅ Respuesta conecta FVG (S6) con RVOL/EMA (S1)
+
+## Beneficio neto
+
+CHAT mode ahora:
+- ✅ Igual de rápido que FAST para queries simples (usa mismo búsqueda)
+- ✅ Mucho más profundo para queries complejas (acceso a DEEP con multi-hop)
+- ✅ Nunca entra en loops de lectura manual innecesarios
+- ✅ Es la versión "superior y robusta" de FAST, no un competidor lento
