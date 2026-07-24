@@ -22,6 +22,7 @@ import healthRouter from './routes/health.js';
 import auditRouter from './routes/audit.js';
 import reposRouter from './routes/repos.js';
 import webhooksRouter from './routes/webhooks.js';
+import adminRouter from './routes/admin.js';
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3001);
@@ -58,6 +59,7 @@ app.use('/api/studio', studioRouter);
 app.use('/api/health', healthRouter);
 app.use('/api/audit', auditRouter);
 app.use('/api/repos', reposRouter);
+app.use('/api/admin', adminRouter);
 
 app.get('/api/costs', (_req, res) => {
   res.json(getCosts());
