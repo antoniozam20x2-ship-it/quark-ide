@@ -1,0 +1,55 @@
+Diagnóstico previo — punto 3: grafo de relaciones pre-calculado (call graph)
+
+Objetivo del feature completo (para contexto, NO implementar todavía): 
+en vez de que cada hop de DEEP dispare ripgrep en vivo, construir una vez 
+—durante el sync/indexado— un grafo liviano de "quién llama a quién" a 
+partir del código, guardado en Postgres, para que los hops de 
+runDeepSearchPipeline naveguen ese grafo en vez de re-buscar texto cada 
+vez.
+
+Este prompt es SOLO diagnóstico — no tocar código todavía.
+
+Preguntas a responder:
+
+1. — Output actual de ctags
+   indexSymbols() en localRepos.ts ya invoca ctags con 
+   --output-format=json --fields=+n. Mostrar un ejemplo real de output 
+   crudo de ctags para un archivo representativo de quark-ide (ej. 
+   agent.ts), específicamente:
+   - ¿El JSON de ctags incluye algún campo de "referencias" o 
+     "call sites" (dónde se USA un símbolo, no solo dónde se DEFINE)? 
+     Sospecho que no — ctags típicamente solo da definiciones, no uso.
+   - Si no lo incluye, confirmar que necesitamos una fuente de datos 
+     distinta para las relaciones de llamada (ver punto 2).
+
+2. — Cómo se detectan hoy las llamadas (call sites)
+   Ubicar en agent.ts cómo Strategy 1 y Strategy 2 del pipeline de hops 
+   actual encuentran "quién llama a X" — sospecho que es vía ripgrep 
+   buscando el nombre del símbolo como texto, no vía un análisis real 
+   de AST/imports. Confirmar y mostrar las líneas relevantes.
+
+3. — Costo de construir el grafo en el sync
+   Si tuviéramos que generar el grafo de llamadas en el momento del sync 
+   (dentro de syncRepo → indexSymbols), usando ripgrep para buscar cada 
+   symbol_name ya indexado dentro de todo el repo (para encontrar sus 
+   call sites), estimar:
+   - Tiempo aproximado que tomaría para quark-ide (dado que ya sabemos 
+     que tiene ~151k símbolos propios — esto es CRÍTICO: correr una 
+     búsqueda de texto por cada uno de 151k símbolos sería carísimo)
+   - ¿Hay una forma más barata? Por ejemplo, usando el propio output de 
+     ctags con --fields=+n (que ya da línea de definición) combinado con 
+     UN SOLO pase de ripgrep que capture todas las ocurrencias de todos 
+     los identificadores de una vez, en vez de una búsqueda por símbolo.
+
+4. — Esquema de tabla propuesto (solo diseño, no crear todavía)
+   Proponer un esquema de tabla Postgres tipo:
+     symbol_calls (repo, caller_symbol, callee_symbol, file_path, line_number)
+   y confirmar si es viable poblarla de forma incremental (solo para 
+   changedFiles en syncs normales) sin tener que reconstruir todo el 
+   grafo en cada push.
+
+Reportar los 4 hallazgos, con foco especial en el punto 3 — si el costo 
+de construir el grafo para 151k símbolos es prohibitivo, necesitamos 
+repensar el approach (ej: limitarlo a symbol_type específicos como 
+funciones/clases, no todas las variables) antes de diseñar el esquema 
+final.
