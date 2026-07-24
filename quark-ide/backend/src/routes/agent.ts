@@ -5683,8 +5683,27 @@ async function runHaikuTier(
   send('model_active', { model: 'Haiku 4.5', tier: 'balanced' });
 
   let foundFiles = false;
+  // Cambio 1 — count consecutive shallow searches (grep_code / read_file)
+  // without an intervening deep_search call. Reset to 0 whenever deep_search
+  // or task_complete is called, or when the forced message is injected.
+  let consecutiveShallowSearches = 0;
 
   for (let step = 0; step < maxSteps; step++) {
+    // Cambio 2 — "2 steps left" hard warning injected into the last user
+    // message so Haiku receives it before this API call.
+    if (step === maxSteps - 2 && messages.length > 0) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg.role === 'user' && Array.isArray(lastMsg.content)) {
+        lastMsg.content.push({
+          type: 'text',
+          text: `⚠️ ADVERTENCIA FINAL: Te quedan 2 pasos antes del límite. ` +
+                `En tu PRÓXIMA respuesta debés sintetizar la respuesta final ` +
+                `con la evidencia disponible — no hagas más llamadas a herramientas de búsqueda.`,
+        });
+        console.log(`[runHaikuTier] inyectando advertencia de presupuesto final (paso ${step}/${maxSteps})`);
+      }
+    }
+
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -5741,11 +5760,80 @@ async function runHaikuTier(
       ) {
         foundFiles = true;
       }
+      // Cambio 1 — update consecutive-shallow-search counter
+      if (tool.name === 'grep_code' || tool.name === 'read_file') {
+        consecutiveShallowSearches++;
+      } else if (tool.name === 'deep_search' || tool.name === 'task_complete') {
+        consecutiveShallowSearches = 0;
+      }
     }
+
+    // Cambio 1 — inject forced synthesis message when 3+ shallow searches
+    // have run since the last deep_search (or since the start).
+    if (consecutiveShallowSearches >= 3) {
+      toolResults.push({
+        type: 'text',
+        text: `⚠️ STOP: Llevás ${consecutiveShallowSearches} búsquedas seguidas ` +
+              `(grep_code/read_file) sin usar deep_search ni responder. ` +
+              `Con la evidencia que ya reuniste, generá la respuesta final AHORA. ` +
+              `Si de verdad falta algo crítico, tu ÚNICA opción en este paso es llamar ` +
+              `deep_search (no grep_code ni read_file) para completarlo — ` +
+              `no seguir con búsquedas sueltas.`,
+      });
+      console.log(`[runHaikuTier] inyectando mensaje forzoso: ${consecutiveShallowSearches} búsquedas consecutivas sin deep_search (paso ${step})`);
+      consecutiveShallowSearches = 0; // reset after injection
+    }
+
     messages.push({ role: 'user', content: toolResults });
   }
 
-  send('action', { text: '🧠 Haiku alcanzó el límite de pasos de exploración' });
+  // Cambio 3 — safety-net synthesis: instead of returning an empty "limit reached"
+  // response, make one additional tool-free call so Haiku can synthesize from the
+  // accumulated tool_result history rather than leaving the user with no answer.
+  send('action', { text: '🧠 Haiku alcanzó el límite — forzando síntesis final' });
+  console.log('[runHaikuTier] maxSteps exhausted — attempting forced synthesis');
+  messages.push({
+    role: 'user',
+    content: [{
+      type: 'text',
+      text: `LÍMITE DE PASOS ALCANZADO. Con toda la evidencia acumulada en el historial ` +
+            `de esta conversación, generá AHORA la respuesta final al usuario. ` +
+            `No podés hacer más llamadas a herramientas — sintetizá directamente con lo que tenés. ` +
+            `Si la evidencia es parcial, decilo honestamente en lugar de dejar al usuario sin respuesta.`,
+    }],
+  });
+  try {
+    const synthRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY!,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 2048,
+        system: [{ type: 'text', text: HAIKU_SEARCH_SYSTEM }],
+        // No tools — force a text-only synthesis response.
+        messages: compressOldToolResults(messages),
+      }),
+    });
+    if (synthRes.ok) {
+      const synthData = await synthRes.json() as { type?: string; content: any[] };
+      if (synthData.type !== 'error' && Array.isArray(synthData.content)) {
+        messages.push({ role: 'assistant', content: synthData.content });
+        const synthText = synthData.content.filter((b: any) => b.type === 'text');
+        for (const t of synthText) {
+          send('chat_message', { text: t.text });
+        }
+        if (synthText.length > 0) {
+          return { resolved: true, messages, foundFiles };
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[runHaikuTier] forced synthesis call failed:', e);
+  }
   return { resolved: false, messages, foundFiles };
 }
 

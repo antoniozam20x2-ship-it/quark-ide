@@ -1,0 +1,77 @@
+Fix — Haiku sigue agotando maxSteps=12 cuando NUNCA usa deep_search 
+(loop puro de grep_code/read_file)
+
+Contexto: el fix anterior (confidenceSignal + recordatorio de presupuesto 
+en el system prompt) solo cubre el caso donde Haiku llama deep_search al 
+menos una vez. Se confirmó un caso real donde Haiku hizo 6+ llamadas 
+consecutivas de grep_code/read_file, granularizando cada vez más 
+("dónde se compara X", "leé alrededor de la línea 140"...), acumulando 
+evidencia real y suficiente (cbConsumedPct, circuitBreakerActive, 
+threshold ubicado), pero nunca sintetizó — agotó el límite sin responder. 
+El recordatorio de texto en el system prompt no fue suficiente para 
+frenarlo por sí solo.
+
+Cambio 1 — límite duro de búsquedas consecutivas sin deep_search
+
+En runHaikuTier, llevar un contador de llamadas a herramientas de 
+búsqueda/lectura (grep_code, read_file) desde la última vez que se llamó 
+deep_search (o desde el inicio si nunca se llamó). Cuando ese contador 
+llegue a 3 sin haber llamado deep_search ni task_complete en el medio, 
+inyectar un mensaje de sistema/tool-result FORZOSO en el siguiente turno 
+(no una sugerencia en el prompt inicial, sino un mensaje explícito 
+inyectado en ese punto de la conversación), algo tipo:
+
+"Llevás 3 búsquedas seguidas sin usar deep_search ni responder. Con la 
+evidencia que ya reuniste, generá la respuesta final AHORA. Si de verdad 
+falta algo crítico, tu ÚNICA opción en este paso es llamar deep_search 
+(no grep_code ni read_file) para completarlo — no seguir con búsquedas 
+sueltas."
+
+Cambio 2 — advertencia dura en los últimos pasos del presupuesto
+
+Independientemente del cambio 1: cuando el step actual de runHaikuTier 
+llegue a maxSteps - 2 (es decir, paso 10 de 12), inyectar un mensaje de 
+sistema forzoso:
+
+"Te quedan 2 pasos antes del límite. En tu PRÓXIMA respuesta debés 
+sintetizar la respuesta final con la evidencia disponible — no hagas más 
+llamadas a herramientas de búsqueda."
+
+Este mensaje debe inyectarse SIEMPRE en ese step, sin excepción, 
+independientemente de si usó deep_search o no — es la red de seguridad 
+final contra cualquier variante del loop, no solo la de grep_code puro.
+
+Cambio 3 — mejorar el mensaje de "límite alcanzado sin respuesta"
+
+Actualmente cuando Haiku alcanza maxSteps sin sintetizar, el resultado es 
+"🧠 Haiku alcanzó el límite de pasos de exploración" sin ninguna respuesta 
+al usuario. Esto no debería poder pasar más con los cambios 1 y 2, pero 
+como red de seguridad final: si aun así ocurre, forzar una llamada 
+adicional (fuera del loop normal, una sola vez) pidiéndole a Haiku que 
+sintetice con lo que tenga en el historial de tool_results acumulados, en 
+vez de devolver un mensaje vacío/de error al usuario.
+
+No tocar: evaluateSearchConfidence(), el pipeline de hops, symbol_calls, 
+el confidenceSignal ya implementado — esto se suma encima, no reemplaza 
+nada de eso.
+
+Verificación esperada:
+1. Repetir el caso que causó el loop hoy: "Buscá en autonomousAgent.ts y 
+   botEngine.ts cualquier lugar donde aparezca el número -2 o el texto 
+   2% cerca de circuitBreaker o threshold" — confirmar que esta vez SÍ 
+   sintetiza una respuesta antes de agotar pasos (aunque la respuesta sea 
+   "no encontré ningún -2%, el valor real es 7%").
+2. Confirmar en logs que aparece el mensaje forzoso del cambio 1 cuando 
+   corresponde (3 grep_code/read_file seguidos sin deep_search).
+3. Confirmar que preguntas que sí se resuelven en pocos pasos (ej. 
+   circuit breaker + trailing stop, que hoy resolvió en 1 ciclo de 
+   deep_search) NO se ven afectadas ni ralentizadas por este cambio.
+4. tsc --noEmit limpio.
+
+Nota aparte para otro fix (no aplicar ahora, solo dejar registrado): se 
+confirmó por separado que Haiku puede citar valores numéricos incorrectos 
+en la síntesis final aunque haya leído el valor correcto en la evidencia 
+(caso real: dijo "-2%" en una respuesta narrativa cuando el propio 
+lookup directo del símbolo, en otra corrida, confirmó "7%" correctamente). 
+Es un problema de precisión en la síntesis de números, no de búsqueda — 
+merece diagnóstico propio más adelante.
