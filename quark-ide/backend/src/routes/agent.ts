@@ -6051,16 +6051,63 @@ async function runChatTurn(
       send('action', { text: `🔍 Búsqueda rápida — lookup directo (${groqReason.slice(0, 60)})` });
       let fastPathHandled = false;
       try {
-        // Misma lógica de extracción que FAST mode:
-        // 1. extractKeywordsForSearch (async, usa AI si hay keys) como fuente principal.
-        // 2. Fallback: palabras de más de 4 chars del propio mensaje (igual que FAST).
+        const chatFastHistory = await loadFastHistory(sessionId!);
+        const chatFastLastUser = chatFastHistory.slice().reverse().find((m: any) => m.role === 'user');
+        const chatFastLastAss  = chatFastHistory.slice().reverse().find((m: any) => m.role === 'assistant');
+
         const chatFastTerms = await extractKeywordsForSearch(userMessage, repo);
+
+        const chatFastIsFollowUp =
+          hasFastTopicOverlap(chatFastTerms, chatFastLastUser?.keywords ?? []) &&
+          !!chatFastLastAss?.fragment;
+
+        if (chatFastIsFollowUp) {
+          send('action', { text: '⚡ Ruta rápida — pregunta de seguimiento, reutilizando contexto ya leído...' });
+          const cachedFragment = chatFastLastAss!.fragment as string;
+
+          try {
+            const chatFuSynthesis = await callGroqAgent(
+              `El usuario hace una pregunta de seguimiento: "${userMessage}"\n\nFragmento de código (mismo contexto del turno anterior, ${chatFastLastUser?.path ?? ''}):\n${cachedFragment}`,
+              GROQ_SINGLE_FRAGMENT_SYSTEM,
+              512,
+            );
+            send('chat_message', { text: chatFuSynthesis });
+
+            const _cfuAssistantWithPaths =
+              chatFuSynthesis + `\n\n<evidence_files>\n${chatFastLastUser?.path ?? ''}\n</evidence_files>`;
+            messages.push({ role: 'assistant', content: [{ type: 'text', text: _cfuAssistantWithPaths }] });
+            await saveChatHistory(sessionId, messages);
+
+            const updatedChatFastHistory = [
+              ...chatFastHistory,
+              { role: 'user',      content: userMessage,     keywords: chatFastTerms },
+              { role: 'assistant', content: chatFuSynthesis, fragment: cachedFragment, path: chatFastLastUser?.path },
+            ];
+            await saveFastHistory(sessionId!, updatedChatFastHistory).catch(() => {});
+
+            send('confidence', {
+              level: 'medium',
+              reason: 'CHAT — ruta rápida: follow-up resuelto con fragmento ya cacheado (sin nueva búsqueda)',
+              suggestedAction: 'none',
+            });
+            send('done', { files: [], commitMessage: '', mainComponent: chatFastLastUser?.path ?? '', mainContent: '', repo, branch: '' });
+            return;
+          } catch (chatFuErr) {
+            console.warn('[chat-fast-followup] síntesis de follow-up falló, cayendo a búsqueda nueva:', chatFuErr instanceof Error ? chatFuErr.message : chatFuErr);
+            // no hacemos return acá — cae al flujo normal de búsqueda de abajo, reutilizando chatFastTerms ya calculado
+          }
+        }
+
+        // Misma lógica de extracción que FAST mode:
         const chatFastPattern = chatFastTerms.length > 0
           ? chatFastTerms.join('|')
           : localKeywordFallback(userMessage).join('|');
         if (chatFastPattern.length > 0) {
-          const { matches: chatFastMatches } = await searchWithTestFallback(chatFastPattern, repo, send);
+          const { matches: chatFastMatches, allTest: chatFastAllTest } = await searchWithTestFallback(chatFastPattern, repo, send);
           const chatFastBest = chatFastMatches.find(m => !isTestMatch(m.path, m.text ?? '')) ?? chatFastMatches[0];
+          if (chatFastBest && chatFastAllTest) {
+            send('action', { text: '⚠️ Solo encontré código de test — el símbolo de producción puede tener un nombre diferente.' });
+          }
           if (chatFastBest) {
             send('action', { text: `📍 Símbolo encontrado: ${chatFastBest.path}${chatFastBest.line ? `:${chatFastBest.line}` : ''}` });
             const chatFastContent = await getFileContent(chatFastBest.path, repo);
@@ -6086,6 +6133,12 @@ async function runChatTurn(
                 suggestedAction: 'none',
               });
               send('done', { files: [{ path: chatFastBest.path, lineRanges: chatFastBest.line ? [{ start: chatFastSection.startLine, end: chatFastSection.endLine, matchedTerm: chatFastTerms[0] }] : [] }], commitMessage: '', mainComponent: chatFastBest.path, mainContent: '', repo, branch: '' });
+              const updatedChatFastHistory = [
+                ...chatFastHistory,
+                { role: 'user',      content: userMessage,       keywords: chatFastTerms },
+                { role: 'assistant', content: chatFastSynthesis, fragment: chatFastFragment, path: chatFastBest.path },
+              ];
+              await saveFastHistory(sessionId!, updatedChatFastHistory).catch(() => {});
               fastPathHandled = true;
             }
           }

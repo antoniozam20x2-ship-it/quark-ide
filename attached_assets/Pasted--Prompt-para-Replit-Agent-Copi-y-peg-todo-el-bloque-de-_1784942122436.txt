@@ -1,0 +1,146 @@
+# Prompt para Replit Agent
+
+Copiá y pegá todo el bloque de abajo tal cual en el chat de Replit Agent.
+Esto continúa el trabajo ya aplicado en `quark-ide/backend/src/routes/agent.ts`
+(los 4 cambios anteriores de rotación de keys / fallback unificado / TTL de sesión
+ya están hechos y compilando limpio). Ahora van los puntos 3 y 4 pendientes del
+diagnóstico original, ambos acotados a la ruta rápida de CHAT dentro de `runChatTurn`.
+
+---
+
+## PROMPT
+
+Necesito 2 cambios más en `quark-ide/backend/src/routes/agent.ts`, dentro del bloque
+`if (searchComplexity === 'simple' && classifyIntent(userMessage) === 'explain')`
+en `runChatTurn` (la "ruta rápida de CHAT"). Aplicalos en este orden y corré
+`tsc --noEmit` después de cada uno.
+
+### Cambio 3 — Aviso cuando solo se encuentra código de test
+
+Buscá esta línea dentro de ese bloque:
+
+```typescript
+const { matches: chatFastMatches } = await searchWithTestFallback(chatFastPattern, repo, send);
+const chatFastBest = chatFastMatches.find(m => !isTestMatch(m.path, m.text ?? '')) ?? chatFastMatches[0];
+```
+
+Reemplazala por:
+
+```typescript
+const { matches: chatFastMatches, allTest: chatFastAllTest } = await searchWithTestFallback(chatFastPattern, repo, send);
+const chatFastBest = chatFastMatches.find(m => !isTestMatch(m.path, m.text ?? '')) ?? chatFastMatches[0];
+if (chatFastBest && chatFastAllTest) {
+  send('action', { text: '⚠️ Solo encontré código de test — el símbolo de producción puede tener un nombre diferente.' });
+}
+```
+
+Es el mismo patrón que ya usa la variable `bestIsTest` en el FAST READ PATH (modo FAST,
+no CHAT) — solo faltaba capturar el flag `allTest` que `searchWithTestFallback` ya
+devuelve, en esta otra ruta.
+
+### Cambio 4 — Continuidad de sesión (follow-ups) en la ruta rápida de CHAT
+
+Objetivo: que la ruta rápida de CHAT reutilice la misma infraestructura de sesión que
+ya usa FAST mode (`loadFastHistory` / `saveFastHistory` / `hasFastTopicOverlap`, namespace
+`quark-fast-session`), para que una pregunta corta de seguimiento ("¿y por qué?", "¿y S6?")
+no dispare una búsqueda nueva desde cero si ya se leyó un fragmento relevante en el turno
+anterior — sea que ese turno haya venido de FAST o de CHAT, comparten sessionId.
+
+**4a.** Localizá, dentro del mismo bloque, la línea original:
+
+```typescript
+const chatFastTerms = await extractKeywordsForSearch(userMessage, repo);
+```
+
+Vas a moverla más arriba en el bloque (antes de cualquier otra lógica) y agregar la
+detección de follow-up justo después. El resultado debe quedar así, en este orden,
+reemplazando todo lo que había desde el inicio del bloque `try` hasta donde antes
+estaba esa línea:
+
+```typescript
+const chatFastHistory = await loadFastHistory(sessionId);
+const chatFastLastUser = chatFastHistory.slice().reverse().find((m: any) => m.role === 'user');
+const chatFastLastAss  = chatFastHistory.slice().reverse().find((m: any) => m.role === 'assistant');
+
+const chatFastTerms = await extractKeywordsForSearch(userMessage, repo);
+
+const chatFastIsFollowUp =
+  hasFastTopicOverlap(chatFastTerms, chatFastLastUser?.keywords ?? []) &&
+  !!chatFastLastAss?.fragment;
+
+if (chatFastIsFollowUp) {
+  send('action', { text: '⚡ Ruta rápida — pregunta de seguimiento, reutilizando contexto ya leído...' });
+  const cachedFragment = chatFastLastAss!.fragment as string;
+
+  try {
+    const chatFuSynthesis = await callGroqAgent(
+      `El usuario hace una pregunta de seguimiento: "${userMessage}"\n\nFragmento de código (mismo contexto del turno anterior, ${chatFastLastUser?.path ?? ''}):\n${cachedFragment}`,
+      GROQ_SINGLE_FRAGMENT_SYSTEM,
+      512,
+    );
+    send('chat_message', { text: chatFuSynthesis });
+
+    const _cfuAssistantWithPaths =
+      chatFuSynthesis + `\n\n<evidence_files>\n${chatFastLastUser?.path ?? ''}\n</evidence_files>`;
+    messages.push({ role: 'assistant', content: [{ type: 'text', text: _cfuAssistantWithPaths }] });
+    await saveChatHistory(sessionId, messages);
+
+    const updatedChatFastHistory = [
+      ...chatFastHistory,
+      { role: 'user',      content: userMessage,     keywords: chatFastTerms },
+      { role: 'assistant', content: chatFuSynthesis, fragment: cachedFragment, path: chatFastLastUser?.path },
+    ];
+    await saveFastHistory(sessionId, updatedChatFastHistory).catch(() => {});
+
+    send('confidence', {
+      level: 'medium',
+      reason: 'CHAT — ruta rápida: follow-up resuelto con fragmento ya cacheado (sin nueva búsqueda)',
+      suggestedAction: 'none',
+    });
+    send('done', { files: [], commitMessage: '', mainComponent: chatFastLastUser?.path ?? '', mainContent: '', repo, branch: '' });
+    return;
+  } catch (chatFuErr) {
+    console.warn('[chat-fast-followup] síntesis de follow-up falló, cayendo a búsqueda nueva:', chatFuErr instanceof Error ? chatFuErr.message : chatFuErr);
+    // no hacemos return acá — cae al flujo normal de búsqueda de abajo, reutilizando chatFastTerms ya calculado
+  }
+}
+```
+
+IMPORTANTE: no dupliques `const chatFastTerms = await extractKeywordsForSearch(...)` —
+si más abajo en el mismo bloque (en el camino de búsqueda normal, no-follow-up) ya
+existía otra declaración de `chatFastTerms`, borrala, porque ahora se calcula una
+sola vez arriba y el resto del bloque debe reutilizar esa misma constante.
+
+**4b.** En el camino normal (cuando NO es follow-up y sí se encuentra `chatFastBest`),
+justo después de que se arma `chatFastSynthesis` y `chatFastFragment` (el bloque que
+ya existía con `callGroqAgent(... GROQ_SINGLE_FRAGMENT_SYSTEM ...)` y el `send('chat_message', ...)`
+correspondiente), agregá el guardado en el historial de FAST para que el *próximo* turno
+pueda detectar el follow-up. Insertalo antes de `fastPathHandled = true;`:
+
+```typescript
+const updatedChatFastHistory = [
+  ...chatFastHistory,
+  { role: 'user',      content: userMessage,       keywords: chatFastTerms },
+  { role: 'assistant', content: chatFastSynthesis, fragment: chatFastFragment, path: chatFastBest.path },
+];
+await saveFastHistory(sessionId, updatedChatFastHistory).catch(() => {});
+```
+
+Usá los nombres de variable reales que ya existen en ese bloque para `chatFastSynthesis`,
+`chatFastFragment` y `chatFastBest` — no los renombres, solo agregá el guardado.
+
+---
+
+### Verificación final
+
+1. Corré el build/typecheck completo.
+2. Confirmá que `loadFastHistory`, `saveFastHistory` y `hasFastTopicOverlap` ya están
+   definidas más arriba en el archivo (son las mismas que usa FAST mode) — no hay que
+   crearlas de nuevo, solo reutilizarlas.
+3. Confirmá que el `return` dentro del bloque de follow-up exitoso corta correctamente
+   el flujo de `runChatTurn` (no debe seguir hacia el resto de la función después de
+   `send('done', ...)`).
+4. Verificá que no quedó ninguna declaración duplicada de `chatFastTerms` en el bloque.
+5. No toques ninguna otra lógica del archivo — estos son los únicos 2 cambios pedidos.
+
+Contame qué diff final quedó en cada cambio para que lo revise.
