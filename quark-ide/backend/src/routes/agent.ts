@@ -5756,6 +5756,26 @@ PROHIBIDO deducir su significado por similitud de nombre.
 
 REGLA DE INCERTIDUMBRE — si el fragmento cubre parcialmente la pregunta (ej: muestra el uso de una variable pero no su cálculo), mencioná explícitamente qué parte quedó sin confirmar antes de la línea de cierre. No omitas la incertidumbre ni completes con conocimiento general.`;
 
+const GROQ_CONTEXT_AWARE_SYSTEM = `Sos un asistente que responde preguntas sobre código de trading. Tenés disponible el fragmento de código que se leyó en el turno ANTERIOR de esta misma conversación — puede ser útil para la pregunta actual, o puede no tener nada que ver.
+
+Tu trabajo:
+1. Leé la pregunta actual del usuario y el fragmento de código disponible.
+2. Si el fragmento contiene información suficiente para responder la pregunta actual con precisión — aunque la pregunta use términos que no aparecían en la búsqueda original, mientras el fragmento los mencione o los explique — respondé directamente:
+   - Máximo 6-8 líneas de prosa conectada, sin bullets ni bloques de código.
+   - Citá archivo:línea entre paréntesis para respaldar afirmaciones puntuales.
+   - Usá los nombres técnicos de trading exactos (FVG, EMA, SuperTrend, RSI, ADX, ATR, Score, etc.) — nunca los parafrasees.
+   - Terminá siempre con esta línea exacta: "💬 Pedime 'más detalle' si querés el desglose completo con código y ejemplos."
+3. Si el fragmento NO tiene relación con la pregunta actual, o la cubre solo parcialmente y falta algo importante — NO inventes ni completes con conocimiento genérico. Respondé ÚNICAMENTE con: "NEEDS_SEARCH: " seguido de una razón breve (una frase) de qué falta o qué habría que buscar.
+
+VARIABLES DE DOMINIO — convenciones fijas en repos de trading (Signal OS, Ahorar, etc.):
+  • \`st\`, \`stDir\`, \`stDirArr\` → dirección del indicador SuperTrend (NO Parabolic SAR — son indicadores distintos, nunca los intercambies).
+  • \`sa\`, \`sb\` → Score alcista y Score bajista (índice numérico de momentum/dirección). NUNCA los asocies con "SAR".
+  • \`fvgBull\`, \`fvgBear\` → FVG (Fair Value Gap) alcista / bajista.
+  • \`noAgot\` → sin agotamiento de momentum (booleano).
+  • \`ema\`/\`emaFast\`/\`emaSlow\` → EMA. \`rsi\`/\`rsiVal\` → RSI. \`adx\`/\`adxVal\` → ADX. \`atr\`/\`atrVal\` → ATR.
+
+Si una variable corta (\`sa\`, \`sb\`, \`st\`, etc.) no está en la tabla de arriba ni tiene definición visible en el fragmento, escribí: "no pude confirmar qué representa \`[var]\` en este fragmento — no la renombro." No la deduzcas por parecido visual con un acrónimo.`;
+
 // Tools available for Sonnet synthesis turn — no search tools, only read + patch
 // Sonnet only gets propose_patch — it must not re-investigate with search tools.
 // Haiku already gathered all context; Sonnet's job is to write the patch.
@@ -6091,94 +6111,99 @@ async function runChatTurn(
         const chatFastLastUser = chatFastHistory.slice().reverse().find((m: any) => m.role === 'user');
         const chatFastLastAss  = chatFastHistory.slice().reverse().find((m: any) => m.role === 'assistant');
 
-        const chatFastTerms = await extractKeywordsForSearch(userMessage, repo);
-
-        const chatFastIsFollowUp = isLikelyFollowUp(
-          chatFastTerms,
-          userMessage,
-          chatFastLastUser,
-          chatFastLastAss,
-        );
-
-        if (chatFastIsFollowUp) {
-          send('action', { text: '⚡ Ruta rápida — pregunta de seguimiento, reutilizando contexto ya leído...' });
-          const cachedFragment = chatFastLastAss!.fragment as string;
-
+        // ── Intento con contexto cacheado — Groq decide si alcanza o necesita buscar ──
+        // En vez de una heurística previa que clasifica "es follow-up / no es follow-up",
+        // si hay un fragmento del turno anterior SIEMPRE se lo ofrecemos a Groq como
+        // contexto disponible y dejamos que decida. Esto cubre naturalmente cualquier
+        // forma de pregunta de seguimiento, sin depender de reglas fijas de matching.
+        let chatCachedHandled = false;
+        if (chatFastLastAss?.fragment) {
           try {
-            const chatFuSynthesis = await callGroqAgent(
-              `El usuario hace una pregunta de seguimiento: "${userMessage}"\n\nFragmento de código (mismo contexto del turno anterior, ${chatFastLastUser?.path ?? ''}):\n${cachedFragment}`,
-              GROQ_SINGLE_FRAGMENT_SYSTEM,
+            const chatCachedAttempt = await callGroqAgent(
+              `Pregunta actual: "${userMessage}"\n\nFragmento de código disponible (leído en el turno anterior, ${chatFastLastUser?.path ?? 'archivo desconocido'}):\n${chatFastLastAss.fragment}`,
+              GROQ_CONTEXT_AWARE_SYSTEM,
               512,
             );
-            send('chat_message', { text: chatFuSynthesis });
 
-            const _cfuAssistantWithPaths =
-              chatFuSynthesis + `\n\n<evidence_files>\n${chatFastLastUser?.path ?? ''}\n</evidence_files>`;
-            messages.push({ role: 'assistant', content: [{ type: 'text', text: _cfuAssistantWithPaths }] });
-            await saveChatHistory(sessionId, messages);
+            if (!chatCachedAttempt.trim().startsWith('NEEDS_SEARCH:')) {
+              send('action', { text: '⚡ Ruta rápida — respondiendo con contexto ya disponible...' });
+              send('chat_message', { text: chatCachedAttempt });
 
-            const updatedChatFastHistory = [
-              ...chatFastHistory,
-              { role: 'user',      content: userMessage,     keywords: chatFastTerms },
-              { role: 'assistant', content: chatFuSynthesis, fragment: cachedFragment, path: chatFastLastUser?.path },
-            ];
-            await saveFastHistory(sessionId!, updatedChatFastHistory).catch(() => {});
+              const _ccaWithPaths =
+                chatCachedAttempt + `\n\n<evidence_files>\n${chatFastLastUser?.path ?? ''}\n</evidence_files>`;
+              messages.push({ role: 'assistant', content: [{ type: 'text', text: _ccaWithPaths }] });
+              await saveChatHistory(sessionId, messages);
 
-            send('confidence', {
-              level: 'medium',
-              reason: 'CHAT — ruta rápida: follow-up resuelto con fragmento ya cacheado (sin nueva búsqueda)',
-              suggestedAction: 'none',
-            });
-            send('done', { files: [], commitMessage: '', mainComponent: chatFastLastUser?.path ?? '', mainContent: '', repo, branch: '' });
-            return;
-          } catch (chatFuErr) {
-            console.warn('[chat-fast-followup] síntesis de follow-up falló, cayendo a búsqueda nueva:', chatFuErr instanceof Error ? chatFuErr.message : chatFuErr);
-            // no hacemos return acá — cae al flujo normal de búsqueda de abajo, reutilizando chatFastTerms ya calculado
+              const updatedChatFastHistoryFromCache = [
+                ...chatFastHistory,
+                { role: 'user',      content: userMessage,       keywords: [] },
+                { role: 'assistant', content: chatCachedAttempt, fragment: chatFastLastAss.fragment, path: chatFastLastUser?.path },
+              ];
+              await saveFastHistory(sessionId!, updatedChatFastHistoryFromCache).catch(() => {});
+
+              send('confidence', {
+                level: 'medium',
+                reason: 'CHAT — ruta rápida: respondido con fragmento ya cacheado, sin nueva búsqueda',
+                suggestedAction: 'none',
+              });
+              send('done', { files: [], commitMessage: '', mainComponent: chatFastLastUser?.path ?? '', mainContent: '', repo, branch: '' });
+              chatCachedHandled = true;
+            } else {
+              const needSearchReason = chatCachedAttempt.replace('NEEDS_SEARCH:', '').trim();
+              send('action', { text: `🔍 El contexto ya leído no alcanza (${needSearchReason.slice(0, 80)}) — buscando...` });
+            }
+          } catch (chatCacheErr) {
+            console.warn('[chat-fast-cached-context] intento con contexto cacheado falló, cayendo a búsqueda normal:', chatCacheErr instanceof Error ? chatCacheErr.message : chatCacheErr);
           }
         }
 
-        // Misma lógica de extracción que FAST mode:
-        const chatFastPattern = chatFastTerms.length > 0
-          ? chatFastTerms.join('|')
-          : localKeywordFallback(userMessage).join('|');
-        if (chatFastPattern.length > 0) {
-          const { matches: chatFastMatches, allTest: chatFastAllTest } = await searchWithTestFallback(chatFastPattern, repo, send);
-          const chatFastBest = chatFastMatches.find(m => !isTestMatch(m.path, m.text ?? '')) ?? chatFastMatches[0];
-          if (chatFastBest && chatFastAllTest) {
-            send('action', { text: '⚠️ Solo encontré código de test — el símbolo de producción puede tener un nombre diferente.' });
-          }
-          if (chatFastBest) {
-            send('action', { text: `📍 Símbolo encontrado: ${chatFastBest.path}${chatFastBest.line ? `:${chatFastBest.line}` : ''}` });
-            const chatFastContent = await getFileContent(chatFastBest.path, repo);
-            const chatFastSection = chatFastBest.line
-              ? (readEnclosingFunction(chatFastContent, chatFastBest.line) ?? smartReadSection(chatFastContent, chatFastBest.line, 60))
-              : null;
-            if (chatFastSection) {
-              const chatFastFragment = chatFastSection.excerpt ?? '';
-              const chatFastSynthesis = await callGroqAgent(
-                `Pregunta: "${userMessage}"\n\nFragmento de código (${chatFastBest.path}, líneas ${chatFastSection.startLine}-${chatFastSection.endLine}):\n${chatFastFragment}`,
-                GROQ_SINGLE_FRAGMENT_SYSTEM,
-                512,
-              );
-              send('chat_message', { text: chatFastSynthesis });
-              const _cfPaths = chatFastBest.path;
-              const _cfAssistantWithPaths =
-                chatFastSynthesis + `\n\n<evidence_files>\n${_cfPaths}\n</evidence_files>`;
-              messages.push({ role: 'assistant', content: [{ type: 'text', text: _cfAssistantWithPaths }] });
-              await saveChatHistory(sessionId, messages);
-              send('confidence', {
-                level: 'medium',
-                reason: 'CHAT — ruta rápida: ripgrep + fragmento + Groq (lookup directo)',
-                suggestedAction: 'none',
-              });
-              send('done', { files: [{ path: chatFastBest.path, lineRanges: chatFastBest.line ? [{ start: chatFastSection.startLine, end: chatFastSection.endLine, matchedTerm: chatFastTerms[0] }] : [] }], commitMessage: '', mainComponent: chatFastBest.path, mainContent: '', repo, branch: '' });
-              const updatedChatFastHistory = [
-                ...chatFastHistory,
-                { role: 'user',      content: userMessage,       keywords: chatFastTerms },
-                { role: 'assistant', content: chatFastSynthesis, fragment: chatFastFragment, path: chatFastBest.path },
-              ];
-              await saveFastHistory(sessionId!, updatedChatFastHistory).catch(() => {});
-              fastPathHandled = true;
+        if (chatCachedHandled) {
+          fastPathHandled = true;
+        } else {
+          // Flujo de búsqueda normal — ripgrep + fragmento + Groq:
+          const chatFastTerms = await extractKeywordsForSearch(userMessage, repo);
+          const chatFastPattern = chatFastTerms.length > 0
+            ? chatFastTerms.join('|')
+            : localKeywordFallback(userMessage).join('|');
+          if (chatFastPattern.length > 0) {
+            const { matches: chatFastMatches, allTest: chatFastAllTest } = await searchWithTestFallback(chatFastPattern, repo, send);
+            const chatFastBest = chatFastMatches.find(m => !isTestMatch(m.path, m.text ?? '')) ?? chatFastMatches[0];
+            if (chatFastBest && chatFastAllTest) {
+              send('action', { text: '⚠️ Solo encontré código de test — el símbolo de producción puede tener un nombre diferente.' });
+            }
+            if (chatFastBest) {
+              send('action', { text: `📍 Símbolo encontrado: ${chatFastBest.path}${chatFastBest.line ? `:${chatFastBest.line}` : ''}` });
+              const chatFastContent = await getFileContent(chatFastBest.path, repo);
+              const chatFastSection = chatFastBest.line
+                ? (readEnclosingFunction(chatFastContent, chatFastBest.line) ?? smartReadSection(chatFastContent, chatFastBest.line, 60))
+                : null;
+              if (chatFastSection) {
+                const chatFastFragment = chatFastSection.excerpt ?? '';
+                const chatFastSynthesis = await callGroqAgent(
+                  `Pregunta: "${userMessage}"\n\nFragmento de código (${chatFastBest.path}, líneas ${chatFastSection.startLine}-${chatFastSection.endLine}):\n${chatFastFragment}`,
+                  GROQ_SINGLE_FRAGMENT_SYSTEM,
+                  512,
+                );
+                send('chat_message', { text: chatFastSynthesis });
+                const _cfPaths = chatFastBest.path;
+                const _cfAssistantWithPaths =
+                  chatFastSynthesis + `\n\n<evidence_files>\n${_cfPaths}\n</evidence_files>`;
+                messages.push({ role: 'assistant', content: [{ type: 'text', text: _cfAssistantWithPaths }] });
+                await saveChatHistory(sessionId, messages);
+                send('confidence', {
+                  level: 'medium',
+                  reason: 'CHAT — ruta rápida: ripgrep + fragmento + Groq (lookup directo)',
+                  suggestedAction: 'none',
+                });
+                send('done', { files: [{ path: chatFastBest.path, lineRanges: chatFastBest.line ? [{ start: chatFastSection.startLine, end: chatFastSection.endLine, matchedTerm: chatFastTerms[0] }] : [] }], commitMessage: '', mainComponent: chatFastBest.path, mainContent: '', repo, branch: '' });
+                const updatedChatFastHistory = [
+                  ...chatFastHistory,
+                  { role: 'user',      content: userMessage,       keywords: chatFastTerms },
+                  { role: 'assistant', content: chatFastSynthesis, fragment: chatFastFragment, path: chatFastBest.path },
+                ];
+                await saveFastHistory(sessionId!, updatedChatFastHistory).catch(() => {});
+                fastPathHandled = true;
+              }
             }
           }
         }

@@ -1,0 +1,163 @@
+# Prompt para Replit Agent
+
+Copiá y pegá todo el bloque de abajo tal cual en el chat de Replit Agent.
+
+Este prompt REEMPLAZA el enfoque anterior (la función `isLikelyFollowUp` basada en
+heurísticas de overlap de keywords / términos en el fragmento / regex de preguntas
+referenciales). Se probó en producción dos veces (con "ATR" y con "SuperTrend") y
+sigue sin detectar seguimientos naturales de conversación — el problema de fondo es
+que cualquier heurística basada en reglas fijas se queda corta ante la variedad real
+de cómo la gente hace preguntas de seguimiento.
+
+El nuevo enfoque: en vez de que el código decida de antemano si el mensaje es o no
+un follow-up, dejamos que **Groq decida**, dándole siempre el fragmento cacheado del
+turno anterior como contexto disponible. Si Groq puede responder con eso, responde
+directo. Si no le alcanza, lo dice explícitamente y el código cae al flujo normal de
+búsqueda — sin heurísticas previas de clasificación.
+
+---
+
+## PROMPT
+
+En `quark-ide/backend/src/routes/agent.ts`, dentro de `runChatTurn`, en el bloque
+`if (searchComplexity === 'simple' && classifyIntent(userMessage) === 'explain')`
+(la ruta rápida de CHAT).
+
+### Paso 1 — Si aplicaste el cambio anterior de `isLikelyFollowUp`, revertilo
+
+Si en un cambio previo agregaste la función `isLikelyFollowUp` y la usás en este
+bloque para setear `chatFastIsFollowUp`, dejá la función definida en el archivo
+(no hace falta borrarla, puede quedar sin uso) pero **no la uses más** en este
+bloque — la vamos a reemplazar por el nuevo mecanismo de abajo.
+
+### Paso 2 — Nuevo system prompt para intento con contexto cacheado
+
+Agregá esta constante cerca de `GROQ_SINGLE_FRAGMENT_SYSTEM`:
+
+```typescript
+const GROQ_CONTEXT_AWARE_SYSTEM = `Sos un asistente que responde preguntas sobre código de trading. Tenés disponible el fragmento de código que se leyó en el turno ANTERIOR de esta misma conversación — puede ser útil para la pregunta actual, o puede no tener nada que ver.
+
+Tu trabajo:
+1. Leé la pregunta actual del usuario y el fragmento de código disponible.
+2. Si el fragmento contiene información suficiente para responder la pregunta actual con precisión — aunque la pregunta use términos que no aparecían en la búsqueda original, mientras el fragmento los mencione o los explique — respondé directamente:
+   - Máximo 6-8 líneas de prosa conectada, sin bullets ni bloques de código.
+   - Citá archivo:línea entre paréntesis para respaldar afirmaciones puntuales.
+   - Usá los nombres técnicos de trading exactos (FVG, EMA, SuperTrend, RSI, ADX, ATR, Score, etc.) — nunca los parafrasees.
+   - Terminá siempre con esta línea exacta: "💬 Pedime 'más detalle' si querés el desglose completo con código y ejemplos."
+3. Si el fragmento NO tiene relación con la pregunta actual, o la cubre solo parcialmente y falta algo importante — NO inventes ni completes con conocimiento genérico. Respondé ÚNICAMENTE con: "NEEDS_SEARCH: " seguido de una razón breve (una frase) de qué falta o qué habría que buscar.
+
+VARIABLES DE DOMINIO — convenciones fijas en repos de trading (Signal OS, Ahorar, etc.):
+  • \`st\`, \`stDir\`, \`stDirArr\` → dirección del indicador SuperTrend (NO Parabolic SAR — son indicadores distintos, nunca los intercambies).
+  • \`sa\`, \`sb\` → Score alcista y Score bajista (índice numérico de momentum/dirección). NUNCA los asocies con "SAR".
+  • \`fvgBull\`, \`fvgBear\` → FVG (Fair Value Gap) alcista / bajista.
+  • \`noAgot\` → sin agotamiento de momentum (booleano).
+  • \`ema\`/\`emaFast\`/\`emaSlow\` → EMA. \`rsi\`/\`rsiVal\` → RSI. \`adx\`/\`adxVal\` → ADX. \`atr\`/\`atrVal\` → ATR.
+
+Si una variable corta (\`sa\`, \`sb\`, \`st\`, etc.) no está en la tabla de arriba ni tiene definición visible en el fragmento, escribí: "no pude confirmar qué representa \`[var]\` en este fragmento — no la renombro." No la deduzcas por parecido visual con un acrónimo.`;
+```
+
+### Paso 3 — Reestructurar el inicio del bloque
+
+Buscá el inicio del bloque de la ruta rápida de CHAT (donde antes estaba, según el
+cambio que hayas aplicado, la detección de follow-up o directamente el cálculo de
+`chatFastTerms`). Reemplazá todo ese tramo inicial por esta secuencia:
+
+```typescript
+const chatFastHistory = await loadFastHistory(sessionId);
+const chatFastLastUser = chatFastHistory.slice().reverse().find((m: any) => m.role === 'user');
+const chatFastLastAss  = chatFastHistory.slice().reverse().find((m: any) => m.role === 'assistant');
+
+// ── Intento con contexto cacheado — Groq decide si alcanza o necesita buscar ──
+// En vez de una heurística previa que clasifica "es follow-up / no es follow-up",
+// si hay un fragmento del turno anterior SIEMPRE se lo ofrecemos a Groq como
+// contexto disponible y dejamos que decida. Esto cubre naturalmente cualquier
+// forma de pregunta de seguimiento, sin depender de reglas fijas de matching.
+let chatCachedHandled = false;
+if (chatFastLastAss?.fragment) {
+  try {
+    const chatCachedAttempt = await callGroqAgent(
+      `Pregunta actual: "${userMessage}"\n\nFragmento de código disponible (leído en el turno anterior, ${chatFastLastUser?.path ?? 'archivo desconocido'}):\n${chatFastLastAss.fragment}`,
+      GROQ_CONTEXT_AWARE_SYSTEM,
+      512,
+    );
+
+    if (!chatCachedAttempt.trim().startsWith('NEEDS_SEARCH:')) {
+      send('action', { text: '⚡ Ruta rápida — respondiendo con contexto ya disponible...' });
+      send('chat_message', { text: chatCachedAttempt });
+
+      const _ccaWithPaths =
+        chatCachedAttempt + `\n\n<evidence_files>\n${chatFastLastUser?.path ?? ''}\n</evidence_files>`;
+      messages.push({ role: 'assistant', content: [{ type: 'text', text: _ccaWithPaths }] });
+      await saveChatHistory(sessionId, messages);
+
+      const updatedChatFastHistoryFromCache = [
+        ...chatFastHistory,
+        { role: 'user',      content: userMessage,      keywords: [] },
+        { role: 'assistant', content: chatCachedAttempt, fragment: chatFastLastAss.fragment, path: chatFastLastUser?.path },
+      ];
+      await saveFastHistory(sessionId, updatedChatFastHistoryFromCache).catch(() => {});
+
+      send('confidence', {
+        level: 'medium',
+        reason: 'CHAT — ruta rápida: respondido con fragmento ya cacheado, sin nueva búsqueda',
+        suggestedAction: 'none',
+      });
+      send('done', { files: [], commitMessage: '', mainComponent: chatFastLastUser?.path ?? '', mainContent: '', repo, branch: '' });
+      chatCachedHandled = true;
+    } else {
+      const needSearchReason = chatCachedAttempt.replace('NEEDS_SEARCH:', '').trim();
+      send('action', { text: `🔍 El contexto ya leído no alcanza (${needSearchReason.slice(0, 80)}) — buscando...` });
+    }
+  } catch (chatCacheErr) {
+    console.warn('[chat-fast-cached-context] intento con contexto cacheado falló, cayendo a búsqueda normal:', chatCacheErr instanceof Error ? chatCacheErr.message : chatCacheErr);
+  }
+}
+
+if (chatCachedHandled) {
+  fastPathHandled = true;
+} else {
+  // A partir de acá sigue el flujo de búsqueda normal que ya existía:
+  // const chatFastTerms = await extractKeywordsForSearch(userMessage, repo);
+  // ... (todo el resto del bloque original, sin cambios)
+}
+```
+
+IMPORTANTE:
+- Todo el código que ya existía después del cálculo de `chatFastTerms` (la búsqueda
+  con `searchWithTestFallback`, lectura de `chatFastBest`, síntesis con
+  `GROQ_SINGLE_FRAGMENT_SYSTEM`, envío de `done`, y el guardado en `saveFastHistory`
+  del Cambio 4b anterior) **debe quedar intacto**, simplemente ahora corre dentro
+  del `else` de `chatCachedHandled`, o equivalentemente después del bloque de
+  arriba con un `if (!chatCachedHandled) { ... }` — usá la estructura que genere
+  el diff más limpio dado cómo quedó el código actualmente, mientras el resultado
+  sea: primero se intenta con caché, y solo si no alcanza o no hay caché, se
+  ejecuta la búsqueda nueva.
+- No dupliques la declaración de `chatFastTerms` — debe seguir habiendo una sola,
+  dentro de la rama de búsqueda nueva.
+- El chequeo de `if (chatFastBest && chatFastAllTest)` del aviso de test-only
+  (cambio anterior) se mantiene sin cambios, dentro de la rama de búsqueda nueva.
+
+---
+
+### Verificación final
+
+1. Corré `tsc --noEmit`.
+2. Probá la secuencia real que venía fallando:
+   - Mensaje 1: "Cómo funciona la señal S1"
+   - Mensaje 2: "Por que usa el Supertrend ahí"
+
+   Ahora el mensaje 2 debe mostrar `⚡ Ruta rápida — respondiendo con contexto ya
+   disponible...` y responder usando el fragmento de `checkS1Bull` ya leído (que
+   menciona `stDirArr`/SuperTrend), sin volver a mostrar
+   `🧠 Paso 1 — buscando en índice de símbolos`.
+3. Probá también que un cambio real de tema SÍ dispare búsqueda nueva: después de
+   S1, preguntá "¿cómo funciona el circuit breaker?" — como ese concepto no está
+   en el fragmento de `checkS1Bull`, Groq debería responder `NEEDS_SEARCH: ...`
+   y el sistema debe caer al flujo de búsqueda normal (vas a ver
+   `🔍 El contexto ya leído no alcanza (...) — buscando...` seguido de
+   `🧠 Paso 1 — buscando en índice de símbolos: [circuitBreaker...]`).
+4. Confirmá que el primer mensaje de una sesión nueva (sin historial previo, sin
+   `chatFastLastAss?.fragment`) sigue funcionando igual que siempre — se salta
+   directo el intento con caché y va a búsqueda normal.
+
+Contame el diff final y el resultado de las pruebas 2 y 3.
