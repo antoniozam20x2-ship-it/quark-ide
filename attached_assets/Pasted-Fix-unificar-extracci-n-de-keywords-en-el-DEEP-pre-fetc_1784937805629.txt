@@ -1,0 +1,51 @@
+Fix — unificar extracción de keywords en el DEEP pre-fetch (agent.ts:6052)
+
+Contexto (confirmado por diagnóstico previo): el DEEP pre-fetch de CHAT 
+(camino B) usa extractKeywordsFromMessage (agent.ts:5207, regex pura: 
+solo acrónimos y camelCase), mientras que la ruta rápida de Groq (a) y 
+el toggle DEEP explícito (c) ya usan extractKeywordsForSearch (agent.ts:853, 
+async con Groq + traducciones de dominio). Cuando la pregunta es 
+conversacional/imperativa sin acrónimos ni camelCase (ej. "Mostrame el 
+código completo..."), extractKeywordsFromMessage devuelve [] y el 
+pre-fetch se saltea completamente, dejando a Haiku sin evidencia previa.
+
+Cambio — agent.ts:6052
+
+Reemplazar:
+  const baseKws = extractKeywordsFromMessage(userMessage);
+
+Por:
+  const baseKws = await extractKeywordsForSearch(userMessage, repo);
+
+Con fallback: si extractKeywordsForSearch devuelve vacío o falla (ej. 
+Groq caído), usar extractKeywordsFromMessage como red de seguridad 
+(mantiene el comportamiento actual como plan B, no lo elimina):
+
+  let baseKws = await extractKeywordsForSearch(userMessage, repo);
+  if (!baseKws || baseKws.length === 0) {
+    baseKws = extractKeywordsFromMessage(userMessage); // fallback regex
+  }
+
+No tocar: extractKeywordsForSearch en sí, extractKeywordsFromMessage en 
+sí (se mantiene como fallback, no se borra), los caminos (a), (c), (d).
+
+Verificación esperada:
+1. Repetir el caso que falló hoy: "Mostrame el código completo de dónde 
+   se define CIRCUIT_BREAKER_THRESHOLD_PCT y de dónde se lee/compara ese 
+   valor dentro de checkCircuitBreaker, sin resumir ni interpretar" — 
+   confirmar en logs que el pre-fetch ahora SÍ encuentra keywords 
+   relevantes (CIRCUIT_BREAKER_THRESHOLD_PCT, checkCircuitBreaker) en vez 
+   de tokenizar "Mostrame|código|completo|dónde".
+2. Confirmar que preguntas técnicas directas (que ya funcionaban bien, 
+   ej. "circuit breaker + trailing stop") no se ven afectadas — mismo 
+   comportamiento que antes.
+3. Medir la latencia agregada del pre-fetch con la llamada a Groq — 
+   confirmar que sigue siendo rápido en términos relativos al resto del 
+   pipeline DEEP.
+4. tsc --noEmit limpio.
+
+Nota: este fix resuelve el bug de tokenización de instrucciones 
+conversacionales identificado hoy, y es la base necesaria antes de 
+avanzar con el resto del punto 2 (descomposición de preguntas complejas 
+en sub-búsquedas ordenadas) — ese es un cambio más grande, a diseñar 
+después de validar este fix.

@@ -6049,7 +6049,10 @@ async function runChatTurn(
     // synthesizes without re-searching, saving a full Claude exploration loop.
     // This path is non-fatal: any error or empty result falls through to Haiku.
     {
-      const baseKws = extractKeywordsFromMessage(userMessage);
+      let baseKws = await extractKeywordsForSearch(userMessage, repo);
+      if (!baseKws || baseKws.length === 0) {
+        baseKws = extractKeywordsFromMessage(userMessage); // fallback regex
+      }
       if (baseKws.length > 0) {
         const allKws   = [...baseKws, ...reformulateQueryTerms(baseKws)];
         const deepQ    = allKws.join('|');
