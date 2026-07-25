@@ -120,6 +120,43 @@ function hasFastTopicOverlap(current: string[], previous: string[]): boolean {
   return current.some(k => prevSet.has(k.toLowerCase()));
 }
 
+/**
+ * Detección de follow-up más robusta que hasFastTopicOverlap. Combina tres señales:
+ *   1. Overlap directo de keywords entre el turno actual y el anterior (comportamiento original).
+ *   2. El término técnico del mensaje actual YA aparece literalmente dentro del fragmento
+ *      de código que se cacheó en el turno anterior — esto cubre el caso real de bug:
+ *      "¿por qué usa el ATR ahí?" después de leer una función que menciona `atr` en su
+ *      cuerpo, aunque "ATR" nunca haya sido una keyword de búsqueda del turno anterior.
+ *   3. Pregunta corta puramente referencial ("¿por qué?", "¿y eso?", "explicá más") sin
+ *      ningún identificador técnico propio — casi siempre se refiere a lo recién discutido.
+ */
+function isLikelyFollowUp(
+  currentTerms: string[],
+  userMessage: string,
+  lastUser: { keywords?: string[] } | undefined,
+  lastAss: { fragment?: string } | undefined,
+): boolean {
+  if (!lastAss?.fragment) return false;
+
+  // Señal 1 — overlap directo de keywords (comportamiento original, se mantiene)
+  if (hasFastTopicOverlap(currentTerms, lastUser?.keywords ?? [])) return true;
+
+  // Señal 2 — el término nuevo ya aparece en el fragmento cacheado
+  const fragmentLower = lastAss.fragment.toLowerCase();
+  if (currentTerms.some(t => t.length > 2 && fragmentLower.includes(t.toLowerCase()))) {
+    return true;
+  }
+
+  // Señal 3 — pregunta corta puramente referencial, sin anclaje técnico propio
+  const REFERENTIAL_RE = /\b(por qu[eé]|para qu[eé]|y (eso|ah[ií])|ah[ií]|c[oó]mo (es|funciona) eso|explic[aá] m[aá]s|m[aá]s detalle|qu[eé] significa eso)\b/i;
+  const hasNoStrongAnchor = currentTerms.length === 0 || currentTerms.every(t => t.length <= 3);
+  if (userMessage.trim().length < 60 && REFERENTIAL_RE.test(userMessage) && hasNoStrongAnchor) {
+    return true;
+  }
+
+  return false;
+}
+
 // ── DEEP session: persistir última evidencia para pedidos de "ver más" ────────
 const DEEP_SESSION_NS = 'quark-deep-session';
 
@@ -1668,8 +1705,7 @@ router.post('/generate', async (req, res) => {
         const _lastFastUser = fastHistory.slice().reverse().find((m: any) => m.role === 'user');
         const _lastFastAss  = fastHistory.slice().reverse().find((m: any) => m.role === 'assistant');
         const _isFollowUp   = !!sessionId &&
-          hasFastTopicOverlap(fastKeywords, _lastFastUser?.keywords ?? []) &&
-          !!_lastFastAss?.fragment;
+          isLikelyFollowUp(fastKeywords, prompt, _lastFastUser, _lastFastAss);
 
         if (_isFollowUp) {
           // FAST FOLLOW-UP PATH — mismo tema detectado, evaluar si el fragmento alcanza.
@@ -6057,9 +6093,12 @@ async function runChatTurn(
 
         const chatFastTerms = await extractKeywordsForSearch(userMessage, repo);
 
-        const chatFastIsFollowUp =
-          hasFastTopicOverlap(chatFastTerms, chatFastLastUser?.keywords ?? []) &&
-          !!chatFastLastAss?.fragment;
+        const chatFastIsFollowUp = isLikelyFollowUp(
+          chatFastTerms,
+          userMessage,
+          chatFastLastUser,
+          chatFastLastAss,
+        );
 
         if (chatFastIsFollowUp) {
           send('action', { text: '⚡ Ruta rápida — pregunta de seguimiento, reutilizando contexto ya leído...' });

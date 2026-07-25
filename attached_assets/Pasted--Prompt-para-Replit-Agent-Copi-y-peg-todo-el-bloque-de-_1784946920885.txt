@@ -1,0 +1,123 @@
+# Prompt para Replit Agent
+
+Copiá y pegá todo el bloque de abajo tal cual en el chat de Replit Agent.
+Bug confirmado en producción: la detección de "pregunta de seguimiento" (tanto en
+la ruta rápida de CHAT como en FAST mode) solo compara si el mensaje actual repite
+las mismas keywords técnicas extraídas del mensaje anterior. Si el follow-up usa un
+término nuevo que YA aparece dentro del fragmento de código recién leído (ej. preguntar
+"¿por qué usa el ATR ahí?" después de leer una función que menciona `atr` en su cuerpo,
+pero `ATR` no estaba en las keywords originales de esa búsqueda), el sistema no lo
+detecta como continuación y dispara una búsqueda nueva desde cero — perdiendo el hilo
+de la conversación.
+
+---
+
+## PROMPT
+
+En `quark-ide/backend/src/routes/agent.ts`, buscá la función `hasFastTopicOverlap`
+(la que compara arrays de keywords entre turnos). Justo después de su definición,
+agregá esta nueva función:
+
+```typescript
+/**
+ * Detección de follow-up más robusta que hasFastTopicOverlap. Combina tres señales:
+ *   1. Overlap directo de keywords entre el turno actual y el anterior (comportamiento original).
+ *   2. El término técnico del mensaje actual YA aparece literalmente dentro del fragmento
+ *      de código que se cacheó en el turno anterior — esto cubre el caso real de bug:
+ *      "¿por qué usa el ATR ahí?" después de leer una función que menciona `atr` en su
+ *      cuerpo, aunque "ATR" nunca haya sido una keyword de búsqueda del turno anterior.
+ *   3. Pregunta corta puramente referencial ("¿por qué?", "¿y eso?", "explicá más") sin
+ *      ningún identificador técnico propio — casi siempre se refiere a lo recién discutido.
+ */
+function isLikelyFollowUp(
+  currentTerms: string[],
+  userMessage: string,
+  lastUser: { keywords?: string[] } | undefined,
+  lastAss: { fragment?: string } | undefined,
+): boolean {
+  if (!lastAss?.fragment) return false;
+
+  // Señal 1 — overlap directo de keywords (comportamiento original, se mantiene)
+  if (hasFastTopicOverlap(currentTerms, lastUser?.keywords ?? [])) return true;
+
+  // Señal 2 — el término nuevo ya aparece en el fragmento cacheado
+  const fragmentLower = lastAss.fragment.toLowerCase();
+  if (currentTerms.some(t => t.length > 2 && fragmentLower.includes(t.toLowerCase()))) {
+    return true;
+  }
+
+  // Señal 3 — pregunta corta puramente referencial, sin anclaje técnico propio
+  const REFERENTIAL_RE = /\b(por qu[eé]|para qu[eé]|y (eso|ah[ií])|ah[ií]|c[oó]mo (es|funciona) eso|explic[aá] m[aá]s|m[aá]s detalle|qu[eé] significa eso)\b/i;
+  const hasNoStrongAnchor = currentTerms.length === 0 || currentTerms.every(t => t.length <= 3);
+  if (userMessage.trim().length < 60 && REFERENTIAL_RE.test(userMessage) && hasNoStrongAnchor) {
+    return true;
+  }
+
+  return false;
+}
+```
+
+### Cambio A — CHAT ruta rápida
+
+Buscá, dentro de `runChatTurn`, el bloque de detección de follow-up que agregamos en
+el cambio anterior:
+
+```typescript
+const chatFastIsFollowUp =
+  hasFastTopicOverlap(chatFastTerms, chatFastLastUser?.keywords ?? []) &&
+  !!chatFastLastAss?.fragment;
+```
+
+Reemplazalo por:
+
+```typescript
+const chatFastIsFollowUp = isLikelyFollowUp(
+  chatFastTerms,
+  userMessage,
+  chatFastLastUser,
+  chatFastLastAss,
+);
+```
+
+### Cambio B — FAST mode (mismo mecanismo original, mismo bug potencial)
+
+Buscá, en el FAST READ PATH (dentro del router `/generate`, bloque `if (!deepMode)`),
+la línea:
+
+```typescript
+const _isFollowUp   = !!sessionId &&
+  hasFastTopicOverlap(fastKeywords, _lastFastUser?.keywords ?? []) &&
+  !!_lastFastAss?.fragment;
+```
+
+Reemplazala por:
+
+```typescript
+const _isFollowUp   = !!sessionId &&
+  isLikelyFollowUp(fastKeywords, prompt, _lastFastUser, _lastFastAss);
+```
+
+(Nota: en este bloque la variable del mensaje del usuario se llama `prompt`, no
+`userMessage` — usá el nombre real que ya existe en ese scope.)
+
+---
+
+### Verificación final
+
+1. Corré `tsc --noEmit`.
+2. Probá el caso real que disparó el bug:
+   - Mensaje 1: "Cómo funciona la señal S1" (o S6) — debe leer `checkS1Bull`/`checkS6Bull`
+     normalmente, sin follow-up (es el primer mensaje).
+   - Mensaje 2: "¿por qué usa el ATR ahí?" — ahora debe aparecer
+     `⚡ Ruta rápida — pregunta de seguimiento, reutilizando contexto ya leído...` y
+     **no** debe repetir `🧠 Paso 1 — buscando en índice de símbolos`.
+3. Probá también un caso donde el follow-up SÍ debería disparar una búsqueda nueva
+   (para confirmar que no quedó demasiado permisivo): después de preguntar por S1,
+   preguntá algo totalmente distinto como "¿cómo funciona el circuit breaker?" — ahí
+   NO debería activarse el camino de follow-up, porque "circuit breaker" no tiene
+   overlap de keywords ni aparece en el fragmento de S1, y no es una pregunta
+   puramente referencial.
+4. No toques ninguna otra lógica del archivo — estos son los únicos 2 cambios pedidos
+   (la nueva función `isLikelyFollowUp` + sus 2 puntos de uso).
+
+Contame el diff final y el resultado de la prueba del paso 2.
