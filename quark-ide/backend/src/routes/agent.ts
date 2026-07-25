@@ -526,7 +526,43 @@ async function generateWithFallbackDeep(
   throw lastErr
 }
 
-// ── Search keyword extractor ──────────────────────────────────────────────────
+// ── Keyword extraction helpers ────────────────────────────────────────────────
+
+const KEYWORD_STOPWORDS = new Set([
+  'mostrame', 'muestra', 'muéstrame', 'busca', 'buscá', 'buscar', 'explica', 'explicá',
+  'completo', 'resumir', 'interpretar', 'donde', 'dónde', 'como', 'cómo',
+  'codigo', 'código', 'archivo', 'funcion', 'función', 'valor', 'analiza', 'analizar',
+  'dentro', 'afuera', 'mostrar', 'define', 'definir', 'retorna', 'retornar',
+  'devuelve', 'devolver', 'todos', 'todas', 'entre', 'para', 'este', 'esta',
+  'desde', 'hasta', 'que', 'qué', 'cual', 'cuál', 'porque', 'porqué',
+]);
+
+/**
+ * Fallback local ÚNICO para extracción de keywords. Reemplaza las 3
+ * implementaciones divergentes (CHAT ruta rápida, DEEP pre-fetch, toggle DEEP).
+ * Orden de prioridad: CAPS_SNAKE_CASE → camelCase → snake_case →
+ * identificadores cortos letra+dígito (S1, S6) → palabras largas no-instrucción.
+ */
+function localKeywordFallback(prompt: string, max = 4): string[] {
+  const words = prompt.split(/\s+/);
+  const isCapsSnake = (w: string) => /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(w);
+  const isCamel     = (w: string) => /^[a-z][a-z0-9]*[A-Z][a-zA-Z0-9]+$/.test(w);
+  const isSnake     = (w: string) => /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(w);
+  const isShortId   = (w: string) => /^[A-Za-z]\d{1,2}$/.test(w); // S1, S6, T2...
+
+  const ranked = [
+    ...words.filter(isCapsSnake),
+    ...words.filter(isCamel),
+    ...words.filter(isSnake),
+    ...words.filter(isShortId),
+    ...words.filter(w =>
+      w.length > 4 &&
+      !KEYWORD_STOPWORDS.has(w.toLowerCase()) &&
+      !isCapsSnake(w) && !isCamel(w) && !isSnake(w) && !isShortId(w)
+    ),
+  ];
+  return [...new Set(ranked)].slice(0, max);
+}
 
 function extractSearchKeywords(prompt: string): string[] {
   const stopWords = new Set(['el', 'la', 'de', 'en', 'es', 'un', 'una', 'the', 'is', 'a', 'an', 'of', 'in', 'for', 'with', 'how', 'what', 'where', 'why', 'when', 'which', 'que', 'como', 'cual', 'donde', 'por', 'para', 'con', 'sin', 'los', 'las', 'del']);
@@ -853,15 +889,13 @@ Responde SOLO con un JSON array de strings, sin markdown ni explicaciones. Ejemp
 async function extractKeywordsForSearch(prompt: string, repo: string = ''): Promise<string[]> {
   const keys = getGroqKeys();
   if (keys.length === 0) {
-    console.warn(`[extractKeywordsForSearch] FALLBACK activado — razón: sin Groq keys — query: "${prompt.slice(0, 80)}"`);
-    return [];
+    console.warn(`[extractKeywordsForSearch] FALLBACK LOCAL — sin Groq keys — query: "${prompt.slice(0, 80)}"`);
+    return localKeywordFallback(prompt);
   }
 
-  // Signal OS non-obvious concept translations — applied only for that repo.
-  // Each row returns ONLY the specific terms for that translation. No shared suffixes.
   const isSignalOS = /ahorar/i.test(repo);
   const signalOSLayer = isSignalOS ? `
-TRADUCCIONES ESPECÍFICAS (solo para este repo — aplicalas si el prompt menciona exactamente estos conceptos, ignorá esta sección si no hay match):
+TRADUCCIONES ESPECÍFICAS (solo para este repo — aplicalas si el prompt menciona exactamente estos conceptos):
 - "RVOL" o "señal S1" → checkS1Bull
 - "señal S2" o "SMC" o "smart money" → checkS2
 - "señal S3" o "alineación" o "EMA" → checkS3Bull
@@ -872,55 +906,58 @@ TRADUCCIONES ESPECÍFICAS (solo para este repo — aplicalas si el prompt mencio
 - "streak" o "racha" o "pérdidas consecutivas" → circuitBreaker
 ` : '';
 
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 8_000);
-    const res = await fetch(GROQ_URL, {
-      method: 'POST',
-      signal: ctrl.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${keys[0]}`,
-      },
-      body: JSON.stringify({
-        model: GROQ_MODEL,
-        max_tokens: 60,
-        temperature: 0,
-        messages: [
-          {
-            role: 'system',
-            content: `Extraé los identificadores técnicos y nombres propios del prompt del usuario para buscar en GitHub Code Search.
+  const systemPrompt = `Extraé los identificadores técnicos y nombres propios del prompt del usuario para buscar en GitHub Code Search.
 ${signalOSLayer}
 REGLAS:
 - Extraé exactamente los términos técnicos, nombres de funciones, clases o variables que aparecen en el prompt.
 - No agregues términos de contexto genérico que no estén mencionados en el prompt.
-- Ignorá verbos imperativos (mostrame, buscá, explicá, andá, revisá, mostrá, mostrar, buscar) y sustantivos genéricos de programación (código, archivo, función, valor, completo, resumir, interpretar) salvo que sean parte de un identificador compuesto.
+- Ignorá verbos imperativos y sustantivos genéricos de programación salvo que sean parte de un identificador compuesto.
 - Si el prompt contiene un concepto en lenguaje natural sin nombre técnico claro, usá las palabras más específicas del prompt tal como están.
 - Devolvé un JSON array de máximo 4 strings.
-- Respondé SOLO el array JSON, sin explicación, sin backticks.`,
-          },
-          { role: 'user', content: prompt },
-        ],
-      }),
-    }).finally(() => clearTimeout(timer));
+- Respondé SOLO el array JSON, sin explicación, sin backticks.`;
 
-    if (!res.ok) {
-      console.warn(`[extractKeywordsForSearch] FALLBACK activado — razón: HTTP ${res.status} — query: "${prompt.slice(0, 80)}"`);
-      return [];
+  for (const key of keys) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8_000);
+      const res = await fetch(GROQ_URL, {
+        method: 'POST',
+        signal: ctrl.signal,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({
+          model: GROQ_MODEL,
+          max_tokens: 60,
+          temperature: 0,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: prompt },
+          ],
+        }),
+      }).finally(() => clearTimeout(timer));
+
+      if (res.status === 429) {
+        console.warn(`[extractKeywordsForSearch] key rate-limited (429) — probando siguiente key`);
+        continue;
+      }
+      if (!res.ok) {
+        console.warn(`[extractKeywordsForSearch] HTTP ${res.status} con esta key — probando siguiente`);
+        continue;
+      }
+      const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+      const raw = json.choices?.[0]?.message?.content ?? '[]';
+      const parsed = JSON.parse(raw.trim()) as unknown;
+      if (Array.isArray(parsed) && parsed.every((t) => typeof t === 'string')) {
+        console.log(`[agent] AI keywords: [${parsed.join(', ')}]`);
+        return parsed as string[];
+      }
+      console.warn(`[extractKeywordsForSearch] respuesta no es array JSON válido ("${raw.slice(0, 60)}") — probando siguiente key`);
+    } catch (err) {
+      console.warn(`[extractKeywordsForSearch] key falló: ${err instanceof Error ? err.message : String(err)} — probando siguiente`);
     }
-    const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const raw = json.choices?.[0]?.message?.content ?? '[]';
-    const parsed = JSON.parse(raw.trim()) as unknown;
-    if (Array.isArray(parsed) && parsed.every((t) => typeof t === 'string')) {
-      console.log(`[agent] AI keywords: [${parsed.join(', ')}]`);
-      return parsed as string[];
-    }
-    console.warn(`[extractKeywordsForSearch] FALLBACK activado — razón: respuesta Groq no es array JSON válido ("${raw.slice(0, 60)}") — query: "${prompt.slice(0, 80)}"`);
-    return [];
-  } catch (err) {
-    console.warn(`[extractKeywordsForSearch] FALLBACK activado — razón: ${err instanceof Error ? err.message : String(err)} — query: "${prompt.slice(0, 80)}"`);
-    return [];
   }
+
+  console.warn(`[extractKeywordsForSearch] FALLBACK LOCAL — todas las keys fallaron — query: "${prompt.slice(0, 80)}"`);
+  return localKeywordFallback(prompt);
 }
 
 async function searchAndLoadFiles(
@@ -2115,7 +2152,7 @@ Sin explicación, sin texto adicional — solo el JSON array.`,
       const deepKeywords = await extractKeywordsForSearch(prompt, repo);
       const deepPattern = deepKeywords.length > 0
         ? deepKeywords.join('|')
-        : prompt.split(/\s+/).filter(w => w.length > 4).slice(0, 4).join('|');
+        : localKeywordFallback(prompt).join('|');
 
       send('action', { text: `🔍 DEEP — buscando: [${deepPattern}]` });
 
@@ -3611,6 +3648,7 @@ const SESSION_CACHE_TTL_MS = 30 * 60 * 1000;
 // domain-specific follow-up questions from being incorrectly classified as "simple"
 // and falling back to Groq (which lacks trading-domain knowledge).
 const SESSION_HAIKU_USED = new Map<string, number>(); // sessionId → lastUsedAt timestamp
+const SESSION_HAIKU_TTL_MS = 15 * 60 * 1000; // 15 min de inactividad → vuelve a evaluar complexity
 
 function getSessionFiles(sessionId: string): Map<string, SessionFileCacheEntry> {
   const now = Date.now();
@@ -5223,9 +5261,7 @@ function isEvidenceSparse(evidence: { fragment: string }[]): boolean {
  * Returns at most 4 terms.
  */
 function extractKeywordsFromMessage(message: string): string[] {
-  const acronyms = message.match(/\b[A-Z]{2,6}\b/g) ?? [];
-  const camel    = message.match(/\b[a-z][a-z0-9]*[A-Z][a-zA-Z0-9]+\b/g) ?? [];
-  return [...new Set([...acronyms, ...camel])].slice(0, 4);
+  return localKeywordFallback(message);
 }
 
 /**
@@ -5880,9 +5916,12 @@ async function runChatTurn(
   //    the repo-specific trading domain context.
   //
   // 3. First message in a new session: run classifyComplexity normally.
+  const haikuUsedAt = SESSION_HAIKU_USED.get(sessionId);
+  const haikuStillActive = haikuUsedAt !== undefined && (Date.now() - haikuUsedAt) < SESSION_HAIKU_TTL_MS;
+
   const complexity: 'simple' | 'complex' = forceGroq
     ? 'simple'
-    : SESSION_HAIKU_USED.has(sessionId)
+    : haikuStillActive
       ? 'complex'
       : classifyComplexity(userMessage);
 
@@ -6018,37 +6057,7 @@ async function runChatTurn(
         const chatFastTerms = await extractKeywordsForSearch(userMessage, repo);
         const chatFastPattern = chatFastTerms.length > 0
           ? chatFastTerms.join('|')
-          : (() => {
-              // Fallback mejorado: prioriza identificadores técnicos y excluye
-              // palabras de instrucción antes de truncar, para evitar que
-              // términos como "Mostrame" o "completo" desplacen a
-              // CAPS_SNAKE_CASE o camelCase reales.
-              const INSTRUCTION_WORDS = new Set([
-                'mostrame', 'busca', 'buscá', 'explica', 'explicá', 'completo',
-                'resumir', 'interpretar', 'donde', 'dónde', 'como', 'cómo',
-                'codigo', 'código', 'archivo', 'funcion', 'función', 'valor',
-                'dentro', 'afuera', 'mostrar', 'define', 'definir', 'retorna',
-                'retornar', 'devuelve', 'devolver', 'todos', 'todas', 'entre',
-                'para', 'este', 'esta', 'desde', 'hasta',
-              ]);
-              const words = userMessage.split(/\s+/);
-              const isCapsSnake = (w: string) => /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(w);
-              const isCamel    = (w: string) => /^[a-z][a-z0-9]*[A-Z][a-zA-Z0-9]+$/.test(w);
-              const isSnake    = (w: string) => /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(w);
-              const techFirst = [
-                ...words.filter(isCapsSnake),
-                ...words.filter(isCamel),
-                ...words.filter(isSnake),
-                ...words.filter(w =>
-                  w.length > 4 &&
-                  !INSTRUCTION_WORDS.has(w.toLowerCase()) &&
-                  !isCapsSnake(w) && !isCamel(w) && !isSnake(w)
-                ),
-              ];
-              const result = [...new Set(techFirst)].slice(0, 4).join('|');
-              console.warn(`[chatFastPath] fallback de extracción → "${result}" (Groq devolvió vacío)`);
-              return result;
-            })();
+          : localKeywordFallback(userMessage).join('|');
         if (chatFastPattern.length > 0) {
           const { matches: chatFastMatches } = await searchWithTestFallback(chatFastPattern, repo, send);
           const chatFastBest = chatFastMatches.find(m => !isTestMatch(m.path, m.text ?? '')) ?? chatFastMatches[0];

@@ -1,0 +1,197 @@
+# Prompt para Replit Agent
+
+Copiá y pegá todo el bloque de abajo tal cual en el chat de Replit Agent.
+
+---
+
+## PROMPT
+
+Necesito que apliques 4 cambios puntuales en el archivo de rutas del agente (el archivo que contiene `extractKeywordsForSearch`, `extractKeywordsFromMessage`, `SESSION_HAIKU_USED` y el router `/generate`). Es probablemente `server/routes/agent.ts` o similar — buscalo por el nombre de esas funciones si no lo identificás por la ruta.
+
+Hacé los 4 cambios en este orden. Después de cada uno, corré `tsc --noEmit` (o el check de tipos que use el proyecto) para confirmar que compila antes de seguir con el siguiente.
+
+### Cambio 1 — Función de fallback local unificada
+
+Agregá esta función y esta constante justo antes (o cerca) de `extractSearchKeywords`, en el mismo archivo:
+
+```typescript
+const KEYWORD_STOPWORDS = new Set([
+  'mostrame', 'muestra', 'muéstrame', 'busca', 'buscá', 'buscar', 'explica', 'explicá',
+  'completo', 'resumir', 'interpretar', 'donde', 'dónde', 'como', 'cómo',
+  'codigo', 'código', 'archivo', 'funcion', 'función', 'valor', 'analiza', 'analizar',
+  'dentro', 'afuera', 'mostrar', 'define', 'definir', 'retorna', 'retornar',
+  'devuelve', 'devolver', 'todos', 'todas', 'entre', 'para', 'este', 'esta',
+  'desde', 'hasta', 'que', 'qué', 'cual', 'cuál', 'porque', 'porqué',
+]);
+
+/**
+ * Fallback local ÚNICO para extracción de keywords. Reemplaza las 3
+ * implementaciones divergentes (CHAT ruta rápida, DEEP pre-fetch, toggle DEEP).
+ * Orden de prioridad: CAPS_SNAKE_CASE → camelCase → snake_case →
+ * identificadores cortos letra+dígito (S1, S6) → palabras largas no-instrucción.
+ */
+function localKeywordFallback(prompt: string, max = 4): string[] {
+  const words = prompt.split(/\s+/);
+  const isCapsSnake = (w: string) => /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(w);
+  const isCamel     = (w: string) => /^[a-z][a-z0-9]*[A-Z][a-zA-Z0-9]+$/.test(w);
+  const isSnake     = (w: string) => /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(w);
+  const isShortId   = (w: string) => /^[A-Za-z]\d{1,2}$/.test(w); // S1, S6, T2...
+
+  const ranked = [
+    ...words.filter(isCapsSnake),
+    ...words.filter(isCamel),
+    ...words.filter(isSnake),
+    ...words.filter(isShortId),
+    ...words.filter(w =>
+      w.length > 4 &&
+      !KEYWORD_STOPWORDS.has(w.toLowerCase()) &&
+      !isCapsSnake(w) && !isCamel(w) && !isSnake(w) && !isShortId(w)
+    ),
+  ];
+  return [...new Set(ranked)].slice(0, max);
+}
+```
+
+### Cambio 2 — `extractKeywordsForSearch` con rotación de keys
+
+Reemplazá **completamente** la función `extractKeywordsForSearch` existente (la que hace `Authorization: Bearer ${keys[0]}` fijo) por esta versión, que rota por todas las keys de `getGroqKeys()` igual que `callGroqAgent`, y cuando todas fallan usa `localKeywordFallback` en vez de devolver `[]`:
+
+```typescript
+async function extractKeywordsForSearch(prompt: string, repo: string = ''): Promise<string[]> {
+  const keys = getGroqKeys();
+  if (keys.length === 0) {
+    console.warn(`[extractKeywordsForSearch] FALLBACK LOCAL — sin Groq keys — query: "${prompt.slice(0, 80)}"`);
+    return localKeywordFallback(prompt);
+  }
+
+  const isSignalOS = /ahorar/i.test(repo);
+  const signalOSLayer = isSignalOS ? `
+TRADUCCIONES ESPECÍFICAS (solo para este repo — aplicalas si el prompt menciona exactamente estos conceptos):
+- "RVOL" o "señal S1" → checkS1Bull
+- "señal S2" o "SMC" o "smart money" → checkS2
+- "señal S3" o "alineación" o "EMA" → checkS3Bull
+- "señal S4" → checkS4
+- "señal S5" o "impulso" o "early" → checkS5ImpulsBull
+- "señal S6" o "FVG" o "fair value gap" → checkS6Bull
+- "trailing" o "stop móvil" o "trailing stop" → trailingStop, moving_plan, rangeRate
+- "streak" o "racha" o "pérdidas consecutivas" → circuitBreaker
+` : '';
+
+  const systemPrompt = `Extraé los identificadores técnicos y nombres propios del prompt del usuario para buscar en GitHub Code Search.
+${signalOSLayer}
+REGLAS:
+- Extraé exactamente los términos técnicos, nombres de funciones, clases o variables que aparecen en el prompt.
+- No agregues términos de contexto genérico que no estén mencionados en el prompt.
+- Ignorá verbos imperativos y sustantivos genéricos de programación salvo que sean parte de un identificador compuesto.
+- Si el prompt contiene un concepto en lenguaje natural sin nombre técnico claro, usá las palabras más específicas del prompt tal como están.
+- Devolvé un JSON array de máximo 4 strings.
+- Respondé SOLO el array JSON, sin explicación, sin backticks.`;
+
+  for (const key of keys) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8_000);
+      const res = await fetch(GROQ_URL, {
+        method: 'POST',
+        signal: ctrl.signal,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({
+          model: GROQ_MODEL,
+          max_tokens: 60,
+          temperature: 0,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: prompt },
+          ],
+        }),
+      }).finally(() => clearTimeout(timer));
+
+      if (res.status === 429) {
+        console.warn(`[extractKeywordsForSearch] key rate-limited (429) — probando siguiente key`);
+        continue;
+      }
+      if (!res.ok) {
+        console.warn(`[extractKeywordsForSearch] HTTP ${res.status} con esta key — probando siguiente`);
+        continue;
+      }
+      const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+      const raw = json.choices?.[0]?.message?.content ?? '[]';
+      const parsed = JSON.parse(raw.trim()) as unknown;
+      if (Array.isArray(parsed) && parsed.every((t) => typeof t === 'string')) {
+        console.log(`[agent] AI keywords: [${parsed.join(', ')}]`);
+        return parsed as string[];
+      }
+      console.warn(`[extractKeywordsForSearch] respuesta no es array JSON válido ("${raw.slice(0, 60)}") — probando siguiente key`);
+    } catch (err) {
+      console.warn(`[extractKeywordsForSearch] key falló: ${err instanceof Error ? err.message : String(err)} — probando siguiente`);
+    }
+  }
+
+  console.warn(`[extractKeywordsForSearch] FALLBACK LOCAL — todas las keys fallaron — query: "${prompt.slice(0, 80)}"`);
+  return localKeywordFallback(prompt);
+}
+```
+
+### Cambio 3 — Unificar los otros dos fallbacks rotos
+
+**3a.** Buscá la función `extractKeywordsFromMessage` (la que usa el regex `\b[A-Z]{2,6}\b` sin soporte de guion bajo) y reemplazá su cuerpo entero por:
+
+```typescript
+function extractKeywordsFromMessage(message: string): string[] {
+  return localKeywordFallback(message);
+}
+```
+
+**3b.** Buscá el bloque del toggle DEEP explícito (cerca de la línea ~2107, dentro del router `/generate`, la variable se llama `deepKeywords` / `deepPattern`). Ahí donde dice algo como:
+
+```typescript
+const deepKeywords = await extractKeywordsForSearch(prompt, repo);
+const deepPattern = deepKeywords.length > 0
+  ? deepKeywords.join('|')
+  : prompt.split(/\s+/).filter(w => w.length > 4).slice(0, 4).join('|');
+```
+
+Reemplazá solo la línea del fallback (`prompt.split(...)`) por:
+
+```typescript
+const deepKeywords = await extractKeywordsForSearch(prompt, repo);
+const deepPattern = deepKeywords.length > 0
+  ? deepKeywords.join('|')
+  : localKeywordFallback(prompt).join('|');
+```
+
+### Cambio 4 — TTL en `SESSION_HAIKU_USED`
+
+Busca la declaración `const SESSION_HAIKU_USED = new Map<string, number>();` y agregá justo después:
+
+```typescript
+const SESSION_HAIKU_TTL_MS = 15 * 60 * 1000; // 15 min de inactividad → vuelve a evaluar complexity
+```
+
+Después, dentro de `runChatTurn`, buscá el bloque que calcula la variable `complexity` (empieza con `const complexity: 'simple' | 'complex' = forceGroq`). Reemplazalo completo por:
+
+```typescript
+const haikuUsedAt = SESSION_HAIKU_USED.get(sessionId);
+const haikuStillActive = haikuUsedAt !== undefined && (Date.now() - haikuUsedAt) < SESSION_HAIKU_TTL_MS;
+
+const complexity: 'simple' | 'complex' = forceGroq
+  ? 'simple'
+  : haikuStillActive
+    ? 'complex'
+    : classifyComplexity(userMessage);
+```
+
+Esto hace que una sesión priorice Haiku por 15 minutos después del último uso (mantiene contexto de dominio para preguntas de seguimiento), pero después de esa ventana de inactividad vuelve a evaluar `classifyComplexity` normalmente — así preguntas simples después de una pausa pueden volver a tomar la ruta rápida (Groq) en vez de quedar bloqueadas en Haiku para siempre.
+
+---
+
+### Verificación final
+
+Después de aplicar los 4 cambios:
+
+1. Corré el build/typecheck completo del proyecto.
+2. Confirmá que no quedó ninguna referencia rota a `extractSearchKeywords` original (la función vieja con stopwords en inglés/español) — si `extractKeywordsFromMessage` o `deepPattern` la llamaban antes, ahora deben usar `localKeywordFallback`.
+3. Buscá si hay tests que mockeen `extractKeywordsForSearch` esperando un solo `fetch` — con la rotación de keys ahora puede hacer hasta 3 llamadas si las primeras keys fallan con 429; ajustá esos mocks si existen.
+4. No toques ninguna otra lógica del archivo — estos son los únicos 4 cambios pedidos.
+
+Contame qué archivo terminaste editando y pegame el diff final de cada cambio para que lo revise.
