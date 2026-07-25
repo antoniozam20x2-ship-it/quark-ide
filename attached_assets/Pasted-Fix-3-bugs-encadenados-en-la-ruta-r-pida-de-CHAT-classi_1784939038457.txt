@@ -1,0 +1,72 @@
+Fix — 3 bugs encadenados en la ruta rápida de CHAT (classifySearchComplexity 
++ extractKeywordsForSearch fallback + fallo silencioso de Groq)
+
+Basado en diagnóstico previo confirmado. Aplicar los 3 cambios:
+
+Cambio 1 — classifySearchComplexity: detectar múltiples identificadores 
+técnicos como señal de complejidad
+
+Ubicar la función (probablemente cerca de agent.ts, junto a 
+classifyComplexity). Agregar una heurística: si el mensaje contiene 2+ 
+identificadores técnicos distintos (patrón: CAPS_SNAKE_CASE de 2+ 
+palabras, o camelCase de 2+ palabras, o cualquier término que ya matchee 
+en symbol_index para ese repo), clasificar como compleja aunque no haya 
+palabras de relación explícitas ("entre", "y", "vs"). Esto es una señal 
+más fuerte de que la pregunta necesita explorar múltiples símbolos, 
+independientemente de la redacción.
+
+Cambio 2 — loggear fallos de extractKeywordsForSearch de forma visible
+
+Actualmente los 3 casos de retorno [] (sin keys, HTTP error, parse error) 
+solo hacen console.warn. Cambiar a un log más explícito y distinguible, 
+ej:
+  console.warn(`[extractKeywordsForSearch] FALLBACK activado — razón: 
+  ${reason} — query original: "${userMessage.slice(0,80)}"`);
+
+Esto permite en el futuro medir con qué frecuencia este fallback se 
+activa en producción (revisando logs de Railway), para saber si es un 
+problema recurrente o aislado.
+
+Cambio 3 — mejorar el fallback local para que filtre instrucciones y no 
+trunque identificadores técnicos
+
+Reemplazar el fallback actual:
+  userMessage.split(/\s+/).filter(w => w.length > 4).slice(0, 3)
+
+Por una versión que:
+a) Excluya una lista corta de palabras de instrucción/genéricas en 
+   español (mostrame, buscá, explicá, completo, resumir, interpretar, 
+   dónde, cómo, código, archivo, función, valor, dentro, sin, para, 
+   este, esta) — case-insensitive.
+b) Priorice términos que parezcan identificadores técnicos (CAPS_SNAKE_CASE, 
+   camelCase, o snake_case) ANTES que palabras largas genéricas — no 
+   cortar en 3 sin ese criterio de prioridad.
+c) Mantener el máximo de 4 términos (mismo límite que ya usa 
+   extractKeywordsForSearch vía Groq, por consistencia).
+
+Ejemplo esperado para la query de hoy:
+  Input: "Mostrame el código completo de dónde se define 
+  CIRCUIT_BREAKER_THRESHOLD_PCT y de dónde se lee/compara ese valor 
+  dentro de checkCircuitBreaker, sin resumir ni interpretar"
+  Output esperado: ["CIRCUIT_BREAKER_THRESHOLD_PCT", "checkCircuitBreaker"]
+  (no ["Mostrame", "código", "completo"])
+
+No tocar: extractKeywordsFromMessage (fix de la sesión anterior, camino b, 
+ya validado), extractKeywordsForSearch en sí (el bug ahí es que Groq 
+falla silenciosamente, no el prompt en sí — aunque el problema A/B que 
+identificó el diagnóstico sobre el system prompt de Groq también vale la 
+pena ajustar si es fácil: agregar una línea explícita tipo "Ignorá verbos 
+imperativos (mostrame, buscá, explicá) y sustantivos genéricos de 
+programación (código, archivo, función, valor) salvo que sean parte de 
+un identificador compuesto").
+
+Verificación esperada:
+1. Repetir la pregunta exacta que falló hoy — confirmar que ahora entra 
+   por DEEP (compleja) o, si sigue yendo por la ruta rápida, que el 
+   fallback ahora extrae CIRCUIT_BREAKER_THRESHOLD_PCT y checkCircuitBreaker 
+   correctamente.
+2. Confirmar que preguntas simples reales (ej. "Dónde está definido 
+   CIRCUIT_BREAKER_THRESHOLD_PCT?") siguen resolviéndose rápido sin 
+   reclasificarse como complejas innecesariamente — un solo identificador 
+   técnico no debería disparar el cambio 1.
+3. tsc --noEmit limpio.

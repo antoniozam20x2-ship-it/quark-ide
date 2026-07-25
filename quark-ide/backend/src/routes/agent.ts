@@ -852,7 +852,10 @@ Responde SOLO con un JSON array de strings, sin markdown ni explicaciones. Ejemp
 
 async function extractKeywordsForSearch(prompt: string, repo: string = ''): Promise<string[]> {
   const keys = getGroqKeys();
-  if (keys.length === 0) return [];
+  if (keys.length === 0) {
+    console.warn(`[extractKeywordsForSearch] FALLBACK activado — razón: sin Groq keys — query: "${prompt.slice(0, 80)}"`);
+    return [];
+  }
 
   // Signal OS non-obvious concept translations — applied only for that repo.
   // Each row returns ONLY the specific terms for that translation. No shared suffixes.
@@ -891,6 +894,7 @@ ${signalOSLayer}
 REGLAS:
 - Extraé exactamente los términos técnicos, nombres de funciones, clases o variables que aparecen en el prompt.
 - No agregues términos de contexto genérico que no estén mencionados en el prompt.
+- Ignorá verbos imperativos (mostrame, buscá, explicá, andá, revisá, mostrá, mostrar, buscar) y sustantivos genéricos de programación (código, archivo, función, valor, completo, resumir, interpretar) salvo que sean parte de un identificador compuesto.
 - Si el prompt contiene un concepto en lenguaje natural sin nombre técnico claro, usá las palabras más específicas del prompt tal como están.
 - Devolvé un JSON array de máximo 4 strings.
 - Respondé SOLO el array JSON, sin explicación, sin backticks.`,
@@ -900,7 +904,10 @@ REGLAS:
       }),
     }).finally(() => clearTimeout(timer));
 
-    if (!res.ok) return [];
+    if (!res.ok) {
+      console.warn(`[extractKeywordsForSearch] FALLBACK activado — razón: HTTP ${res.status} — query: "${prompt.slice(0, 80)}"`);
+      return [];
+    }
     const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
     const raw = json.choices?.[0]?.message?.content ?? '[]';
     const parsed = JSON.parse(raw.trim()) as unknown;
@@ -908,9 +915,10 @@ REGLAS:
       console.log(`[agent] AI keywords: [${parsed.join(', ')}]`);
       return parsed as string[];
     }
+    console.warn(`[extractKeywordsForSearch] FALLBACK activado — razón: respuesta Groq no es array JSON válido ("${raw.slice(0, 60)}") — query: "${prompt.slice(0, 80)}"`);
     return [];
   } catch (err) {
-    console.warn('[agent] extractKeywordsForSearch failed:', err instanceof Error ? err.message : err);
+    console.warn(`[extractKeywordsForSearch] FALLBACK activado — razón: ${err instanceof Error ? err.message : String(err)} — query: "${prompt.slice(0, 80)}"`);
     return [];
   }
 }
@@ -3384,6 +3392,16 @@ function classifySearchComplexity(
   if (complexPatterns.some(p => p.test(userMessage))) {
     return 'complex';
   }
+
+  // Heurística 4 — 2+ identificadores técnicos distintos → complex.
+  // Una query con múltiples símbolos (ej. CAPS_SNAKE_CASE + camelCase) casi
+  // siempre necesita explorar distintos archivos/funciones. No requiere
+  // lenguaje de relación explícito para ser clasificada como compleja.
+  const techIds = [
+    ...(userMessage.match(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g) ?? []),   // CAPS_SNAKE (≥2 partes)
+    ...(userMessage.match(/\b[a-z][a-z0-9]*[A-Z][a-zA-Z0-9]+\b/g) ?? []), // camelCase
+  ];
+  if (new Set(techIds.map(t => t.toLowerCase())).size >= 2) return 'complex';
 
   // Default: lookup directo
   return 'simple';
@@ -6000,7 +6018,37 @@ async function runChatTurn(
         const chatFastTerms = await extractKeywordsForSearch(userMessage, repo);
         const chatFastPattern = chatFastTerms.length > 0
           ? chatFastTerms.join('|')
-          : userMessage.split(/\s+/).filter(w => w.length > 4).slice(0, 3).join('|');
+          : (() => {
+              // Fallback mejorado: prioriza identificadores técnicos y excluye
+              // palabras de instrucción antes de truncar, para evitar que
+              // términos como "Mostrame" o "completo" desplacen a
+              // CAPS_SNAKE_CASE o camelCase reales.
+              const INSTRUCTION_WORDS = new Set([
+                'mostrame', 'busca', 'buscá', 'explica', 'explicá', 'completo',
+                'resumir', 'interpretar', 'donde', 'dónde', 'como', 'cómo',
+                'codigo', 'código', 'archivo', 'funcion', 'función', 'valor',
+                'dentro', 'afuera', 'mostrar', 'define', 'definir', 'retorna',
+                'retornar', 'devuelve', 'devolver', 'todos', 'todas', 'entre',
+                'para', 'este', 'esta', 'desde', 'hasta',
+              ]);
+              const words = userMessage.split(/\s+/);
+              const isCapsSnake = (w: string) => /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(w);
+              const isCamel    = (w: string) => /^[a-z][a-z0-9]*[A-Z][a-zA-Z0-9]+$/.test(w);
+              const isSnake    = (w: string) => /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(w);
+              const techFirst = [
+                ...words.filter(isCapsSnake),
+                ...words.filter(isCamel),
+                ...words.filter(isSnake),
+                ...words.filter(w =>
+                  w.length > 4 &&
+                  !INSTRUCTION_WORDS.has(w.toLowerCase()) &&
+                  !isCapsSnake(w) && !isCamel(w) && !isSnake(w)
+                ),
+              ];
+              const result = [...new Set(techFirst)].slice(0, 4).join('|');
+              console.warn(`[chatFastPath] fallback de extracción → "${result}" (Groq devolvió vacío)`);
+              return result;
+            })();
         if (chatFastPattern.length > 0) {
           const { matches: chatFastMatches } = await searchWithTestFallback(chatFastPattern, repo, send);
           const chatFastBest = chatFastMatches.find(m => !isTestMatch(m.path, m.text ?? '')) ?? chatFastMatches[0];
