@@ -5543,6 +5543,36 @@ function reformulateQueryTerms(originalTerms: string[]): string[] {
   return [...added].filter(t => !origSet.has(t.toLowerCase())).slice(0, 6);
 }
 
+/**
+ * Verifica, SIN llamar a ningún modelo, si el mensaje del usuario menciona algo
+ * que existe de verdad en el código de este repo — reemplaza la lista fija de
+ * palabras de dominio (FVG, circuit breaker, etc.) por una consulta al índice
+ * real de símbolos, que ya se genera por repo. Escala automáticamente a
+ * cualquier repo nuevo sin tocar código.
+ *
+ * Costo: $0 de API — extractKeywordsFromMessage es regex local, getRepoSymbolNames
+ * consulta tu propia base de datos (ya se usa hoy en unifiedGrepSearch).
+ */
+async function isGroundedInRepoSymbols(
+  message: string,
+  repo: string,
+): Promise<{ grounded: boolean; matchedSymbol?: string; matchedTerm?: string }> {
+  const symbolNames = await getRepoSymbolNames(repo);
+  if (symbolNames.length === 0) return { grounded: false };
+
+  const candidates = extractKeywordsFromMessage(message)
+    .map(t => t.replace(/[^\w]/g, '')) // limpiar puntuación pegada (ej. "breaker?")
+    .filter(t => t.length >= 3);
+
+  for (const term of candidates) {
+    const matches = findRealSymbolMatches(term, symbolNames, 1);
+    if (matches.length > 0) {
+      return { grounded: true, matchedSymbol: matches[0], matchedTerm: term };
+    }
+  }
+  return { grounded: false };
+}
+
 async function executeChatTool(
   name: string,
   input: Record<string, any>,
@@ -6284,31 +6314,48 @@ async function runChatTurn(
 
     send('action', { text: '⚡ Modo rápido — Groq' });
     send('model_active', { model: 'Groq (Llama 3.3 70B)', tier: 'fast' });
-    // Convert the stored session history (Anthropic format) to the flat {role, content}
-    // array Groq expects — stripping all tool_use / tool_result blocks so Groq only
-    // sees the conversational text thread, not the raw code-search internals.
-    // `cacheHint` (DEEP evidence, shared summaries) stays in the system prompt as
-    // complementary context on top of the real turn history.
-    const groqAnswer = await callGroqAgent(
-      userMessage,
-      buildTriagePrompt(cacheHint),
-      fastFinding ? 768 : 512,
-      groqHistory,
-    );
 
-    if (!groqAnswer.trim().startsWith('NEEDS_TOOLS:')) {
-      send('chat_message', { text: groqAnswer });
-      messages.push({ role: 'assistant', content: [{ type: 'text', text: groqAnswer }] });
-      await saveChatHistory(sessionId, messages);
-      // Guardar resumen de la respuesta de Groq en contexto compartido
-      const groqSharedSummary = await summarizeForSharedContext(groqAnswer);
-      if (groqSharedSummary) {
-        await saveContextSummary(repo, groqSharedSummary, 'chat').catch(() => {});
+    // ── Grounding contra el índice real de símbolos — reemplaza la lista fija
+    // de palabras de dominio. Si el mensaje menciona algo que existe de verdad
+    // en el código de este repo, forzamos la búsqueda directamente, sin pagar
+    // ni arriesgar la llamada de triage a Groq (que puede alucinar una
+    // definición genérica para términos ambiguos como "circuit breaker").
+    const grounding = await isGroundedInRepoSymbols(userMessage, repo);
+
+    let groqAnswer: string;
+    let groqReason: string;
+
+    if (grounding.grounded) {
+      console.log(`[grounding] "${grounding.matchedTerm}" → símbolo real "${grounding.matchedSymbol}" en ${repo} — forzando búsqueda, sin llamar a Groq triage`);
+      groqAnswer = `NEEDS_TOOLS: "${grounding.matchedTerm}" coincide con el símbolo real "${grounding.matchedSymbol}" en este repo`;
+      groqReason = groqAnswer.replace('NEEDS_TOOLS:', '').trim();
+    } else {
+      // Convert the stored session history (Anthropic format) to the flat {role, content}
+      // array Groq expects — stripping all tool_use / tool_result blocks so Groq only
+      // sees the conversational text thread, not the raw code-search internals.
+      // `cacheHint` (DEEP evidence, shared summaries) stays in the system prompt as
+      // complementary context on top of the real turn history.
+      groqAnswer = await callGroqAgent(
+        userMessage,
+        buildTriagePrompt(cacheHint),
+        fastFinding ? 768 : 512,
+        groqHistory,
+      );
+
+      if (!groqAnswer.trim().startsWith('NEEDS_TOOLS:')) {
+        send('chat_message', { text: groqAnswer });
+        messages.push({ role: 'assistant', content: [{ type: 'text', text: groqAnswer }] });
+        await saveChatHistory(sessionId, messages);
+        // Guardar resumen de la respuesta de Groq en contexto compartido
+        const groqSharedSummary = await summarizeForSharedContext(groqAnswer);
+        if (groqSharedSummary) {
+          await saveContextSummary(repo, groqSharedSummary, 'chat').catch(() => {});
+        }
+        return;
       }
-      return;
-    }
 
-    const groqReason = groqAnswer.replace('NEEDS_TOOLS:', '').trim();
+      groqReason = groqAnswer.replace('NEEDS_TOOLS:', '').trim();
+    }
 
     // ── Router de complejidad de búsqueda ─────────────────────────────────────
     // Para preguntas de lookup directo (S1, trailing stop, etc.) evitamos el
