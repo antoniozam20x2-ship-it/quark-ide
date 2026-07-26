@@ -4999,6 +4999,66 @@ async function loadRepoKnowledge(repo: string, keywords: string[]): Promise<Repo
 }
 
 /**
+ * Híbrido: usa el conocimiento cacheado si el fragmento tiene calidad suficiente
+ * (misma heurística que FAST mode usa para decidir si vale la pena buscar más:
+ * isFragmentInsufficient). Si el fragmento cacheado es pobre (corto, declaración
+ * sin cuerpo, o cubre ≤1 línea con las keywords), relee directo desde
+ * source_files — sin ripgrep, sin extracción de keywords, un solo read_file
+ * puntual — y AUTORREPARA guardando la versión buena para la próxima consulta.
+ * Si no se puede releer (archivo movido/borrado), descarta el caché y devuelve
+ * null para que el llamador caiga al flujo de búsqueda normal.
+ */
+async function loadRepoKnowledgeVerified(
+  repo: string,
+  keywords: string[],
+): Promise<RepoKnowledgeRow | null> {
+  const raw = await loadRepoKnowledge(repo, keywords);
+  if (!raw) return null;
+
+  if (!isFragmentInsufficient(raw.summary, keywords)) {
+    return raw; // caché de buena calidad — servir directo
+  }
+
+  const primary = raw.source_files?.[0];
+  if (!primary) {
+    console.warn(`[repo_knowledge] "${raw.concept}" — fragmento insuficiente y sin source_files, descartando caché`);
+    return null;
+  }
+
+  try {
+    const freshContent = await getFileContent(primary.path, repo);
+    const freshSection =
+      readEnclosingFunction(freshContent, primary.startLine) ??
+      smartReadSection(freshContent, primary.startLine, 60);
+
+    if (!freshSection) {
+      console.warn(`[repo_knowledge] "${raw.concept}" — no se pudo releer sección en ${primary.path}:${primary.startLine}, descartando caché`);
+      return null;
+    }
+
+    console.log(`[repo_knowledge] "${raw.concept}" — fragmento insuficiente, autorreparado desde ${primary.path}`);
+
+    // Autorreparación: la próxima consulta sobre este concepto ya sirve la versión buena
+    await saveRepoKnowledge(
+      repo,
+      keywords[0],
+      freshSection.excerpt,
+      [{ path: primary.path, startLine: freshSection.startLine, endLine: freshSection.endLine }],
+      raw.confidence,
+    );
+
+    return {
+      ...raw,
+      summary: freshSection.excerpt,
+      source_files: [{ path: primary.path, startLine: freshSection.startLine, endLine: freshSection.endLine }],
+    };
+  } catch (err) {
+    console.warn(`[repo_knowledge] "${raw.concept}" — releer ${primary.path} falló, descartando caché:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+/**
  * Guarda o actualiza conocimiento verificado para un concepto. Se llama después
  * de una búsqueda exitosa (evidencia no vacía) dentro del pipeline de planificación.
  * Upsert por (repo, concept) — la investigación más reciente reemplaza a la anterior.
@@ -6314,7 +6374,7 @@ async function runChatTurn(
           const chatFastTerms = await extractKeywordsForSearch(userMessage, repo);
 
           // ── Chequear conocimiento persistente ANTES de buscar ────────────────────
-          const chatFastKnowledge = await loadRepoKnowledge(repo, chatFastTerms);
+          const chatFastKnowledge = await loadRepoKnowledgeVerified(repo, chatFastTerms);
           if (chatFastKnowledge) {
             send('action', { text: `📚 Conocimiento persistente reutilizado — "${chatFastKnowledge.concept}" (verificado ${new Date(chatFastKnowledge.verified_at).toLocaleDateString()})` });
             try {
@@ -6441,7 +6501,7 @@ async function runChatTurn(
           if (subKws.length === 0) return;
 
           // ── Chequear conocimiento persistente ANTES de buscar ──────────────────
-          const knowledge = await loadRepoKnowledge(repo, subKws);
+          const knowledge = await loadRepoKnowledgeVerified(repo, subKws);
           if (knowledge) {
             send('action', { text: `📚 [${idx + 1}/${searchQueries.length}] Conocimiento persistente reutilizado — "${knowledge.concept}" (verificado ${new Date(knowledge.verified_at).toLocaleDateString()})` });
             for (const sf of knowledge.source_files) {
