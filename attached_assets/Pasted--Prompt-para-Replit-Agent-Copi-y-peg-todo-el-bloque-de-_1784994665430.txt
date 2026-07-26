@@ -1,0 +1,104 @@
+# Prompt para Replit Agent
+
+Copiá y pegá todo el bloque de abajo tal cual en el chat de Replit Agent.
+
+Causa raíz encontrada de por qué el aviso `⚠️ Solo encontré código de test` nunca se
+disparaba en producción (probado con `testTrailingStopCoexistence`, repo Ahorar):
+cuando el match viene del índice de símbolos (`lookupSymbol`), el texto que se le pasa
+a `isTestMatch` es el nombre del símbolo PELADO (ej. `"testTrailingStopCoexistence"`),
+sin ningún contexto sintáctico alrededor. Las reglas existentes de `isTestMatch` que
+detectan prefijos de test están escritas esperando ese contexto:
+
+- La regla de call/assignment (`\btest[A-Z]\w*\s*[=(]`) exige que después del nombre
+  venga `(` o `=` — no está, porque el texto es solo el nombre.
+- La regla de PascalCase embebido exige que la palabra empiece con mayúscula — pero
+  `testTrailingStopCoexistence` empieza con `t` minúscula (es camelCase, no PascalCase).
+
+Resultado: un nombre de símbolo que en cualquier lectura humana es obviamente de test
+(prefijo `test` + palabra en mayúscula) no dispara ninguna regla existente.
+
+---
+
+## PROMPT
+
+En `quark-ide/backend/src/routes/agent.ts`, buscá la función `isTestMatch`. Es la que
+tiene esta forma (puede haber variaciones menores, ubicala por el nombre y por las
+reglas numeradas en comentarios):
+
+```typescript
+function isTestMatch(filePath: string, matchText?: string): boolean {
+  // 1. Test file by path convention (...)
+  if (/\.(test|spec)\.[jt]sx?$/.test(filePath)) return true;
+  if (/[/](tests?|__tests__|mocks?|fixtures?)[/]/i.test(filePath)) return true;
+
+  if (matchText) {
+    // 2. Symbol/function name declared with test/mock/debug prefix (camelCase)
+    if (/\b(?:function\s+|(?:const|let|var)\s+)(?:async\s+)?(?:function\s+)?(test|mock|debug|stub|fake|dummy)[A-Za-z]/i.test(matchText)) return true;
+    // 3. Call/assignment form: testFoo( or testFoo = (camelCase after test prefix)
+    if (/\btest[A-Z]\w*\s*[=(]/i.test(matchText)) return true;
+    // 4. Dev/test-only indicators in comments or route strings
+    if (/\/api\/dev\/|X-Dev-Secret|never writes to|for (?:test|dev)(?:ing)? only/i.test(matchText)) return true;
+    // 5. PascalCase identifiers with Test/Mock/Debug/Stub as an EMBEDDED capitalized word
+    if (/\b[A-Z][a-zA-Z]*(?:Test|Mock|Debug|Stub)(?:[A-Z][a-zA-Z]*)?\b/.test(matchText)) return true;
+  }
+
+  return false;
+}
+```
+
+Agregá una regla nueva **entre la 2 y la 3** (o donde te resulte más prolijo, el orden
+no importa funcionalmente), que cubra el caso de un nombre de símbolo PELADO — sin
+ningún prefijo sintáctico como `function `/`const `/`(` alrededor, tal como llega
+cuando el match viene de `lookupSymbol` en vez de `ripgrep`:
+
+```typescript
+    // 2.5. Bare symbol name from index lookup (no syntactic context around it) —
+    // covers matches from lookupSymbol, where matchText is just the identifier itself
+    // (e.g. "testTrailingStopCoexistence"), which rules 2 and 3 miss because they
+    // require function/const/assignment syntax or a PascalCase-embedded word.
+    if (/^(test|mock|debug|stub|fake|dummy)[A-Z]/.test(matchText.trim())) return true;
+```
+
+El resultado final de la función debe quedar así (con la nueva regla insertada, sin
+tocar ninguna otra):
+
+```typescript
+function isTestMatch(filePath: string, matchText?: string): boolean {
+  if (/\.(test|spec)\.[jt]sx?$/.test(filePath)) return true;
+  if (/[/](tests?|__tests__|mocks?|fixtures?)[/]/i.test(filePath)) return true;
+
+  if (matchText) {
+    if (/\b(?:function\s+|(?:const|let|var)\s+)(?:async\s+)?(?:function\s+)?(test|mock|debug|stub|fake|dummy)[A-Za-z]/i.test(matchText)) return true;
+    // Nombre de símbolo pelado (viene del índice, sin contexto sintáctico) con prefijo test/mock/etc.
+    if (/^(test|mock|debug|stub|fake|dummy)[A-Z]/.test(matchText.trim())) return true;
+    if (/\btest[A-Z]\w*\s*[=(]/i.test(matchText)) return true;
+    if (/\/api\/dev\/|X-Dev-Secret|never writes to|for (?:test|dev)(?:ing)? only/i.test(matchText)) return true;
+    if (/\b[A-Z][a-zA-Z]*(?:Test|Mock|Debug|Stub)(?:[A-Z][a-zA-Z]*)?\b/.test(matchText)) return true;
+  }
+
+  return false;
+}
+```
+
+No toques nada más de la función — solo se agrega esta regla nueva.
+
+---
+
+### Verificación final
+
+1. Corré `tsc --noEmit`.
+2. En una sesión de CHAT nueva (usá el botón "Reiniciar" para limpiar el historial y
+   evitar que el intento de caché tape la prueba), preguntá:
+   > "¿Cómo funciona testTrailingStopCoexistence?"
+
+   Ahora debería aparecer en algún punto de la respuesta el aviso
+   `⚠️ Solo encontré código de test — el símbolo de producción puede tener un nombre
+   diferente.` (viene del bloque `if (chatFastBest && chatFastAllTest)` que ya está
+   en el código de un cambio anterior).
+3. Confirmá que esto NO afecta símbolos de producción reales — probá con algo como
+   "¿Cómo funciona placeTrailingStop?" (sin prefijo test/mock) y confirmá que sigue
+   sin disparar el aviso, como corresponde.
+4. Esta regla solo afecta el ORDEN de resultados (producción primero) y el aviso
+   visual — nunca oculta ni modifica el contenido real de ninguna respuesta.
+
+Contame el diff final y el resultado de la prueba del paso 2.

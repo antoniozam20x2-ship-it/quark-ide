@@ -216,6 +216,19 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   useEffect(() => { localStorage.setItem(LS_REPO_KEY, selectedRepo); }, [selectedRepo]);
   useEffect(() => { localStorage.setItem(LS_MODE_KEY, mode); }, [mode]);
 
+  // Mantiene selectedRepo sincronizado con activeProject cuando el usuario cambia
+  // de proyecto desde el selector superior (activeProject es prop, cambia en el
+  // padre). Sin este efecto, selectedRepo queda "pegado" al valor guardado en
+  // localStorage de una sesión anterior, y las llamadas al backend usan un repo
+  // distinto al que la UI muestra arriba — bug real detectado en producción
+  // (búsqueda de la señal S3 resolvió contra el repo equivocado).
+  useEffect(() => {
+    if (activeProject.repo && activeProject.repo !== selectedRepo) {
+      setSelectedRepo(activeProject.repo);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject.repo]);
+
   // Load feed + result from DB on mount
   useEffect(() => {
     // Capture stable values from the initial render — both are initialized

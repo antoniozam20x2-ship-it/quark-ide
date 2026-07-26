@@ -4272,6 +4272,11 @@ function isTestMatch(filePath: string, matchText?: string): boolean {
     // 2. Symbol/function name declared with test/mock/debug prefix (camelCase)
     //    Catches: function testFoo, const testFoo, async function mockBar — NOT placeTrailingStop
     if (/\b(?:function\s+|(?:const|let|var)\s+)(?:async\s+)?(?:function\s+)?(test|mock|debug|stub|fake|dummy)[A-Za-z]/i.test(matchText)) return true;
+    // 2.5. Bare symbol name from index lookup (no syntactic context around it) —
+    //      covers matches from lookupSymbol, where matchText is just the identifier itself
+    //      (e.g. "testTrailingStopCoexistence"), which rules 2 and 3 miss because they
+    //      require function/const/assignment syntax or a PascalCase-embedded word.
+    if (/^(test|mock|debug|stub|fake|dummy)[A-Z]/.test(matchText.trim())) return true;
     // 3. Call/assignment form: testFoo( or testFoo = (camelCase after test prefix)
     if (/\btest[A-Z]\w*\s*[=(]/i.test(matchText)) return true;
     // 4. Dev/test-only indicators in comments or route strings

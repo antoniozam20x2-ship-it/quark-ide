@@ -1,0 +1,92 @@
+# Prompt para Replit Agent
+
+Copiá y pegá todo el bloque de abajo tal cual en el chat de Replit Agent.
+
+Bug encontrado revisando el componente `QuarkAgent.tsx` (frontend): hay dos
+selectores de repo que pueden desincronizarse. El selector de arriba (el header
+que muestra el proyecto activo, ej. "⚡ SIGNAL OS ▾ Ahorar/main") es la prop
+`activeProject`, controlada por un componente padre. El dropdown "REPO" de más
+abajo, dentro de este mismo componente, es un estado local (`selectedRepo`)
+que se persiste en `localStorage`. `selectedRepo` se inicializa desde
+`activeProject.repo` únicamente en el montaje del componente — si `activeProject`
+cambia después (el usuario cambia de proyecto arriba), `selectedRepo` NO se
+actualiza automáticamente, y sigue siendo el valor guardado en `localStorage`
+de una sesión anterior. Y es `selectedRepo` — no `activeProject` — el que se
+manda al backend en cada llamada (`repo: selectedRepo` en los fetch a
+`/agent/generate`, `/agent/chat`, `/agent/auto`, `/agent/fix`, `/github/commit-multiple`,
+etc.). Resultado: la UI puede mostrar un proyecto arriba mientras las búsquedas
+reales van contra el repo de otra sesión.
+
+---
+
+## PROMPT
+
+En el componente `QuarkAgent.tsx` del frontend, buscá esta declaración de estado
+cerca del inicio del componente:
+
+```typescript
+const [selectedRepo, setSelectedRepo]   = useState(
+  () => localStorage.getItem(LS_REPO_KEY) ?? activeProject.repo ?? 'quark-ide',
+);
+```
+
+Justo después de esa declaración (y después de las demás declaraciones de estado
+relacionadas, en el mismo bloque donde ya existen otros `useEffect` de persistencia
+como `useEffect(() => { localStorage.setItem(LS_REPO_KEY, selectedRepo); }, [selectedRepo]);`),
+agregá un nuevo `useEffect` que mantenga `selectedRepo` sincronizado cuando
+`activeProject` cambia después del montaje inicial:
+
+```typescript
+// Mantiene selectedRepo sincronizado con activeProject cuando el usuario cambia
+// de proyecto desde el selector superior (activeProject es prop, cambia en el
+// padre). Sin este efecto, selectedRepo queda "pegado" al valor guardado en
+// localStorage de una sesión anterior, y las llamadas al backend usan un repo
+// distinto al que la UI muestra arriba — bug real detectado en producción
+// (búsqueda de la señal S3 resolvió contra el repo equivocado).
+useEffect(() => {
+  if (activeProject.repo && activeProject.repo !== selectedRepo) {
+    setSelectedRepo(activeProject.repo);
+  }
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, [activeProject.repo]);
+```
+
+### Consideración importante antes de aplicar
+
+Este cambio asume que el comportamiento deseado es: **el dropdown "REPO" siempre
+debe reflejar el proyecto activo de arriba**, y no debe existir un modo de
+"override manual" donde el usuario elige un repo distinto al proyecto activo
+a propósito (por ejemplo, para consultar otro repo sin cambiar de proyecto).
+
+Si en algún momento se diseñó el dropdown como un override intencional
+(algo que el equipo quiere seguir permitiendo), NO apliques el `useEffect` de
+arriba tal cual — en su lugar agregá una señal visual quEChat le muestre al
+usuario cuando `selectedRepo` diverge de `activeProject.repo` (por ejemplo un
+texto o borde de advertencia junto al dropdown), para que la desincronización
+sea visible en vez de invisible. Preguntame antes de decidir cuál de las dos
+opciones aplicar si no está claro por el resto del código cuál era la intención
+original del dropdown independiente.
+
+Dado el bug real ya confirmado en producción (S3 buscando en el repo
+equivocado sin ningún aviso), mi preferencia por defecto es la sincronización
+automática (el `useEffect` de arriba) — aplicala salvo que encuentres evidencia
+clara en el código de que el override manual es una función buscada a propósito.
+
+---
+
+### Verificación final
+
+1. Corré `tsc --noEmit`.
+2. En el navegador/preview: seleccioná un proyecto en el selector de arriba,
+   confirmá que el dropdown "REPO" de abajo se actualiza para reflejarlo
+   automáticamente (sin necesitar tocar el dropdown manualmente).
+3. Cambiá de proyecto varias veces seguidas y confirmá que el dropdown sigue
+   al proyecto activo en cada cambio, no solo la primera vez.
+4. Confirmá que seguís pudiendo cambiar el dropdown manualmente si hace falta
+   (no debe quedar bloqueado ni de solo lectura) — el `useEffect` solo debe
+   disparar cuando `activeProject.repo` cambia, no en cada render.
+5. Repetí el caso real que disparó este bug: preguntá por la señal S3 en CHAT
+   inmediatamente después de cambiar de proyecto al de trading (Ahorar), y
+   confirmá que la búsqueda va contra el repo correcto.
+
+Contame el diff final y qué decidiste sobre la consideración del párrafo de arriba.
