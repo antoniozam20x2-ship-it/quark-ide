@@ -1,0 +1,132 @@
+# Prompt para Replit Agent
+
+Copiá y pegá todo el bloque de abajo tal cual en el chat de Replit Agent.
+
+Bug confirmado en producción: `repo_knowledge` (memoria persistente) solo se
+integró en el bloque de DEEP pre-fetch (`planSearchSteps`), pero preguntas
+simples de un solo concepto (ej. "¿cómo funciona el circuit breaker?") toman
+la **ruta rápida de CHAT** — un camino distinto, más corto, que hace la
+búsqueda directa por índice/ripgrep y sintetiza con `GROQ_SINGLE_FRAGMENT_SYSTEM`
+sin pasar nunca por DEEP pre-fetch. Ese camino nunca consulta ni guarda en
+`repo_knowledge`, así que el caso de uso MÁS común (preguntas simples) no se
+beneficia de la memoria persistente que armamos.
+
+Este prompt extiende el mismo mecanismo (`loadRepoKnowledge` / `saveRepoKnowledge`,
+ya creados en el cambio anterior) a la ruta rápida de CHAT.
+
+---
+
+## PROMPT
+
+En `quark-ide/backend/src/routes/agent.ts`, dentro de `runChatTurn`, ubicá el
+bloque de la ruta rápida de CHAT (dentro de
+`if (searchComplexity === 'simple' && classifyIntent(userMessage) === 'explain')`).
+Específicamente, la parte que calcula `chatFastTerms` y arma `chatFastPattern`
+para buscar (la rama que corre cuando `chatCachedHandled` es `false`, es decir,
+cuando no había fragmento cacheado del turno anterior o Groq dijo `NEEDS_SEARCH`).
+
+### Paso 1 — Chequear conocimiento persistente ANTES de construir el patrón de búsqueda
+
+Justo después de la línea donde se calcula `chatFastTerms`
+(`const chatFastTerms = await extractKeywordsForSearch(userMessage, repo);`,
+o el nombre real que tenga en tu versión actual — puede que ya se llame
+distinto tras cambios anteriores), y ANTES de construir `chatFastPattern`,
+agregá:
+
+```typescript
+// ── Chequear conocimiento persistente ANTES de buscar ────────────────────
+const chatFastKnowledge = await loadRepoKnowledge(repo, chatFastTerms);
+if (chatFastKnowledge) {
+  send('action', { text: `📚 Conocimiento persistente reutilizado — "${chatFastKnowledge.concept}" (verificado ${new Date(chatFastKnowledge.verified_at).toLocaleDateString()})` });
+
+  try {
+    const chatKnowledgeSynthesis = await callGroqAgent(
+      `Pregunta: "${userMessage}"\n\nEvidencia confirmada (conocimiento persistente ya verificado):\n${chatFastKnowledge.summary}`,
+      GROQ_SINGLE_FRAGMENT_SYSTEM,
+      512,
+    );
+    send('chat_message', { text: chatKnowledgeSynthesis });
+
+    const primaryFile = chatFastKnowledge.source_files[0];
+    const _ckPaths = primaryFile?.path ?? '';
+    const _ckAssistantWithPaths =
+      chatKnowledgeSynthesis + `\n\n<evidence_files>\n${_ckPaths}\n</evidence_files>`;
+    messages.push({ role: 'assistant', content: [{ type: 'text', text: _ckAssistantWithPaths }] });
+    await saveChatHistory(sessionId, messages);
+
+    const updatedChatFastHistoryFromKnowledge = [
+      ...chatFastHistory,
+      { role: 'user',      content: userMessage,          keywords: chatFastTerms },
+      { role: 'assistant', content: chatKnowledgeSynthesis, fragment: chatFastKnowledge.summary, path: _ckPaths },
+    ];
+    await saveFastHistory(sessionId, updatedChatFastHistoryFromKnowledge).catch(() => {});
+
+    send('confidence', {
+      level: chatFastKnowledge.confidence === 'high' ? 'high' : 'medium',
+      reason: 'CHAT — ruta rápida: memoria persistente reutilizada, sin nueva búsqueda',
+      suggestedAction: 'none',
+    });
+    send('done', { files: [], commitMessage: '', mainComponent: _ckPaths, mainContent: '', repo, branch: '' });
+    fastPathHandled = true;
+  } catch (chatKnowledgeErr) {
+    console.warn('[chat-fast-knowledge] síntesis desde conocimiento persistente falló, cayendo a búsqueda nueva:', chatKnowledgeErr instanceof Error ? chatKnowledgeErr.message : chatKnowledgeErr);
+    // sin marcar fastPathHandled — cae al flujo normal de abajo
+  }
+}
+
+if (!fastPathHandled) {
+  // ... a partir de aquí sigue EXACTAMENTE el código que ya existía:
+  // construcción de chatFastPattern, searchWithTestFallback, etc.
+}
+```
+
+Envolvé el resto del bloque existente (desde donde se construye
+`chatFastPattern` hasta donde se hace `fastPathHandled = true;` al final del
+camino de búsqueda normal) dentro de ese `if (!fastPathHandled) { ... }`, para
+que no se ejecute si el conocimiento persistente ya resolvió la pregunta.
+
+### Paso 2 — Guardar conocimiento nuevo después de una búsqueda exitosa
+
+Dentro de ese mismo `if (!fastPathHandled) { ... }`, ubicá el punto donde ya
+existe el guardado en `saveFastHistory` para el camino normal (el que agregamos
+en un cambio anterior, después de que se arma `chatFastSynthesis` y
+`chatFastFragment`, antes de `fastPathHandled = true;`). Justo ahí, agregá
+también el guardado en `repo_knowledge`:
+
+```typescript
+// ── Guardar conocimiento nuevo para la próxima vez ─────────────────────────
+if (chatFastTerms.length > 0) {
+  const chatFastConfidence = (chatFastBest.symbolType && !chatFastAllTest) ? 'high' : 'medium';
+  saveRepoKnowledge(
+    repo,
+    chatFastTerms[0],
+    chatFastFragment,
+    [{ path: chatFastBest.path, startLine: chatFastSection?.startLine ?? 0, endLine: chatFastSection?.endLine ?? 0 }],
+    chatFastConfidence,
+  ).catch(() => {});
+}
+```
+
+Ajustá los nombres de variable (`chatFastSection`, `chatFastFragment`,
+`chatFastBest`, `chatFastAllTest`) a los que realmente existan en tu versión
+actual del bloque — deberían coincidir con los que ya se usan unas líneas
+arriba para armar `chatFastSynthesis`.
+
+---
+
+### Verificación final
+
+1. Corré `tsc --noEmit`.
+2. Reiniciá el backend para asegurarte de que no hay estado de sesión previo
+   con esta pregunta.
+3. Preguntá "¿cómo funciona el circuit breaker?" — debería tomar la ruta
+   rápida de CHAT normal (sin conocimiento previo todavía) y, al final,
+   guardar en `repo_knowledge`.
+4. Preguntá EXACTAMENTE lo mismo otra vez (misma sesión o una nueva) —
+   ahora debería aparecer `📚 Conocimiento persistente reutilizado` y NO
+   debería repetirse `🧠 Paso 1 — buscando en índice de símbolos`.
+5. Confirmá que una pregunta distinta (ej. "¿cómo funciona la señal S1?")
+   sigue funcionando normal — no debe verse afectada por este cambio salvo
+   que también tenga conocimiento guardado de una consulta previa.
+
+Contame el diff final y el resultado de la prueba del paso 4.

@@ -6312,47 +6312,97 @@ async function runChatTurn(
         } else {
           // Flujo de búsqueda normal — ripgrep + fragmento + Groq:
           const chatFastTerms = await extractKeywordsForSearch(userMessage, repo);
-          const chatFastPattern = chatFastTerms.length > 0
-            ? chatFastTerms.join('|')
-            : localKeywordFallback(userMessage).join('|');
-          if (chatFastPattern.length > 0) {
-            const { matches: chatFastMatches, allTest: chatFastAllTest } = await searchWithTestFallback(chatFastPattern, repo, send);
-            const chatFastBest = chatFastMatches.find(m => !isTestMatch(m.path, m.text ?? '')) ?? chatFastMatches[0];
-            if (chatFastBest && chatFastAllTest) {
-              send('action', { text: '⚠️ Solo encontré código de test — el símbolo de producción puede tener un nombre diferente.' });
+
+          // ── Chequear conocimiento persistente ANTES de buscar ────────────────────
+          const chatFastKnowledge = await loadRepoKnowledge(repo, chatFastTerms);
+          if (chatFastKnowledge) {
+            send('action', { text: `📚 Conocimiento persistente reutilizado — "${chatFastKnowledge.concept}" (verificado ${new Date(chatFastKnowledge.verified_at).toLocaleDateString()})` });
+            try {
+              const chatKnowledgeSynthesis = await callGroqAgent(
+                `Pregunta: "${userMessage}"\n\nEvidencia confirmada (conocimiento persistente ya verificado):\n${chatFastKnowledge.summary}`,
+                GROQ_SINGLE_FRAGMENT_SYSTEM,
+                512,
+              );
+              send('chat_message', { text: chatKnowledgeSynthesis });
+              const primaryFile = chatFastKnowledge.source_files[0];
+              const _ckPaths = primaryFile?.path ?? '';
+              const _ckAssistantWithPaths =
+                chatKnowledgeSynthesis + `\n\n<evidence_files>\n${_ckPaths}\n</evidence_files>`;
+              messages.push({ role: 'assistant', content: [{ type: 'text', text: _ckAssistantWithPaths }] });
+              await saveChatHistory(sessionId, messages);
+              const updatedChatFastHistoryFromKnowledge = [
+                ...chatFastHistory,
+                { role: 'user',      content: userMessage,            keywords: chatFastTerms },
+                { role: 'assistant', content: chatKnowledgeSynthesis, fragment: chatFastKnowledge.summary, path: _ckPaths },
+              ];
+              await saveFastHistory(sessionId!, updatedChatFastHistoryFromKnowledge).catch(() => {});
+              send('confidence', {
+                level: chatFastKnowledge.confidence === 'high' ? 'high' : 'medium',
+                reason: 'CHAT — ruta rápida: memoria persistente reutilizada, sin nueva búsqueda',
+                suggestedAction: 'none',
+              });
+              send('done', { files: [], commitMessage: '', mainComponent: _ckPaths, mainContent: '', repo, branch: '' });
+              fastPathHandled = true;
+            } catch (chatKnowledgeErr) {
+              console.warn('[chat-fast-knowledge] síntesis desde conocimiento persistente falló, cayendo a búsqueda nueva:', chatKnowledgeErr instanceof Error ? chatKnowledgeErr.message : chatKnowledgeErr);
+              // sin marcar fastPathHandled — cae al flujo normal de abajo
             }
-            if (chatFastBest) {
-              send('action', { text: `📍 Símbolo encontrado: ${chatFastBest.path}${chatFastBest.line ? `:${chatFastBest.line}` : ''}` });
-              const chatFastContent = await getFileContent(chatFastBest.path, repo);
-              const chatFastSection = chatFastBest.line
-                ? (readEnclosingFunction(chatFastContent, chatFastBest.line) ?? smartReadSection(chatFastContent, chatFastBest.line, 60))
-                : null;
-              if (chatFastSection) {
-                const chatFastFragment = chatFastSection.excerpt ?? '';
-                const chatFastSynthesis = await callGroqAgent(
-                  `Pregunta: "${userMessage}"\n\nFragmento de código (${chatFastBest.path}, líneas ${chatFastSection.startLine}-${chatFastSection.endLine}):\n${chatFastFragment}`,
-                  GROQ_SINGLE_FRAGMENT_SYSTEM,
-                  512,
-                );
-                send('chat_message', { text: chatFastSynthesis });
-                const _cfPaths = chatFastBest.path;
-                const _cfAssistantWithPaths =
-                  chatFastSynthesis + `\n\n<evidence_files>\n${_cfPaths}\n</evidence_files>`;
-                messages.push({ role: 'assistant', content: [{ type: 'text', text: _cfAssistantWithPaths }] });
-                await saveChatHistory(sessionId, messages);
-                send('confidence', {
-                  level: 'medium',
-                  reason: 'CHAT — ruta rápida: ripgrep + fragmento + Groq (lookup directo)',
-                  suggestedAction: 'none',
-                });
-                send('done', { files: [{ path: chatFastBest.path, lineRanges: chatFastBest.line ? [{ start: chatFastSection.startLine, end: chatFastSection.endLine, matchedTerm: chatFastTerms[0] }] : [] }], commitMessage: '', mainComponent: chatFastBest.path, mainContent: '', repo, branch: '' });
-                const updatedChatFastHistory = [
-                  ...chatFastHistory,
-                  { role: 'user',      content: userMessage,       keywords: chatFastTerms },
-                  { role: 'assistant', content: chatFastSynthesis, fragment: chatFastFragment, path: chatFastBest.path },
-                ];
-                await saveFastHistory(sessionId!, updatedChatFastHistory).catch(() => {});
-                fastPathHandled = true;
+          }
+
+          if (!fastPathHandled) {
+            const chatFastPattern = chatFastTerms.length > 0
+              ? chatFastTerms.join('|')
+              : localKeywordFallback(userMessage).join('|');
+            if (chatFastPattern.length > 0) {
+              const { matches: chatFastMatches, allTest: chatFastAllTest } = await searchWithTestFallback(chatFastPattern, repo, send);
+              const chatFastBest = chatFastMatches.find(m => !isTestMatch(m.path, m.text ?? '')) ?? chatFastMatches[0];
+              if (chatFastBest && chatFastAllTest) {
+                send('action', { text: '⚠️ Solo encontré código de test — el símbolo de producción puede tener un nombre diferente.' });
+              }
+              if (chatFastBest) {
+                send('action', { text: `📍 Símbolo encontrado: ${chatFastBest.path}${chatFastBest.line ? `:${chatFastBest.line}` : ''}` });
+                const chatFastContent = await getFileContent(chatFastBest.path, repo);
+                const chatFastSection = chatFastBest.line
+                  ? (readEnclosingFunction(chatFastContent, chatFastBest.line) ?? smartReadSection(chatFastContent, chatFastBest.line, 60))
+                  : null;
+                if (chatFastSection) {
+                  const chatFastFragment = chatFastSection.excerpt ?? '';
+                  const chatFastSynthesis = await callGroqAgent(
+                    `Pregunta: "${userMessage}"\n\nFragmento de código (${chatFastBest.path}, líneas ${chatFastSection.startLine}-${chatFastSection.endLine}):\n${chatFastFragment}`,
+                    GROQ_SINGLE_FRAGMENT_SYSTEM,
+                    512,
+                  );
+                  send('chat_message', { text: chatFastSynthesis });
+                  const _cfPaths = chatFastBest.path;
+                  const _cfAssistantWithPaths =
+                    chatFastSynthesis + `\n\n<evidence_files>\n${_cfPaths}\n</evidence_files>`;
+                  messages.push({ role: 'assistant', content: [{ type: 'text', text: _cfAssistantWithPaths }] });
+                  await saveChatHistory(sessionId, messages);
+                  send('confidence', {
+                    level: 'medium',
+                    reason: 'CHAT — ruta rápida: ripgrep + fragmento + Groq (lookup directo)',
+                    suggestedAction: 'none',
+                  });
+                  send('done', { files: [{ path: chatFastBest.path, lineRanges: chatFastBest.line ? [{ start: chatFastSection.startLine, end: chatFastSection.endLine, matchedTerm: chatFastTerms[0] }] : [] }], commitMessage: '', mainComponent: chatFastBest.path, mainContent: '', repo, branch: '' });
+                  const updatedChatFastHistory = [
+                    ...chatFastHistory,
+                    { role: 'user',      content: userMessage,       keywords: chatFastTerms },
+                    { role: 'assistant', content: chatFastSynthesis, fragment: chatFastFragment, path: chatFastBest.path },
+                  ];
+                  await saveFastHistory(sessionId!, updatedChatFastHistory).catch(() => {});
+                  // ── Guardar conocimiento nuevo para la próxima vez ──────────────────
+                  if (chatFastTerms.length > 0) {
+                    const chatFastConfidence = (chatFastBest.symbolType && !chatFastAllTest) ? 'high' : 'medium';
+                    saveRepoKnowledge(
+                      repo,
+                      chatFastTerms[0],
+                      chatFastFragment,
+                      [{ path: chatFastBest.path, startLine: chatFastSection.startLine, endLine: chatFastSection.endLine }],
+                      chatFastConfidence,
+                    ).catch(() => {});
+                  }
+                  fastPathHandled = true;
+                }
               }
             }
           }
