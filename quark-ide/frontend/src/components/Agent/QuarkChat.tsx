@@ -65,6 +65,25 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
   // Tiene setter para que resetConversation() pueda generar uno nuevo.
   const [sessionId, setSessionId] = useState(() => getOrCreateSessionId(repo));
   const bottomRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-resize del textarea al escribir
+  const adjustTextareaHeight = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const maxHeight = 150; // ~6 líneas
+    el.style.height = Math.min(el.scrollHeight, maxHeight) + 'px';
+    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  };
+
+  // Resetear altura del textarea a una línea
+  const resetTextareaHeight = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.overflowY = 'hidden';
+  };
 
   // ── Rehidratar historial al montar (o al cambiar sessionId por reset) ────────
   // Orden de prioridad:
@@ -149,6 +168,7 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
     setForceGroq(false);
     setMessages(m => [...m, { role: 'user', text: userMsg }]);
     setInput('');
+    resetTextareaHeight();
     setStreaming(true);
 
     try {
@@ -344,7 +364,7 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
             <span>Modo rápido activado — próximo mensaje va directo a Groq</span>
           </div>
         )}
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
           {/* Toggle "Modo rápido" — fuerza Groq para el próximo mensaje solamente */}
           <button
             onClick={() => setForceGroq(v => !v)}
@@ -365,15 +385,36 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
           >
             ⚡
           </button>
-          <input
+          <textarea
+            ref={textareaRef}
             value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && sendMessage()}
+            onChange={e => { setInput(e.target.value); adjustTextareaHeight(); }}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+              }
+            }}
             placeholder="Escribe un mensaje..."
             disabled={streaming}
-            style={{ flex: 1, background: '#141420', color: 'white', border: '1px solid #333', borderRadius: '8px', padding: '10px 12px', fontSize: '15px' }}
+            rows={1}
+            style={{
+              flex: 1,
+              background: '#141420',
+              color: 'white',
+              border: '1px solid #333',
+              borderRadius: '8px',
+              padding: '10px 12px',
+              fontSize: '15px',
+              resize: 'none',
+              overflowY: 'hidden',
+              lineHeight: '1.5',
+              minHeight: '40px',
+              maxHeight: '150px',
+              fontFamily: 'inherit',
+            }}
           />
-          <button onClick={sendMessage} disabled={streaming} style={{ background: '#7c3aed', color: 'white', border: 'none', borderRadius: '8px', padding: '0 18px', fontSize: '15px', height: '40px' }}>➤</button>
+          <button onClick={sendMessage} disabled={streaming} style={{ background: '#7c3aed', color: 'white', border: 'none', borderRadius: '8px', padding: '0 18px', fontSize: '15px', height: '40px', flexShrink: 0 }}>➤</button>
         </div>
       </div>
     </div>
