@@ -923,6 +923,57 @@ Responde SOLO con un JSON array de strings, sin markdown ni explicaciones. Ejemp
   }
 }
 
+/**
+ * Descompone la pregunta del usuario en 2-4 sub-preguntas concretas de búsqueda,
+ * usando Groq (barato). Se ejecuta ANTES de la primera búsqueda real, en vez de
+ * dejar que Haiku descubra reactivamente qué buscar paso a paso — reduce rondas
+ * de deep_search y por lo tanto tokens de Claude en preguntas multi-concepto.
+ *
+ * Si la pregunta ya es simple (un solo concepto), devuelve un array de UN solo
+ * elemento — no fuerza descomposición innecesaria en preguntas de lookup directo.
+ * Ante cualquier fallo (sin keys, error de red, JSON inválido), devuelve []
+ * y el llamador debe caer al comportamiento anterior (búsqueda única con el
+ * mensaje completo) sin romper el flujo.
+ */
+async function planSearchSteps(userMessage: string, historyStr: string): Promise<string[]> {
+  const keys = getGroqKeys();
+  if (keys.length === 0) return [];
+
+  const systemPrompt = `Sos un planificador de búsqueda de código. Dada la pregunta del usuario, descomponela en 2 a 4 sub-preguntas concretas e independientes que, si se responden todas, permiten responder la pregunta original por completo.
+
+REGLAS:
+- Cada sub-pregunta debe apuntar a UNA pieza de código concreta a buscar (una función, una condición, un flujo específico).
+- Si la pregunta ya es simple y apunta a un solo concepto/función, devolvé un array de UN solo elemento igual a la pregunta original — no fuerces descomposición innecesaria.
+- No repitas la pregunta original tal cual en cada sub-pregunta — cada una debe ser más específica y accionable para una búsqueda de código real.
+- Devolvé SOLO un JSON array de strings, sin explicación, sin markdown, sin backticks.
+
+Ejemplo de pregunta compleja:
+"¿Cómo se relacionan el circuit breaker con el trailing stop y qué pasa si ambos se activan al mismo tiempo?"
+Respuesta esperada:
+["dónde y cómo se verifica el circuit breaker antes de abrir una posición", "dónde se coloca y ajusta el trailing stop en una posición abierta", "qué pasa si el circuit breaker se activa mientras hay un trailing stop ya colocado — hay alguna interacción explícita entre ambos en el código"]
+
+Ejemplo de pregunta simple:
+"¿Cómo funciona la señal S1?"
+Respuesta esperada:
+["cómo funciona la señal S1"]`;
+
+  try {
+    const raw = await callGroqAgent(
+      `Pregunta: "${userMessage}"\n\nHistorial reciente: ${historyStr || '(sin historial)'}`,
+      systemPrompt,
+      300,
+    );
+    const cleaned = raw.trim().replace(/^```json\s*/i, '').replace(/```\s*$/, '');
+    const parsed = JSON.parse(cleaned) as unknown;
+    if (Array.isArray(parsed) && parsed.every((p) => typeof p === 'string') && parsed.length > 0) {
+      return parsed.slice(0, 4);
+    }
+  } catch (err) {
+    console.warn('[planSearchSteps] fallo, continuando sin plan:', err instanceof Error ? err.message : err);
+  }
+  return [];
+}
+
 async function extractKeywordsForSearch(prompt: string, repo: string = ''): Promise<string[]> {
   const keys = getGroqKeys();
   if (keys.length === 0) {
@@ -6220,85 +6271,102 @@ async function runChatTurn(
 
     send('action', { text: `🧠 Groq → ${groqReason.slice(0, 80)} — ejecutando DEEP pre-fetch` });
 
-    // ── DEEP pre-fetch: gather evidence before handing off to Haiku ──────────
-    // Extract technical keywords from the user's message and run the DEEP
-    // search pipeline (Gemini/cheap) directly — before Haiku (Claude/expensive)
-    // gets involved. If evidence is found, it is injected into the messages as
-    // "EVIDENCIA VERIFICADA (DEEP mode)" so Haiku's PASO 0 picks it up and
-    // synthesizes without re-searching, saving a full Claude exploration loop.
-    // This path is non-fatal: any error or empty result falls through to Haiku.
+    // ── DEEP pre-fetch con planificación previa: descompone la pregunta en
+    // sub-preguntas ANTES de buscar, en vez de que Haiku descubra reactivamente
+    // qué falta paso a paso. Reduce rondas de deep_search en preguntas complejas.
     {
-      let baseKws = await extractKeywordsForSearch(userMessage, repo);
-      if (!baseKws || baseKws.length === 0) {
-        baseKws = extractKeywordsFromMessage(userMessage); // fallback regex
-      }
-      if (baseKws.length > 0) {
-        const allKws   = [...baseKws, ...reformulateQueryTerms(baseKws)];
-        const deepQ    = allKws.join('|');
-        send('deep_search', { query: deepQ });
-        send('action', { text: `🔍 DEEP pre-fetch — keywords: ${baseKws.join(', ')}` });
+      const planHistStr = groqHistory.slice(-6)
+        .map((m: any) => `${m.role === 'user' ? 'Usuario' : 'Asistente'}: ${m.content}`)
+        .join('\n');
+      const planSteps = await planSearchSteps(userMessage, planHistStr);
+      const searchQueries: string[] = planSteps.length > 0 ? planSteps : [userMessage];
+
+      send('action', {
+        text: planSteps.length > 1
+          ? `🗺️ Plan de búsqueda — ${planSteps.length} sub-pregunta(s) identificadas`
+          : '🔍 DEEP pre-fetch — búsqueda directa',
+      });
+
+      const allEvidence: AnnotatedFragment[] = [];
+      const seenFragmentKeys = new Set<string>();
+
+      await Promise.all(searchQueries.map(async (subQuery, idx) => {
         try {
-          const preResult = await searchWithTestFallback(deepQ, repo, send);
-          if (preResult.matches.length > 0) {
-            const preProd   = preResult.matches.filter(m => !isTestMatch(m.path, m.text));
-            const preRanked = preProd.length > 0 ? preProd : preResult.matches;
-            const preEv     = await runDeepSearchPipeline(preRanked, allKws, repo, send, determineMaxHops(userMessage), false, userMessage);
-            if (preEv.length > 0) {
-              // Formatted evidence: structured for Haiku (groups by type, labels each fragment)
-              const evidenceSummary = formatDeepEvidenceForHaiku(preEv, userMessage, repo);
-              // Plain evidence for Groq single-fragment path (simpler model, just needs raw code)
-              const evidencePlain = preEv.map(e => `${e.path}:${e.line}\n${e.fragment}`).join('\n\n---\n\n');
+          let subKws = await extractKeywordsForSearch(subQuery, repo);
+          if (!subKws || subKws.length === 0) subKws = extractKeywordsFromMessage(subQuery);
+          if (subKws.length === 0) return;
 
-              // Enrutamiento Groq vs Haiku: 1 fragmento autocontenido + intención de
-              // EXPLICACIÓN (no generación de código) → Groq interpreta directo, sin Haiku.
-              // 2+ fragmentos (requieren cruzarse) o intención de GENERAR código → sigue a Haiku.
-              if (preEv.length === 1 && classifyIntent(userMessage) === 'explain') {
-                send('action', { text: '⚡ 1 fragmento autocontenido — Groq interpreta directo (sin Haiku)' });
-                try {
-                  const groqSynthesis = await callGroqAgent(
-                    `Pregunta: "${userMessage}"\n\nEvidencia confirmada (DEEP mode):\n${evidencePlain}`,
-                    GROQ_SINGLE_FRAGMENT_SYSTEM,
-                    512,
-                  );
-                  send('chat_message', { text: groqSynthesis });
-                  // Persist the exact file path(s) from preEv in a structured tag so
-                  // subsequent Haiku turns can call read_file with the full path instead
-                  // of trying to reconstruct it from free-text conversational output.
-                  // The tag is stored in DB history only — the user sees only groqSynthesis.
-                  const _evPaths = preEv.map(e => e.path).join('\n');
-                  const _assistantWithPaths =
-                    groqSynthesis + `\n\n<evidence_files>\n${_evPaths}\n</evidence_files>`;
-                  messages.push({ role: 'assistant', content: [{ type: 'text', text: _assistantWithPaths }] });
-                  await saveChatHistory(sessionId, messages);
-                  send('confidence', {
-                    level: 'medium',
-                    reason: 'CHAT — Groq interpretó 1 fragmento autocontenido de evidencia DEEP',
-                    suggestedAction: 'none',
-                  });
-                  return;
-                } catch {
-                  send('action', { text: '⚠️ Groq synthesis falló — escalando a Haiku' });
-                  // cae al flujo normal (inyecta evidencia y sigue a Haiku)
-                }
-              }
-
-              const deepCtx =
-                `\n\nEVIDENCIA VERIFICADA (DEEP mode — disparado por Groq pre-escalación, ` +
-                `lectura real del código fuente, fragmentos anotados por tipo). ` +
-                `Si esta evidencia responde la pregunta por completo, sintetizá en prosa desde aquí (PASO 0) ` +
-                `sin re-buscar. DEEP ya hizo el trabajo duro — vos explicás, no repetís la estructura:\n` +
-                evidenceSummary;
-              // Append to the last user message so Haiku's PASO 0 detects it immediately
-              const lastMsg = messages[messages.length - 1];
-              if (typeof lastMsg?.content === 'string') lastMsg.content += deepCtx;
-              send('action', { text: `✅ DEEP pre-fetch — ${preEv.length} fragmento(s) anotados y listos para síntesis` });
-            } else {
-              send('action', { text: `⚠️ DEEP pre-fetch — matches sin fragmentos válidos, Haiku investigará` });
-            }
+          const allKws = [...subKws, ...reformulateQueryTerms(subKws)];
+          const subPattern = allKws.join('|');
+          if (planSteps.length > 1) {
+            send('action', { text: `🔍 [${idx + 1}/${searchQueries.length}] ${subQuery.slice(0, 60)} — buscando: ${subKws.join(', ')}` });
           } else {
-            send('action', { text: `⚠️ DEEP pre-fetch — sin resultados para "${baseKws.join('|')}", Haiku investigará` });
+            send('action', { text: `🔍 DEEP pre-fetch — keywords: ${subKws.join(', ')}` });
           }
-        } catch { /* non-fatal — fall through to Haiku as normal */ }
+
+          const subResult = await searchWithTestFallback(subPattern, repo, send);
+          if (subResult.matches.length === 0) return;
+
+          const subProd = subResult.matches.filter((m) => !isTestMatch(m.path, m.text));
+          const subRanked = subProd.length > 0 ? subProd : subResult.matches;
+          const subEvidence = await runDeepSearchPipeline(subRanked, allKws, repo, send, determineMaxHops(subQuery), false, subQuery);
+
+          for (const ev of subEvidence) {
+            const key = `${ev.path}:${ev.line}`;
+            if (!seenFragmentKeys.has(key)) {
+              seenFragmentKeys.add(key);
+              allEvidence.push(ev);
+            }
+          }
+        } catch {
+          // No-fatal — una sub-pregunta que falla no debe tumbar las demás
+        }
+      }));
+
+      if (allEvidence.length > 0) {
+        const evidenceSummary = formatDeepEvidenceForHaiku(allEvidence, userMessage, repo);
+        const evidencePlain = allEvidence.map(e => `${e.path}:${e.line}\n${e.fragment}`).join('\n\n---\n\n');
+
+        // Enrutamiento Groq vs Haiku: 1 fragmento autocontenido + intención de
+        // EXPLICACIÓN (no generación de código) → Groq interpreta directo, sin Haiku.
+        // 2+ fragmentos (requieren cruzarse) o intención de GENERAR código → sigue a Haiku.
+        if (allEvidence.length === 1 && classifyIntent(userMessage) === 'explain') {
+          send('action', { text: '⚡ 1 fragmento autocontenido — Groq interpreta directo (sin Haiku)' });
+          try {
+            const groqSynthesis = await callGroqAgent(
+              `Pregunta: "${userMessage}"\n\nEvidencia confirmada (DEEP mode):\n${evidencePlain}`,
+              GROQ_SINGLE_FRAGMENT_SYSTEM,
+              512,
+            );
+            send('chat_message', { text: groqSynthesis });
+            const _evPaths = allEvidence.map(e => e.path).join('\n');
+            const _assistantWithPaths =
+              groqSynthesis + `\n\n<evidence_files>\n${_evPaths}\n</evidence_files>`;
+            messages.push({ role: 'assistant', content: [{ type: 'text', text: _assistantWithPaths }] });
+            await saveChatHistory(sessionId, messages);
+            send('confidence', {
+              level: 'medium',
+              reason: 'CHAT — Groq interpretó 1 fragmento autocontenido de evidencia DEEP',
+              suggestedAction: 'none',
+            });
+            return;
+          } catch {
+            send('action', { text: '⚠️ Groq synthesis falló — escalando a Haiku' });
+            // cae al flujo normal (inyecta evidencia y sigue a Haiku)
+          }
+        }
+
+        const deepCtx =
+          `\n\nEVIDENCIA VERIFICADA (DEEP mode — plan de búsqueda con ${searchQueries.length} sub-pregunta(s) ` +
+          `ejecutadas en paralelo, lectura real del código fuente, fragmentos anotados por tipo). ` +
+          `Si esta evidencia responde la pregunta por completo, sintetizá en prosa desde aquí (PASO 0) ` +
+          `sin re-buscar. Si falta algo puntual, podés usar deep_search para completarlo:\n` +
+          evidenceSummary;
+        const lastMsg = messages[messages.length - 1];
+        if (typeof lastMsg?.content === 'string') lastMsg.content += deepCtx;
+        send('action', { text: `✅ Plan ejecutado — ${allEvidence.length} fragmento(s) consolidados de ${searchQueries.length} sub-pregunta(s)` });
+      } else {
+        send('action', { text: `⚠️ Plan de búsqueda sin resultados, Haiku investigará` });
       }
     }
     // All NEEDS_TOOLS cases fall through to the Haiku exploration phase.
