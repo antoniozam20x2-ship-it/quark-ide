@@ -68,6 +68,7 @@ export default function App() {
         {page === 'agent' && (
           <AgentPage
             activeProject={activeProject}
+            onProjectChange={setActiveProject}
             onOpenEditor={(showPreview) => {
               setPage('editor');
               if (showPreview) setTimeout(() => setAgentPreviewPending(true), 100);

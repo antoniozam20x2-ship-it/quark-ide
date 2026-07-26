@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
-import type { Project, BoardBrief } from '../../App';
+import { PROJECTS, type Project, type BoardBrief } from '../../App';
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin).replace(/\/$/, '');
 
@@ -158,12 +158,13 @@ interface Props {
   onShowPreview: (html: string) => void;
   initialPrompt?: string;
   onSendToWarRoom?: (brief: BoardBrief) => void;
+  onProjectChange?: (p: Project) => void;
 }
 
 const LS_REPO_KEY  = 'quark-agent-repo';
 const LS_MODE_KEY  = 'quark-agent-mode';
 
-export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPreview, initialPrompt, onSendToWarRoom }: Props) {
+export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPreview, initialPrompt, onSendToWarRoom, onProjectChange }: Props) {
   const [prompt, setPrompt]               = useState('');
   const [selectedRepo, setSelectedRepo]   = useState(
     () => localStorage.getItem(LS_REPO_KEY) ?? activeProject.repo ?? 'quark-ide',
@@ -2044,7 +2045,12 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           </span>
           <select
             value={selectedRepo}
-            onChange={(e) => setSelectedRepo(e.target.value)}
+            onChange={(e) => {
+              const newRepo = e.target.value;
+              setSelectedRepo(newRepo);
+              const project = PROJECTS.find(p => p.repo === newRepo);
+              if (project) onProjectChange?.(project);
+            }}
             disabled={running}
             style={{
               flex: 1, height: 26, background: '#0a0a16', border: '1px solid #1e1e3f',

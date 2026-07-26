@@ -8,9 +8,10 @@ interface AgentPageProps {
   onPromptConsumed?: () => void;
   activeProject?: Project;
   onSendToWarRoom?: (brief: BoardBrief) => void;
+  onProjectChange?: (p: Project) => void;
 }
 
-export default function AgentPage({ onOpenEditor, initialPrompt, onPromptConsumed, activeProject, onSendToWarRoom }: AgentPageProps) {
+export default function AgentPage({ onOpenEditor, initialPrompt, onPromptConsumed, activeProject, onSendToWarRoom, onProjectChange }: AgentPageProps) {
   useEffect(() => {
     if (initialPrompt) onPromptConsumed?.();
   }, [initialPrompt]);
@@ -23,6 +24,7 @@ export default function AgentPage({ onOpenEditor, initialPrompt, onPromptConsume
         onShowPreview={() => onOpenEditor(true)}
         initialPrompt={initialPrompt}
         onSendToWarRoom={onSendToWarRoom}
+        onProjectChange={onProjectChange}
       />
     </div>
   );
