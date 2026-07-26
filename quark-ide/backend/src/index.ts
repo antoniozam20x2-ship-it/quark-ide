@@ -8,7 +8,7 @@ import chatRouter from './routes/chat.js';
 import warroomRouter from './routes/warroom.js';
 import searchRouter from './routes/search.js';
 import memoryRouter from './routes/memory.js';
-import agentRouter from './routes/agent.js';
+import agentRouter, { invalidateRepoKnowledge } from './routes/agent.js';
 import { getCosts } from './services/costTracker.js';
 import { initDb } from './services/db.js';
 import { seedOnce } from './services/rufloMemory.js';
@@ -162,6 +162,15 @@ app.post('/github/commit-multiple', async (req, res) => {
 
   try {
     const sha = await commitMultipleFiles(files, message, repo, branch);
+    // Use the effective repo (explicit or env fallback) so invalidation runs even
+    // when the caller omits repo and commitMultipleFiles resolves it from env.
+    const effectiveRepo = repo ?? process.env.GITHUB_REPO ?? '';
+    if (effectiveRepo) {
+      const changedPaths = files.map(f => f.path);
+      invalidateRepoKnowledge(effectiveRepo, changedPaths).catch((err) => {
+        console.warn(`[repo_knowledge] invalidation failed after commit (repo=${effectiveRepo}, files=${changedPaths.length}):`, err instanceof Error ? err.message : err);
+      });
+    }
     res.json({ sha, owner: process.env.GITHUB_OWNER ?? '' });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });

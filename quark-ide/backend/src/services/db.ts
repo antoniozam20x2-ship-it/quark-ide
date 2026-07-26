@@ -127,6 +127,19 @@ export async function initDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_memory_namespace ON memory_entries(namespace);
     CREATE INDEX IF NOT EXISTS idx_studio_projects_folder ON studio_projects(folder);
+
+    CREATE TABLE IF NOT EXISTS repo_knowledge (
+      id SERIAL PRIMARY KEY,
+      repo TEXT NOT NULL,
+      concept TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      source_files JSONB NOT NULL DEFAULT '[]',
+      confidence TEXT NOT NULL DEFAULT 'medium',
+      stale BOOLEAN NOT NULL DEFAULT FALSE,
+      verified_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (repo, concept)
+    );
+    CREATE INDEX IF NOT EXISTS idx_repo_knowledge_repo ON repo_knowledge (repo) WHERE NOT stale;
   `);
   console.log('✅ Database schema ready');
 }

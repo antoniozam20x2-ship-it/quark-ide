@@ -1,0 +1,255 @@
+# Prompt para Replit Agent
+
+Copiá y pegá todo el bloque de abajo tal cual en el chat de Replit Agent.
+
+Objetivo: agregar una capa de **memoria persistente indexada por concepto**, que
+sobrevive más allá de una sesión de chat (a diferencia de `loadFastHistory` /
+`agent-context`, que expiran). La idea: si ya investigamos "circuit breaker" en
+este repo hace una semana con alta confianza, la próxima vez que alguien
+pregunte por eso — en cualquier sesión — el sistema reutiliza esa evidencia en
+vez de gastar tokens de búsqueda de nuevo. Se integra directamente en el bloque
+de planificación paralela que ya agregamos (`planSearchSteps` + `Promise.all`
+de sub-búsquedas): antes de buscar cada sub-pregunta, primero chequea si ya hay
+conocimiento guardado; si no, busca como hasta ahora y guarda el resultado para
+la próxima vez.
+
+---
+
+## PROMPT
+
+En `quark-ide/backend/src/routes/agent.ts` (y donde corresponda para la
+inicialización de la base de datos):
+
+### Paso 1 — Tabla nueva
+
+Agregá esta tabla, siguiendo el mismo patrón que ya usa `memory_entries` (buscá
+dónde se inicializan las tablas al arrancar el servidor, probablemente un
+`CREATE TABLE IF NOT EXISTS` cerca de donde se configura `pool` o en un archivo
+de migraciones/schema):
+
+```sql
+CREATE TABLE IF NOT EXISTS repo_knowledge (
+  id SERIAL PRIMARY KEY,
+  repo TEXT NOT NULL,
+  concept TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  source_files JSONB NOT NULL DEFAULT '[]',
+  confidence TEXT NOT NULL DEFAULT 'medium',
+  stale BOOLEAN NOT NULL DEFAULT FALSE,
+  verified_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (repo, concept)
+);
+CREATE INDEX IF NOT EXISTS idx_repo_knowledge_repo ON repo_knowledge (repo) WHERE NOT stale;
+```
+
+### Paso 2 — Funciones de lectura y escritura
+
+Agregá estas funciones cerca de `runDeepSearchPipeline` en `agent.ts`:
+
+```typescript
+/** Normaliza una keyword técnica a un slug de concepto para indexar en repo_knowledge. */
+function conceptSlug(keyword: string): string {
+  return keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+interface RepoKnowledgeRow {
+  concept: string;
+  summary: string;
+  source_files: { path: string; startLine: number; endLine: number }[];
+  confidence: string;
+  verified_at: string;
+}
+
+/**
+ * Busca conocimiento persistente ya verificado para alguna de las keywords
+ * dadas, en este repo. No tiene TTL — solo se excluye si fue marcado stale
+ * por una invalidación (commit a un archivo fuente relacionado).
+ */
+async function loadRepoKnowledge(repo: string, keywords: string[]): Promise<RepoKnowledgeRow | null> {
+  if (keywords.length === 0) return null;
+  const slugs = keywords.map(conceptSlug).filter(Boolean);
+  if (slugs.length === 0) return null;
+  try {
+    const r = await pool.query<RepoKnowledgeRow>(
+      `SELECT concept, summary, source_files, confidence, verified_at
+       FROM repo_knowledge
+       WHERE repo = $1 AND concept = ANY($2) AND NOT stale
+       ORDER BY verified_at DESC LIMIT 1`,
+      [repo, slugs],
+    );
+    return r.rows[0] ?? null;
+  } catch (err) {
+    console.warn('[repo_knowledge] load failed:', err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+/**
+ * Guarda o actualiza conocimiento verificado para un concepto. Se llama después
+ * de una búsqueda exitosa (evidencia no vacía) dentro del pipeline de planificación.
+ * Upsert por (repo, concept) — la investigación más reciente reemplaza a la anterior.
+ */
+async function saveRepoKnowledge(
+  repo: string,
+  primaryKeyword: string,
+  summary: string,
+  sourceFiles: { path: string; startLine: number; endLine: number }[],
+  confidence: string,
+): Promise<void> {
+  const concept = conceptSlug(primaryKeyword);
+  if (!concept) return;
+  try {
+    await pool.query(
+      `INSERT INTO repo_knowledge (repo, concept, summary, source_files, confidence, stale, verified_at)
+       VALUES ($1, $2, $3, $4, $5, FALSE, NOW())
+       ON CONFLICT (repo, concept) DO UPDATE SET
+         summary = EXCLUDED.summary,
+         source_files = EXCLUDED.source_files,
+         confidence = EXCLUDED.confidence,
+         stale = FALSE,
+         verified_at = NOW()`,
+      [repo, concept, summary, JSON.stringify(sourceFiles), confidence],
+    );
+  } catch (err) {
+    console.warn('[repo_knowledge] save failed:', err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * Marca como stale todo el conocimiento guardado cuyo source_files incluya
+ * alguno de los paths modificados por un commit — para que la próxima consulta
+ * lo vuelva a verificar en vez de confiar en evidencia potencialmente vieja.
+ */
+async function invalidateRepoKnowledge(repo: string, changedPaths: string[]): Promise<void> {
+  if (changedPaths.length === 0) return;
+  try {
+    await pool.query(
+      `UPDATE repo_knowledge
+       SET stale = TRUE
+       WHERE repo = $1 AND EXISTS (
+         SELECT 1 FROM jsonb_array_elements(source_files) elem
+         WHERE elem->>'path' = ANY($2)
+       )`,
+      [repo, changedPaths],
+    );
+  } catch (err) {
+    console.warn('[repo_knowledge] invalidate failed:', err instanceof Error ? err.message : err);
+  }
+}
+```
+
+### Paso 3 — Integrar en el loop de sub-búsquedas paralelas
+
+Buscá el bloque que agregamos en el cambio anterior (`Promise.all(searchQueries.map(async (subQuery, idx) => {...}))` dentro del DEEP pre-fetch de `runChatTurn`). Modificalo así:
+
+```typescript
+await Promise.all(searchQueries.map(async (subQuery, idx) => {
+  try {
+    let subKws = await extractKeywordsForSearch(subQuery, repo);
+    if (!subKws || subKws.length === 0) subKws = extractKeywordsFromMessage(subQuery);
+    if (subKws.length === 0) return;
+
+    // ── Chequear conocimiento persistente ANTES de buscar ──────────────────
+    const knowledge = await loadRepoKnowledge(repo, subKws);
+    if (knowledge) {
+      send('action', { text: `📚 [${idx + 1}/${searchQueries.length}] Conocimiento persistente reutilizado — "${knowledge.concept}" (verificado ${new Date(knowledge.verified_at).toLocaleDateString()})` });
+      for (const sf of knowledge.source_files) {
+        const key = `${sf.path}:${sf.startLine}`;
+        if (!seenFragmentKeys.has(key)) {
+          seenFragmentKeys.add(key);
+          allEvidence.push({
+            path: sf.path,
+            line: sf.startLine,
+            endLine: sf.endLine,
+            fragment: knowledge.summary,
+            fragmentType: 'DEFINITION',
+            confidence: knowledge.confidence === 'high' ? 'HIGH' : 'MEDIUM',
+            purpose: `Conocimiento persistente: ${knowledge.concept}`,
+            relatedSymbols: [],
+            hopLevel: 0,
+          });
+        }
+      }
+      return; // no repetir la búsqueda para esta sub-pregunta
+    }
+
+    // ── Sin conocimiento previo — buscar como hasta ahora ──────────────────
+    const allKws = [...subKws, ...reformulateQueryTerms(subKws)];
+    const subPattern = allKws.join('|');
+    if (planSteps.length > 1) {
+      send('action', { text: `🔍 [${idx + 1}/${searchQueries.length}] ${subQuery.slice(0, 60)} — buscando: ${subKws.join(', ')}` });
+    } else {
+      send('action', { text: `🔍 DEEP pre-fetch — keywords: ${subKws.join(', ')}` });
+    }
+
+    const subResult = await searchWithTestFallback(subPattern, repo, send);
+    if (subResult.matches.length === 0) return;
+
+    const subProd = subResult.matches.filter((m) => !isTestMatch(m.path, m.text));
+    const subRanked = subProd.length > 0 ? subProd : subResult.matches;
+    const subEvidence = await runDeepSearchPipeline(subRanked, allKws, repo, send, determineMaxHops(subQuery), false, subQuery);
+
+    for (const ev of subEvidence) {
+      const key = `${ev.path}:${ev.line}`;
+      if (!seenFragmentKeys.has(key)) {
+        seenFragmentKeys.add(key);
+        allEvidence.push(ev);
+      }
+    }
+
+    // ── Guardar conocimiento nuevo para la próxima vez ─────────────────────
+    if (subEvidence.length > 0) {
+      const combinedFragment = subEvidence.map(e => e.fragment).join('\n\n---\n\n');
+      const sourceFiles = subEvidence.map(e => ({ path: e.path, startLine: e.line, endLine: e.endLine }));
+      const avgConfidence = subEvidence.every(e => e.confidence === 'HIGH') ? 'high' : 'medium';
+      saveRepoKnowledge(repo, subKws[0], combinedFragment, sourceFiles, avgConfidence).catch(() => {});
+    }
+  } catch {
+    // No-fatal — una sub-pregunta que falla no debe tumbar las demás
+  }
+}));
+```
+
+### Paso 4 — Invalidar al hacer commit
+
+Buscá el endpoint `router.post('/apply-patch', ...)` en `agent.ts` (aplica un
+patch directo desde CHAT). Justo después de la línea
+`await createOrUpdateFile(filePath, patchedContent, ..., repo);` y antes del
+`res.json({ ok: true, path: filePath })`, agregá:
+
+```typescript
+invalidateRepoKnowledge(repo, [filePath]).catch(() => {});
+```
+
+También buscá el endpoint que maneja `/github/commit-multiple` (probablemente
+en un archivo de rutas separado, tipo `routes/github.ts` — si no lo encontrás
+en `agent.ts`, buscalo en el resto del proyecto backend). Justo después de que
+el commit se confirma exitoso (donde se arma la respuesta con el `sha`),
+agregá una llamada equivalente a `invalidateRepoKnowledge(repo, files.map(f => f.path))`
+con los paths de los archivos que se acaban de commitear. Si esa función vive
+en un archivo distinto a `agent.ts`, vas a necesitar exportar
+`invalidateRepoKnowledge` desde `agent.ts` (o moverla a un módulo compartido
+tipo `services/repoKnowledge.ts`) para poder importarla ahí — usá el patrón
+que ya sigan otros helpers compartidos del proyecto.
+
+---
+
+### Verificación final
+
+1. Corré `tsc --noEmit`.
+2. Confirmá que la tabla se crea sin error al reiniciar el backend (revisá los
+   logs de arranque).
+3. Preguntá algo que dispare una búsqueda nueva (ej. "¿cómo funciona el circuit
+   breaker?") y confirmá en los logs que se guardó en `repo_knowledge` — podés
+   verificarlo con una query directa a la tabla si tenés acceso a la DB, o
+   agregando un log temporal en `saveRepoKnowledge`.
+4. Preguntá lo MISMO otra vez (en una sesión distinta o después de reiniciar
+   el backend, para descartar que sea el caché de sesión) — confirmá que
+   aparece `📚 Conocimiento persistente reutilizado` y que NO se repite la
+   búsqueda por índice de símbolos para ese concepto.
+5. Si es fácil de probar: aplicá un patch a un archivo que forme parte del
+   conocimiento guardado (vía CHAT, `propose_patch` → aprobar) y confirmá que
+   la próxima consulta sobre ese concepto vuelve a buscar en vez de usar el
+   conocimiento (porque quedó `stale`).
+
+Contame el diff final y los resultados de las pruebas 3 y 4.

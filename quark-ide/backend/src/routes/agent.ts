@@ -3709,6 +3709,8 @@ router.post('/apply-patch', async (req, res) => {
       repo,
     );
 
+    invalidateRepoKnowledge(repo, [filePath]).catch(() => {});
+
     res.json({ ok: true, path: filePath });
   } catch (err) {
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -4954,6 +4956,98 @@ async function evaluateSearchConfidence(
   } catch {
     // Fail-safe: prefer an extra hop over cutting information short
     return { sufficient: false, reason: 'fallback — no se pudo evaluar' };
+  }
+}
+
+// ── repo_knowledge — memoria persistente indexada por concepto ────────────────
+
+/** Normaliza una keyword técnica a un slug de concepto para indexar en repo_knowledge. */
+function conceptSlug(keyword: string): string {
+  return keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+interface RepoKnowledgeRow {
+  concept: string;
+  summary: string;
+  source_files: { path: string; startLine: number; endLine: number }[];
+  confidence: string;
+  verified_at: string;
+}
+
+/**
+ * Busca conocimiento persistente ya verificado para alguna de las keywords
+ * dadas, en este repo. No tiene TTL — solo se excluye si fue marcado stale
+ * por una invalidación (commit a un archivo fuente relacionado).
+ */
+async function loadRepoKnowledge(repo: string, keywords: string[]): Promise<RepoKnowledgeRow | null> {
+  if (keywords.length === 0) return null;
+  const slugs = keywords.map(conceptSlug).filter(Boolean);
+  if (slugs.length === 0) return null;
+  try {
+    const r = await pool.query<RepoKnowledgeRow>(
+      `SELECT concept, summary, source_files, confidence, verified_at
+       FROM repo_knowledge
+       WHERE repo = $1 AND concept = ANY($2) AND NOT stale
+       ORDER BY verified_at DESC LIMIT 1`,
+      [repo, slugs],
+    );
+    return r.rows[0] ?? null;
+  } catch (err) {
+    console.warn('[repo_knowledge] load failed:', err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+/**
+ * Guarda o actualiza conocimiento verificado para un concepto. Se llama después
+ * de una búsqueda exitosa (evidencia no vacía) dentro del pipeline de planificación.
+ * Upsert por (repo, concept) — la investigación más reciente reemplaza a la anterior.
+ */
+async function saveRepoKnowledge(
+  repo: string,
+  primaryKeyword: string,
+  summary: string,
+  sourceFiles: { path: string; startLine: number; endLine: number }[],
+  confidence: string,
+): Promise<void> {
+  const concept = conceptSlug(primaryKeyword);
+  if (!concept) return;
+  try {
+    await pool.query(
+      `INSERT INTO repo_knowledge (repo, concept, summary, source_files, confidence, stale, verified_at)
+       VALUES ($1, $2, $3, $4, $5, FALSE, NOW())
+       ON CONFLICT (repo, concept) DO UPDATE SET
+         summary = EXCLUDED.summary,
+         source_files = EXCLUDED.source_files,
+         confidence = EXCLUDED.confidence,
+         stale = FALSE,
+         verified_at = NOW()`,
+      [repo, concept, summary, JSON.stringify(sourceFiles), confidence],
+    );
+  } catch (err) {
+    console.warn('[repo_knowledge] save failed:', err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * Marca como stale todo el conocimiento guardado cuyo source_files incluya
+ * alguno de los paths modificados por un commit — para que la próxima consulta
+ * lo vuelva a verificar en vez de confiar en evidencia potencialmente vieja.
+ */
+export async function invalidateRepoKnowledge(repo: string, changedPaths: string[]): Promise<void> {
+  if (changedPaths.length === 0) return;
+  try {
+    await pool.query(
+      `UPDATE repo_knowledge
+       SET stale = TRUE
+       WHERE repo = $1 AND EXISTS (
+         SELECT 1 FROM jsonb_array_elements(source_files) elem
+         WHERE elem->>'path' = ANY($2)
+       )`,
+      [repo, changedPaths],
+    );
+  } catch (err) {
+    console.warn('[repo_knowledge] invalidate failed:', err instanceof Error ? err.message : err);
   }
 }
 
@@ -6296,6 +6390,31 @@ async function runChatTurn(
           if (!subKws || subKws.length === 0) subKws = extractKeywordsFromMessage(subQuery);
           if (subKws.length === 0) return;
 
+          // ── Chequear conocimiento persistente ANTES de buscar ──────────────────
+          const knowledge = await loadRepoKnowledge(repo, subKws);
+          if (knowledge) {
+            send('action', { text: `📚 [${idx + 1}/${searchQueries.length}] Conocimiento persistente reutilizado — "${knowledge.concept}" (verificado ${new Date(knowledge.verified_at).toLocaleDateString()})` });
+            for (const sf of knowledge.source_files) {
+              const key = `${sf.path}:${sf.startLine}`;
+              if (!seenFragmentKeys.has(key)) {
+                seenFragmentKeys.add(key);
+                allEvidence.push({
+                  path: sf.path,
+                  line: sf.startLine,
+                  endLine: sf.endLine,
+                  fragment: knowledge.summary,
+                  fragmentType: 'DEFINITION',
+                  confidence: knowledge.confidence === 'high' ? 'HIGH' : 'MEDIUM',
+                  purpose: `Conocimiento persistente: ${knowledge.concept}`,
+                  relatedSymbols: [],
+                  hopLevel: 0,
+                });
+              }
+            }
+            return; // no repetir la búsqueda para esta sub-pregunta
+          }
+
+          // ── Sin conocimiento previo — buscar como hasta ahora ──────────────────
           const allKws = [...subKws, ...reformulateQueryTerms(subKws)];
           const subPattern = allKws.join('|');
           if (planSteps.length > 1) {
@@ -6317,6 +6436,14 @@ async function runChatTurn(
               seenFragmentKeys.add(key);
               allEvidence.push(ev);
             }
+          }
+
+          // ── Guardar conocimiento nuevo para la próxima vez ─────────────────────
+          if (subEvidence.length > 0) {
+            const combinedFragment = subEvidence.map(e => e.fragment).join('\n\n---\n\n');
+            const sourceFiles = subEvidence.map(e => ({ path: e.path, startLine: e.line, endLine: e.endLine }));
+            const avgConfidence = subEvidence.every(e => e.confidence === 'HIGH') ? 'high' : 'medium';
+            saveRepoKnowledge(repo, subKws[0], combinedFragment, sourceFiles, avgConfidence).catch(() => {});
           }
         } catch {
           // No-fatal — una sub-pregunta que falla no debe tumbar las demás
