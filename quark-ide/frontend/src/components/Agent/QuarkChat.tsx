@@ -66,6 +66,7 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
   const [sessionId, setSessionId] = useState(() => getOrCreateSessionId(repo));
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Auto-resize del textarea al escribir
   const adjustTextareaHeight = () => {
@@ -172,10 +173,13 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
     setStreaming(true);
 
     try {
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
       const res = await fetch(`${API_BASE}/api/agent/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userMsg, repo, sessionId, forceGroq: useForceGroq }),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -222,10 +226,19 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
         }
       }
     } catch (err) {
-      setMessages(m => [...m, { role: 'action', text: `❌ Error de conexión: ${err instanceof Error ? err.message : String(err)}` }]);
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setMessages(m => [...m, { role: 'action', text: '⏸️ Mensaje cancelado' }]);
+      } else {
+        setMessages(m => [...m, { role: 'action', text: `❌ Error de conexión: ${err instanceof Error ? err.message : String(err)}` }]);
+      }
     } finally {
       setStreaming(false);
+      abortControllerRef.current = null;
     }
+  }
+
+  function cancelSend() {
+    abortControllerRef.current?.abort();
   }
 
   async function approvePatch() {
@@ -389,12 +402,6 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
             ref={textareaRef}
             value={input}
             onChange={e => { setInput(e.target.value); adjustTextareaHeight(); }}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-              }
-            }}
             placeholder="Escribe un mensaje..."
             disabled={streaming}
             rows={1}
@@ -414,7 +421,24 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
               fontFamily: 'inherit',
             }}
           />
-          <button onClick={sendMessage} disabled={streaming} style={{ background: '#7c3aed', color: 'white', border: 'none', borderRadius: '8px', padding: '0 18px', fontSize: '15px', height: '40px', flexShrink: 0 }}>➤</button>
+          {streaming ? (
+            <button
+              onClick={cancelSend}
+              title="Cancelar envío"
+              style={{ background: '#dc2626', color: 'white', border: 'none', borderRadius: '8px', padding: '0 18px', fontSize: '15px', height: '40px', flexShrink: 0, cursor: 'pointer' }}
+            >
+              ⏸️
+            </button>
+          ) : (
+            <button
+              onClick={sendMessage}
+              disabled={!input.trim()}
+              title="Enviar mensaje"
+              style={{ background: '#7c3aed', color: 'white', border: 'none', borderRadius: '8px', padding: '0 18px', fontSize: '15px', height: '40px', flexShrink: 0, cursor: input.trim() ? 'pointer' : 'not-allowed', opacity: input.trim() ? 1 : 0.5 }}
+            >
+              ➤
+            </button>
+          )}
         </div>
       </div>
     </div>
