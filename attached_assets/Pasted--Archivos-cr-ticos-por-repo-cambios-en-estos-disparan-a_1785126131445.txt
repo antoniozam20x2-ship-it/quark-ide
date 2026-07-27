@@ -1,0 +1,112 @@
+/**
+ * Archivos críticos por repo — cambios en estos disparan auto-resumen de changelog
+ * para guardar en repo_knowledge con concept='SYSTEM_CHANGELOG'.
+ * Extensible por repo — agregar más rutas según necesidad.
+ */
+const CRITICAL_FILES_BY_REPO: Record<string, string[]> = {
+  'Ahorar': [
+    'artifacts/api-server/src/lib/autonomousAgent.ts',
+    'artifacts/api-server/src/lib/botEngine.ts',
+    'artifacts/api-server/src/lib/signal-indicators.ts',
+    'src/lib/tradingLogic.ts',
+  ],
+  // Agregar más repos conforme sea necesario
+};
+
+/**
+ * Detecta cambios en archivos críticos desde el último commit y genera un resumen
+ * de changelog estructurado. Se llama cada vez que Quark detect un nuevo deploy/push.
+ * Costo: un diff local (git) + una llamada a Groq si hay cambios (síntesis).
+ */
+async function generateChangelogSummary(repo: string): Promise<void> {
+  const criticalFiles = CRITICAL_FILES_BY_REPO[repo];
+  if (!criticalFiles || criticalFiles.length === 0) {
+    console.log(`[changelog] repo "${repo}" no tiene archivos críticos configurados`);
+    return;
+  }
+
+  try {
+    // Obtener diff del último commit contra los archivos críticos
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
+
+    let combinedDiff = '';
+    for (const filePath of criticalFiles) {
+      try {
+        const { stdout } = await execAsync(
+          `git diff HEAD~1 HEAD -- "${filePath}" | head -100`,
+          { cwd: process.env.REPO_PATH || '.', maxBuffer: 1024 * 1024 },
+        );
+        if (stdout.trim().length > 0) {
+          combinedDiff += `\n=== ${filePath} ===\n${stdout}`;
+        }
+      } catch {
+        // Archivo no cambió o no existe
+      }
+    }
+
+    if (!combinedDiff.trim()) {
+      console.log(`[changelog] no hay cambios en archivos críticos para "${repo}"`);
+      return;
+    }
+
+    // Obtener commit message del último push
+    let commitMessage = '';
+    try {
+      const { stdout } = await execAsync('git log -1 --pretty=%B', {
+        cwd: process.env.REPO_PATH || '.',
+      });
+      commitMessage = stdout.trim();
+    } catch {
+      commitMessage = '(commit message no disponible)';
+    }
+
+    // Generar resumen con Groq (síntesis rápida, no full análisis)
+    const changelogPrompt = `
+Dado el diff de cambios recientes y el commit message, genera un resumen MUY CONCISO (máx 2-3 líneas cortas) de:
+1. Qué función(es) cambiaron
+2. Cambio de comportamiento (de X a Y) si es evidente
+3. Motivo si el commit message lo explica
+
+DIFF:
+\`\`\`
+${combinedDiff.substring(0, 2000)}
+\`\`\`
+
+COMMIT MESSAGE:
+${commitMessage}
+
+Responde SOLO con el resumen (sin preamble), en formato: "archivo.ts: cambio (motivo)".
+`;
+
+    const summary = await callGroqAgent(
+      changelogPrompt,
+      'Eres un asistente que resume cambios de código de forma muy concisa y técnica.',
+      200,
+      [],
+    );
+
+    if (summary && summary.trim().length > 0) {
+      await saveRepoKnowledge(
+        repo,
+        'SYSTEM_CHANGELOG',
+        summary,
+        criticalFiles
+          .filter(f => combinedDiff.includes(f))
+          .map((f, i) => ({
+            path: f,
+            startLine: 0,
+            endLine: 0,
+          })),
+        0.95, // alta confianza — es un resumen de cambios reales
+      );
+      console.log(`[changelog] "${repo}" — resumen guardado en repo_knowledge`);
+    }
+  } catch (err) {
+    console.warn(
+      `[changelog] generación falló para "${repo}":`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}

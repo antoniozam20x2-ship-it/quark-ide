@@ -14,6 +14,105 @@ import { createHash } from 'crypto';
 import { createPatch } from 'diff';
 import ts from 'typescript';
 
+// ── Archivos críticos por repo — changelog automático ────────────────────────
+/**
+ * Archivos críticos por repo — cambios en estos disparan auto-resumen de changelog
+ * para guardar en repo_knowledge con concept='SYSTEM_CHANGELOG'.
+ * Extensible por repo — agregar más rutas según necesidad.
+ */
+const CRITICAL_FILES_BY_REPO: Record<string, string[]> = {
+  'Ahorar': [
+    'artifacts/api-server/src/lib/autonomousAgent.ts',
+    'artifacts/api-server/src/lib/botEngine.ts',
+    'artifacts/api-server/src/lib/signal-indicators.ts',
+    'src/lib/tradingLogic.ts',
+  ],
+  // Agregar más repos conforme sea necesario
+};
+
+/**
+ * Detecta cambios en archivos críticos desde el último commit y genera un resumen
+ * de changelog estructurado. Se llama cada vez que Quark detecta un nuevo deploy/push.
+ * Costo: un diff local (git) + una llamada a Groq si hay cambios (síntesis).
+ */
+export async function generateChangelogSummary(repo: string): Promise<void> {
+  const criticalFiles = CRITICAL_FILES_BY_REPO[repo];
+  if (!criticalFiles || criticalFiles.length === 0) {
+    console.log(`[changelog] repo "${repo}" no tiene archivos críticos configurados`);
+    return;
+  }
+
+  try {
+    let combinedDiff = '';
+    for (const filePath of criticalFiles) {
+      try {
+        const stdout = execSync(
+          `git diff HEAD~1 HEAD -- "${filePath}" | head -100`,
+          { cwd: process.env.REPO_PATH || '.', encoding: 'utf8' },
+        );
+        if (stdout.trim().length > 0) {
+          combinedDiff += `\n=== ${filePath} ===\n${stdout}`;
+        }
+      } catch {
+        // Archivo no cambió o no existe en ese commit
+      }
+    }
+
+    if (!combinedDiff.trim()) {
+      console.log(`[changelog] no hay cambios en archivos críticos para "${repo}"`);
+      return;
+    }
+
+    let commitMessage = '(commit message no disponible)';
+    try {
+      commitMessage = execSync('git log -1 --pretty=%B', {
+        cwd: process.env.REPO_PATH || '.',
+        encoding: 'utf8',
+      }).trim();
+    } catch { /* ignore */ }
+
+    const changelogPrompt = `Dado el diff de cambios recientes y el commit message, genera un resumen MUY CONCISO (máx 2-3 líneas cortas) de:
+1. Qué función(es) cambiaron
+2. Cambio de comportamiento (de X a Y) si es evidente
+3. Motivo si el commit message lo explica
+
+DIFF:
+\`\`\`
+${combinedDiff.substring(0, 2000)}
+\`\`\`
+
+COMMIT MESSAGE:
+${commitMessage}
+
+Responde SOLO con el resumen (sin preamble), en formato: "archivo.ts: cambio (motivo)".`;
+
+    const summary = await callGroqAgent(
+      changelogPrompt,
+      'Eres un asistente que resume cambios de código de forma muy concisa y técnica.',
+      200,
+      [],
+    );
+
+    if (summary && summary.trim().length > 0) {
+      await saveRepoKnowledge(
+        repo,
+        'SYSTEM_CHANGELOG',
+        summary,
+        criticalFiles
+          .filter(f => combinedDiff.includes(f))
+          .map(f => ({ path: f, startLine: 0, endLine: 0 })),
+        'high',
+      );
+      console.log(`[changelog] "${repo}" — resumen guardado en repo_knowledge`);
+    }
+  } catch (err) {
+    console.warn(
+      `[changelog] generación falló para "${repo}":`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
 // ── Entorno de ejecución ──────────────────────────────────────────────────────
 const QUARK_ENV: 'railway' | 'replit' | 'local' =
   process.env.RAILWAY_ENVIRONMENT            ? 'railway'
@@ -3656,9 +3755,29 @@ function compressOldToolResults(messages: any[]): any[] {
   return result;
 }
 
-function buildTriagePrompt(cacheHint: string): string {
+async function buildTriagePrompt(cacheHint: string, repo?: string): Promise<string> {
+  let changelogContext = '';
+
+  if (repo) {
+    try {
+      const changelog = await loadRepoKnowledge(repo, ['SYSTEM_CHANGELOG']);
+      if (changelog?.summary) {
+        const verifiedDate = changelog.verified_at ? new Date(changelog.verified_at) : new Date();
+        const daysSince = Math.floor((Date.now() - verifiedDate.getTime()) / (1000 * 60 * 60 * 24));
+        if (daysSince <= 7) {
+          changelogContext = `\nCAMBIOS RECIENTES EN EL REPO (últimos ${daysSince} días):
+${changelog.summary}
+
+Si la pregunta está relacionada con código que cambió recientemente, prioriza buscar en el código nuevo. El usuario probablemente quiere saber cómo funciona AHORA, después de los cambios.\n`;
+        }
+      }
+    } catch (err) {
+      console.warn('[changelog] load en buildTriagePrompt falló:', err instanceof Error ? err.message : err);
+    }
+  }
+
   return `Responde de forma breve y directa, usando SOLO tu conocimiento general — no tienes acceso a herramientas ni al código real del repo.
-${cacheHint}
+${changelogContext}${cacheHint}
 PRIMERA PRIORIDAD — MENSAJES SOCIALES Y CONVERSACIONALES: si el mensaje es un saludo (Hola, Buenas, Hey…), agradecimiento (Gracias, Perfecto, Genial…), confirmación vacía (Ok, Entendido, Dale, Sí, No…), pregunta de cortesía (¿Cómo estás?…) o cualquier otro mensaje sin pregunta técnica real — respondé de forma conversacional, breve y natural. NUNCA retornés "NEEDS_TOOLS" para mensajes puramente sociales. Esta regla tiene prioridad ABSOLUTA sobre todas las demás reglas de este prompt, incluyendo las de trading y dominio.
 SOBRE EL CONTEXTO ADICIONAL: si aparece una sección "RESUMEN" o "CONTEXTO ADICIONAL" arriba, ese contenido proviene de una inspección real del código fuente de este mismo repo, hecha por este sistema hace menos de 30 minutos — no es una suposición ni una fuente externa incierta. Tratá esos datos como hechos verificados: usá los nombres exactos que aparecen ahí, no los parafrasees, y no agregues disclaimers como "probablemente", "podría ser" o "esto puede variar" sobre información que ya está confirmada.
 REGLA OBLIGATORIA — TÉRMINOS DE TRADING Y DOMINIO:
@@ -6337,7 +6456,7 @@ async function runChatTurn(
       // complementary context on top of the real turn history.
       groqAnswer = await callGroqAgent(
         userMessage,
-        buildTriagePrompt(cacheHint),
+        await buildTriagePrompt(cacheHint, repo),
         fastFinding ? 768 : 512,
         groqHistory,
       );

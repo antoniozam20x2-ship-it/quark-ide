@@ -8,7 +8,7 @@ import chatRouter from './routes/chat.js';
 import warroomRouter from './routes/warroom.js';
 import searchRouter from './routes/search.js';
 import memoryRouter from './routes/memory.js';
-import agentRouter, { invalidateRepoKnowledge } from './routes/agent.js';
+import agentRouter, { invalidateRepoKnowledge, generateChangelogSummary } from './routes/agent.js';
 import { getCosts } from './services/costTracker.js';
 import { initDb } from './services/db.js';
 import { seedOnce } from './services/rufloMemory.js';
@@ -193,6 +193,14 @@ app.post('/debugger/run', async (req, res) => {
 if (process.env.DATABASE_URL) {
   initDb()
     .then(() => seedOnce())
+    .then(() => {
+      // Generar resumen de changelog para repos configurados, en paralelo y sin bloquear el arranque
+      ['Ahorar'].forEach((repo) => {
+        generateChangelogSummary(repo).catch((err) =>
+          console.warn(`[changelog] init falló para ${repo}:`, err instanceof Error ? err.message : err),
+        );
+      });
+    })
     .catch((err) => console.error('⚠ DB init failed:', err));
 }
 
