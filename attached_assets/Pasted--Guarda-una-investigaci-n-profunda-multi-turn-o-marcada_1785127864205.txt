@@ -1,0 +1,62 @@
+/**
+ * Guarda una investigación profunda (multi-turn o marcada explícitamente con /save)
+ * en repo_knowledge bajo el concepto INVESTIGATION_* para reutilización futura.
+ * El resumen incluye qué se investigó, qué se encontró, y referencias a archivos tocados.
+ */
+async function saveInvestigationMemory(
+  repo: string,
+  sessionMessages: Message[],
+  investigationState: InvestigationState,
+): Promise<void> {
+  if (!investigationState.shouldSave || sessionMessages.length < 2) {
+    console.log(`[investigation] sesión no califica para guardarse (shouldSave=${investigationState.shouldSave}, turnCount=${investigationState.turnCount})`);
+    return;
+  }
+
+  try {
+    // Construir resumen de la investigación desde el historial del chat
+    const topicList = Array.from(investigationState.topicTerms).join(', ');
+    const date = new Date().toISOString().split('T')[0];
+
+    // Extraer los últimos fragmentos de código y hallazgos del chat
+    const codeSnippets: string[] = [];
+    const findings: string[] = [];
+
+    for (const msg of sessionMessages) {
+      if (msg.role === 'assistant' && msg.content[0]?.type === 'text') {
+        const text = msg.content[0].text;
+        // Buscar frases clave que indiquen hallazgo
+        if (text.includes('encontré') || text.includes('cambió') || text.includes('problema')) {
+          findings.push(text.substring(0, 200)); // primeros 200 chars
+        }
+      }
+    }
+
+    const investigationSummary = `
+Investigación del ${date}: ${topicList}
+Turnos: ${investigationState.turnCount}
+
+Hallazgos clave:
+${findings.slice(0, 3).map((f, i) => `${i + 1}. ${f}...`).join('\n')}
+
+Conceptos relacionados: ${topicList}
+Sesión: ${sessionMessages.length} mensajes, ${investigationState.turnCount} preguntas
+`.trim();
+
+    const conceptSlug = `INVESTIGATION_${investigationState.topicTerms.values().next().value || 'unknown'}`;
+
+    await saveRepoKnowledge(
+      repo,
+      conceptSlug,
+      investigationSummary,
+      [], // source_files vacío — es un resumen conversacional, no código específico
+      0.85, // confianza media-alta (es lo que conversamos, no código ejecutado)
+    );
+
+    console.log(
+      `[investigation] guardada en repo_knowledge bajo "${conceptSlug}" — ${investigationState.turnCount} turnos investigados`,
+    );
+  } catch (err) {
+    console.warn('[investigation] guardar falló:', err instanceof Error ? err.message : err);
+  }
+}

@@ -113,6 +113,26 @@ Responde SOLO con el resumen (sin preamble), en formato: "archivo.ts: cambio (mo
   }
 }
 
+// ── Estado de investigación por sesión ───────────────────────────────────────
+/**
+ * Estado de investigación en la sesión actual — detecta multi-turn sobre el
+ * mismo concepto para guardar automáticamente como INVESTIGATION_* cuando sea
+ * investigación profunda, no búsqueda trivial.
+ */
+interface InvestigationState {
+  topicTerms: Set<string>; // keywords principales (ej. "trailing", "trailingstop")
+  turnCount: number;       // cuántas preguntas en la sesión
+  turnHistory: Array<{ term: string; timestamp: number }>; // historial de términos
+  shouldSave: boolean;     // marcado manualmente con /save o auto-detectado
+}
+
+let sessionInvestigationState: InvestigationState = {
+  topicTerms: new Set(),
+  turnCount: 0,
+  turnHistory: [],
+  shouldSave: false,
+};
+
 // ── Entorno de ejecución ──────────────────────────────────────────────────────
 const QUARK_ENV: 'railway' | 'replit' | 'local' =
   process.env.RAILWAY_ENVIRONMENT            ? 'railway'
@@ -3774,6 +3794,25 @@ Si la pregunta está relacionada con código que cambió recientemente, prioriza
     } catch (err) {
       console.warn('[changelog] load en buildTriagePrompt falló:', err instanceof Error ? err.message : err);
     }
+
+    // Cargar investigaciones previas sobre el mismo repo (últimos 30 días)
+    try {
+      const relevantInvestigations = await pool.query<{ summary: string }>(
+        `SELECT summary FROM repo_knowledge
+         WHERE repo = $1 AND concept LIKE 'INVESTIGATION_%'
+         AND NOT stale AND verified_at > NOW() - INTERVAL '30 days'
+         ORDER BY verified_at DESC LIMIT 2`,
+        [repo],
+      );
+      if (relevantInvestigations.rows.length > 0) {
+        changelogContext += `\n\nINVESTIGACIONES PREVIAS (últimos 30 días):\n`;
+        relevantInvestigations.rows.forEach((row, i) => {
+          changelogContext += `${i + 1}. ${row.summary.substring(0, 150)}...\n`;
+        });
+      }
+    } catch (invErr) {
+      console.warn('[investigations] load en buildTriagePrompt falló:', invErr instanceof Error ? invErr.message : invErr);
+    }
   }
 
   return `Responde de forma breve y directa, usando SOLO tu conocimiento general — no tienes acceso a herramientas ni al código real del repo.
@@ -5237,6 +5276,65 @@ export async function invalidateRepoKnowledge(repo: string, changedPaths: string
   }
 }
 
+/**
+ * Guarda una investigación profunda (multi-turn o marcada explícitamente con /save)
+ * en repo_knowledge bajo el concepto INVESTIGATION_* para reutilización futura.
+ */
+async function saveInvestigationMemory(
+  repo: string,
+  sessionMessages: any[],
+  investigationState: InvestigationState,
+): Promise<void> {
+  if (!investigationState.shouldSave || sessionMessages.length < 2) {
+    console.log(`[investigation] sesión no califica para guardarse (shouldSave=${investigationState.shouldSave}, turnCount=${investigationState.turnCount})`);
+    return;
+  }
+
+  try {
+    const topicList = Array.from(investigationState.topicTerms).join(', ');
+    const date = new Date().toISOString().split('T')[0];
+
+    const findings: string[] = [];
+    for (const msg of sessionMessages) {
+      if (msg.role === 'assistant') {
+        const text = typeof msg.content === 'string'
+          ? msg.content
+          : Array.isArray(msg.content)
+            ? msg.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('')
+            : String(msg.content ?? '');
+        if (text.includes('encontré') || text.includes('cambió') || text.includes('problema')) {
+          findings.push(text.substring(0, 200));
+        }
+      }
+    }
+
+    const investigationSummary = `Investigación del ${date}: ${topicList}
+Turnos: ${investigationState.turnCount}
+
+Hallazgos clave:
+${findings.slice(0, 3).map((f, i) => `${i + 1}. ${f}...`).join('\n')}
+
+Conceptos relacionados: ${topicList}
+Sesión: ${sessionMessages.length} mensajes, ${investigationState.turnCount} preguntas`.trim();
+
+    const investigationConcept = `INVESTIGATION_${investigationState.topicTerms.values().next().value ?? 'unknown'}`;
+
+    await saveRepoKnowledge(
+      repo,
+      investigationConcept,
+      investigationSummary,
+      [],
+      'medium',
+    );
+
+    console.log(
+      `[investigation] guardada en repo_knowledge bajo "${investigationConcept}" — ${investigationState.turnCount} turnos investigados`,
+    );
+  } catch (err) {
+    console.warn('[investigation] guardar falló:', err instanceof Error ? err.message : err);
+  }
+}
+
 // ── runDeepSearchPipeline ─────────────────────────────────────────────────────
 // Shared between the DEEP route handler and the deep_search tool exposed to Haiku.
 // Accepts pre-ranked GrepMatch results and a list of query terms (already expanded
@@ -6324,6 +6422,39 @@ async function runChatTurn(
 ): Promise<void> {
   const history = await loadChatHistory(sessionId);
 
+  // ── Detección de investigación profunda (multi-turn sobre el mismo concepto) ──
+  // Si el usuario escribe /save, marca para guardarse explícitamente.
+  if (userMessage.toLowerCase().includes('/save')) {
+    sessionInvestigationState.shouldSave = true;
+    userMessage = userMessage.replace(/\/save\s*/gi, '').trim();
+    // si solo escribió /save, terminar aquí (no hay mensaje real que procesar)
+    if (!userMessage) return;
+  }
+
+  // Extraer términos principales del mensaje para agrupar investigaciones
+  const _invTerms = extractKeywordsFromMessage(userMessage)
+    .filter(t => t.length >= 4)
+    .map(t => t.toLowerCase());
+
+  sessionInvestigationState.turnCount++;
+  sessionInvestigationState.turnHistory.push({
+    term: _invTerms[0] ?? 'general',
+    timestamp: Date.now(),
+  });
+  _invTerms.forEach(t => sessionInvestigationState.topicTerms.add(t));
+
+  // Auto-detectar investigación multi-turn: 3+ preguntas sobre ≤3 temas distintos
+  if (
+    sessionInvestigationState.turnCount >= 3 &&
+    sessionInvestigationState.topicTerms.size <= 3 &&
+    !sessionInvestigationState.shouldSave
+  ) {
+    sessionInvestigationState.shouldSave = true;
+    console.log(
+      `[investigation] multi-turn detectado — ${sessionInvestigationState.turnCount} preguntas sobre ${Array.from(sessionInvestigationState.topicTerms).join(', ')}`,
+    );
+  }
+
   // Routing decision — three cases in priority order:
   //
   // 1. forceGroq=true (user pressed "Modo rápido"): force Groq unconditionally.
@@ -6953,6 +7084,27 @@ RESTRICCIÓN: NO uses grep_code, list_files ni read_file — el contexto ya est�
 // pueda rehidratar el componente de CHAT al volver a la pestaña.
 // Solo se retornan turnos user/assistant — los mensajes de action son eventos
 // de UI efímeros y no se almacenan en el backend.
+router.post('/chat/close', async (req, res) => {
+  const { sessionId, repo: bodyRepo } = req.body as { sessionId?: string; repo?: string };
+  const repo = bodyRepo ?? process.env.GITHUB_REPO ?? '';
+  if (!sessionId) { res.status(400).json({ error: 'sessionId required' }); return; }
+  try {
+    const messages = await loadChatHistory(sessionId);
+    await saveInvestigationMemory(repo, messages, sessionInvestigationState);
+    // Resetear state para el siguiente chat
+    sessionInvestigationState = {
+      topicTerms: new Set(),
+      turnCount: 0,
+      turnHistory: [],
+      shouldSave: false,
+    };
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[chat/close] error:', err);
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 router.get('/chat/history/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
   if (!sessionId) { res.status(400).json({ error: 'sessionId required' }); return; }
