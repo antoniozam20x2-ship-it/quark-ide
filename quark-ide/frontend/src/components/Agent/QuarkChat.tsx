@@ -265,7 +265,7 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
           <ProjectSwitcher activeProject={activeProject} onSwitch={onProjectChange} />
         </div>
         <div style={{ padding: '0 16px', color: '#a78bfa', fontWeight: 600, fontSize: 13, flexShrink: 0 }}>
-          💬 QUARK CHAT
+          💬 BROUS
         </div>
         {/* Botón reiniciar conversación */}
         <button
