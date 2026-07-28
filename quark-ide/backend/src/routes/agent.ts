@@ -6933,7 +6933,18 @@ async function runChatTurn(
       12,                          // maxSteps
       false,                       // allowPatch: ALWAYS false — Haiku never proposes patches
     );
-    if (haikuResult.resolved) {
+    // BUG FIX (handoff a Sonnet nunca se disparaba en intent='generate'):
+    // haikuResult.resolved se vuelve true cada vez que Haiku responde con texto
+    // libre sin llamar ninguna tool — y como Haiku NUNCA tiene propose_patch
+    // disponible, para preguntas de generación su única salida posible es texto
+    // libre. Eso disparaba resolved=true SIEMPRE en intent='generate', cortando
+    // el return acá antes de llegar al chequeo de intent más abajo, y Sonnet
+    // nunca se invocaba — Haiku terminaba escribiendo el código él mismo en
+    // prosa, violando la restricción de HAIKU_SEARCH_SYSTEM.
+    // Fix: el atajo de "ya resuelto, no hace falta Sonnet" solo es válido para
+    // intent === 'explain'. Para 'generate', SIEMPRE seguimos hacia Sonnet,
+    // sin importar si Haiku ya escribió una respuesta en texto.
+    if (haikuResult.resolved && intent === 'explain') {
       await saveChatHistory(sessionId, haikuResult.messages);
       // Override any stale LOW-CONFIDENCE label from a preceding DEEP/FAST call.
       // Haiku resolved the question with live code reads — the result is real.
