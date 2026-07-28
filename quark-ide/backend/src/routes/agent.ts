@@ -5176,9 +5176,24 @@ async function loadRepoKnowledge(repo: string, keywords: string[]): Promise<Repo
 async function loadRepoKnowledgeVerified(
   repo: string,
   keywords: string[],
+  originalQuery?: string,
 ): Promise<RepoKnowledgeRow | null> {
   const raw = await loadRepoKnowledge(repo, keywords);
   if (!raw) return null;
+
+  // Grounding: el conocimiento cacheado solo es válido si al menos un término
+  // real de la pregunta actual (no la keyword extraída, que puede haber
+  // generalizado por parecido semántico, ej. "stop loss" → "trailingStop")
+  // aparece literalmente en el resumen guardado.
+  if (originalQuery) {
+    const groundingTerms = localKeywordFallback(originalQuery, 6);
+    const isGroundedInSummary = groundingTerms.length === 0
+      || groundingTerms.some(t => raw.summary.toLowerCase().includes(t.toLowerCase()));
+    if (!isGroundedInSummary) {
+      console.warn(`[repo_knowledge] "${raw.concept}" — no grounded contra la pregunta original ("${originalQuery.slice(0, 60)}"), descartando caché`);
+      return null;
+    }
+  }
 
   if (!isFragmentInsufficient(raw.summary, keywords)) {
     return raw; // caché de buena calidad — servir directo
@@ -6631,7 +6646,14 @@ async function runChatTurn(
         // contexto disponible y dejamos que decida. Esto cubre naturalmente cualquier
         // forma de pregunta de seguimiento, sin depender de reglas fijas de matching.
         let chatCachedHandled = false;
-        if (chatFastLastAss?.fragment) {
+        const chatCachedGroundingTerms = localKeywordFallback(userMessage, 6);
+        const chatCachedFragmentGrounded = chatCachedGroundingTerms.length === 0
+          ? true // sin términos técnicos extraíbles — dejar que Groq decida como antes
+          : chatCachedGroundingTerms.some(t => (chatFastLastAss?.fragment ?? '').toLowerCase().includes(t.toLowerCase()));
+        if (chatFastLastAss?.fragment && !chatCachedFragmentGrounded) {
+          console.log(`[chat-fast-cached-context] fragmento cacheado no grounded contra "${userMessage.slice(0, 60)}" — saltando a búsqueda nueva`);
+        }
+        if (chatFastLastAss?.fragment && chatCachedFragmentGrounded) {
           try {
             const chatCachedAttempt = await callGroqAgent(
               `Pregunta actual: "${userMessage}"\n\nFragmento de código disponible (leído en el turno anterior, ${chatFastLastUser?.path ?? 'archivo desconocido'}):\n${chatFastLastAss.fragment}`,
@@ -6639,7 +6661,8 @@ async function runChatTurn(
               512,
             );
 
-            if (!chatCachedAttempt.trim().startsWith('NEEDS_SEARCH:')) {
+            const needsSearchMatch = chatCachedAttempt.match(/NEEDS_SEARCH:\s*(.*)/is);
+            if (!needsSearchMatch) {
               send('action', { text: '⚡ Ruta rápida — respondiendo con contexto ya disponible...' });
               send('chat_message', { text: chatCachedAttempt });
 
@@ -6663,7 +6686,7 @@ async function runChatTurn(
               send('done', { files: [], commitMessage: '', mainComponent: chatFastLastUser?.path ?? '', mainContent: '', repo, branch: '' });
               chatCachedHandled = true;
             } else {
-              const needSearchReason = chatCachedAttempt.replace('NEEDS_SEARCH:', '').trim();
+              const needSearchReason = needsSearchMatch[1].trim();
               send('action', { text: `🔍 El contexto ya leído no alcanza (${needSearchReason.slice(0, 80)}) — buscando...` });
             }
           } catch (chatCacheErr) {
@@ -6678,7 +6701,7 @@ async function runChatTurn(
           const chatFastTerms = await extractKeywordsForSearch(userMessage, repo);
 
           // ── Chequear conocimiento persistente ANTES de buscar ────────────────────
-          const chatFastKnowledge = await loadRepoKnowledgeVerified(repo, chatFastTerms);
+          const chatFastKnowledge = await loadRepoKnowledgeVerified(repo, chatFastTerms, userMessage);
           if (chatFastKnowledge) {
             send('action', { text: `📚 Conocimiento persistente reutilizado — "${chatFastKnowledge.concept}" (verificado ${new Date(chatFastKnowledge.verified_at).toLocaleDateString()})` });
             try {
@@ -6805,7 +6828,7 @@ async function runChatTurn(
           if (subKws.length === 0) return;
 
           // ── Chequear conocimiento persistente ANTES de buscar ──────────────────
-          const knowledge = await loadRepoKnowledgeVerified(repo, subKws);
+          const knowledge = await loadRepoKnowledgeVerified(repo, subKws, subQuery);
           if (knowledge) {
             send('action', { text: `📚 [${idx + 1}/${searchQueries.length}] Conocimiento persistente reutilizado — "${knowledge.concept}" (verificado ${new Date(knowledge.verified_at).toLocaleDateString()})` });
             for (const sf of knowledge.source_files) {
