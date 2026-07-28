@@ -576,6 +576,7 @@ async function callGroqAgent(
   system: string,
   maxTokens = 4096,
   historyMessages?: { role: string; content: string }[],
+  temperature?: number,
 ): Promise<string> {
   const keys = getGroqKeys()
   if (keys.length === 0) throw new Error('No GROQ_API_KEY configured')
@@ -590,6 +591,7 @@ async function callGroqAgent(
         body: JSON.stringify({
           model: GROQ_MODEL,
           max_tokens: maxTokens,
+          ...(temperature !== undefined ? { temperature } : {}),
           messages: [
             { role: 'system', content: system },
             ...(historyMessages ?? []),
@@ -4851,14 +4853,20 @@ async function unifiedGrepSearch(
     // When excludeTestPaths is active, add ripgrep glob exclusions so test
     // directories are skipped at the OS level — faster and more thorough than
     // post-filtering (avoids hitting the 20-result cap with test-only files).
+    const ALWAYS_EXCLUDE_GLOBS = [
+      '--glob', '!**/attached_assets/**',
+      '--glob', '!**/node_modules/**',
+      '--glob', '!**/*.md',
+    ];
     const testExcludeGlobs: string[] = options?.excludeTestPaths
       ? [
+          ...ALWAYS_EXCLUDE_GLOBS,
           '--glob', '!**/*.test.ts', '--glob', '!**/*.test.js',
           '--glob', '!**/*.spec.ts', '--glob', '!**/*.spec.js',
           '--glob', '!**/__tests__/**', '--glob', '!**/tests/**',
           '--glob', '!**/mocks/**',    '--glob', '!**/fixtures/**',
         ]
-      : [];
+      : ALWAYS_EXCLUDE_GLOBS;
 
     const rgResults = await rgSearch(ripgrepPattern, repo, testExcludeGlobs);
     if (rgResults.length > 0) {
@@ -5060,6 +5068,27 @@ function formatDeepEvidenceForHaiku(
   output += `\n\nNOTA: Haiku debe EXPLICAR esta estructura, no repetirla.`;
   output += `\nHaiku: convertí esto en prosa clara y narrativa (máx 4 párrafos).`;
   output += `\nDEEP: ya encontró y estructuró — Haiku solo sintetiza.`;
+
+  // Señal explícita de relevancia por término de usuario — evita que la síntesis
+  // ignore un fragmento hallado por multi-hop (ej. hop 2 = placeOrder con slPrice)
+  // solo porque no coincide con el patrón de búsqueda original (ej. trailingStop).
+  const userQueryTerms = localKeywordFallback(userQuery, 6)
+    .map(t => t.toLowerCase())
+    .filter(t => t.length >= 3);
+  if (userQueryTerms.length > 0) {
+    const directHits = fragments.filter(f =>
+      userQueryTerms.some(t => f.fragment.toLowerCase().includes(t)),
+    );
+    if (directHits.length > 0) {
+      output += `\n${'═'.repeat(65)}\n`;
+      output += `⚠️ COINCIDENCIA DIRECTA CON LA PREGUNTA DEL USUARIO\n`;
+      output += `${'═'.repeat(65)}\n`;
+      output += `Los siguientes fragmentos contienen términos literales de la pregunta ("${userQueryTerms.join(', ')}") y DEBEN priorizarse en la síntesis, incluso si no son el símbolo originalmente buscado:\n`;
+      for (const f of directHits) {
+        output += `- ${f.path}:${f.line} (${f.fragmentType})\n`;
+      }
+    }
+  }
 
   return output;
 }
@@ -6605,6 +6634,7 @@ async function runChatTurn(
         await buildTriagePrompt(cacheHint, repo),
         fastFinding ? 768 : 512,
         groqHistory,
+        0,
       );
 
       if (!groqAnswer.trim().startsWith('NEEDS_TOOLS:')) {

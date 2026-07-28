@@ -1,0 +1,206 @@
+# Prompts para Replit — Quark Agent / agent.ts
+
+Aplicar en orden. Cada uno es independiente — probar y confirmar antes de pasar al siguiente.
+
+---
+
+## PROMPT 1 — Determinismo en el triage de Groq (buildTriagePrompt)
+
+**Por qué:** la llamada de triage que decide si responde con conocimiento genérico o
+escala a búsqueda (`NEEDS_TOOLS`) no fija `temperature`, así que la misma pregunta
+con el mismo contexto puede dar salidas distintas en invocaciones separadas —
+esto es lo que causó que CHAT 💬 mode y Brous 💬 respondieran distinto a
+"cómo funciona el stop loss" pese a compartir el mismo backend.
+
+```
+En agent.ts, busca la función callGroqAgent. Su firma actual es:
+
+async function callGroqAgent(
+  prompt: string,
+  system: string,
+  maxTokens = 4096,
+  historyMessages?: { role: string; content: string }[],
+): Promise<string> {
+
+Reemplázala por:
+
+async function callGroqAgent(
+  prompt: string,
+  system: string,
+  maxTokens = 4096,
+  historyMessages?: { role: string; content: string }[],
+  temperature?: number,
+): Promise<string> {
+
+Dentro del mismo función, busca:
+
+        body: JSON.stringify({
+          model: GROQ_MODEL,
+          max_tokens: maxTokens,
+          messages: [
+            { role: 'system', content: system },
+            ...(historyMessages ?? []),
+            { role: 'user', content: prompt },
+          ],
+        }),
+
+Reemplázalo por:
+
+        body: JSON.stringify({
+          model: GROQ_MODEL,
+          max_tokens: maxTokens,
+          ...(temperature !== undefined ? { temperature } : {}),
+          messages: [
+            { role: 'system', content: system },
+            ...(historyMessages ?? []),
+            { role: 'user', content: prompt },
+          ],
+        }),
+
+Ahora busca el call site dentro de runChatTurn (rama complexity === 'simple'):
+
+      groqAnswer = await callGroqAgent(
+        userMessage,
+        await buildTriagePrompt(cacheHint, repo),
+        fastFinding ? 768 : 512,
+        groqHistory,
+      );
+
+Reemplázalo por:
+
+      groqAnswer = await callGroqAgent(
+        userMessage,
+        await buildTriagePrompt(cacheHint, repo),
+        fastFinding ? 768 : 512,
+        groqHistory,
+        0,
+      );
+
+No cambies ningún otro call site de callGroqAgent — el resto debe seguir sin
+pasar temperature (usa el default de la API).
+```
+
+**Prueba de verificación:** repetir "cómo funciona el stop loss" en CHAT 💬 mode
+al menos 3 veces en sesiones nuevas — debe escalar a NEEDS_TOOLS de forma
+consistente las 3 veces, no responder con conocimiento genérico ninguna vez.
+
+---
+
+## PROMPT 2 — Excluir attached_assets/ en la búsqueda de FAST mode
+
+**Por qué:** FAST mode devolvió como fuente un archivo pegado en
+`attached_assets/*.txt` en vez de código real de producción al preguntar por
+"stop loss". El filtro `EXCLUDED_PATHS` existe pero solo se aplica en
+`searchAndLoadFiles` (usada en la ruta de generación), no en `unifiedGrepSearch`
+(usada por FAST/DEEP para lectura).
+
+```
+En agent.ts, busca la función unifiedGrepSearch. Dentro de la sección
+"2. ripgrep on local clone", busca:
+
+    const testExcludeGlobs: string[] = options?.excludeTestPaths
+      ? [
+          '--glob', '!**/*.test.ts', '--glob', '!**/*.test.js',
+          '--glob', '!**/*.spec.ts', '--glob', '!**/*.spec.js',
+          '--glob', '!**/__tests__/**', '--glob', '!**/tests/**',
+          '--glob', '!**/mocks/**',    '--glob', '!**/fixtures/**',
+        ]
+      : [];
+
+    const rgResults = await rgSearch(ripgrepPattern, repo, testExcludeGlobs);
+
+Reemplázalo por:
+
+    const ALWAYS_EXCLUDE_GLOBS = [
+      '--glob', '!**/attached_assets/**',
+      '--glob', '!**/node_modules/**',
+      '--glob', '!**/*.md',
+    ];
+    const testExcludeGlobs: string[] = options?.excludeTestPaths
+      ? [
+          ...ALWAYS_EXCLUDE_GLOBS,
+          '--glob', '!**/*.test.ts', '--glob', '!**/*.test.js',
+          '--glob', '!**/*.spec.ts', '--glob', '!**/*.spec.js',
+          '--glob', '!**/__tests__/**', '--glob', '!**/tests/**',
+          '--glob', '!**/mocks/**',    '--glob', '!**/fixtures/**',
+        ]
+      : ALWAYS_EXCLUDE_GLOBS;
+
+    const rgResults = await rgSearch(ripgrepPattern, repo, testExcludeGlobs);
+
+No toques la rama 3 (fallback GitHub Code Search API) en esta misma función.
+```
+
+**Prueba de verificación:** repetir "cómo funciona el stop loss" en FAST mode —
+el símbolo encontrado ya no debe venir de `attached_assets/`.
+
+---
+
+## PROMPT 3 — Ceguera de síntesis en DEEP/CHAT: multi-hop encuentra evidencia relevante pero la ignora
+
+**Por qué:** en DEEP y en Brous, el multi-hop llegó hasta `placeOrder`
+(que tiene `slPrice`, el dato real relevante para "stop loss") como hop 2,
+pero la síntesis final solo usó el fragmento de `placeTrailingStop` — el
+símbolo originalmente buscado — e ignoró el fragmento del hop que sí
+respondía la pregunta real del usuario.
+
+```
+En agent.ts, busca la función formatDeepEvidenceForHaiku. Al final de la
+función, justo antes de:
+
+  return output;
+
+Agrega este bloque:
+
+  // Señal explícita de relevancia por término de usuario — evita que la síntesis
+  // ignore un fragmento hallado por multi-hop (ej. hop 2 = placeOrder con slPrice)
+  // solo porque no coincide con el patrón de búsqueda original (ej. trailingStop).
+  const userQueryTerms = localKeywordFallback(userQuery, 6)
+    .map(t => t.toLowerCase())
+    .filter(t => t.length >= 3);
+  if (userQueryTerms.length > 0) {
+    const directHits = fragments.filter(f =>
+      userQueryTerms.some(t => f.fragment.toLowerCase().includes(t)),
+    );
+    if (directHits.length > 0) {
+      output += `\n${'═'.repeat(65)}\n`;
+      output += `⚠️ COINCIDENCIA DIRECTA CON LA PREGUNTA DEL USUARIO\n`;
+      output += `${'═'.repeat(65)}\n`;
+      output += `Los siguientes fragmentos contienen términos literales de la pregunta ("${userQueryTerms.join(', ')}") y DEBEN priorizarse en la síntesis, incluso si no son el símbolo originalmente buscado:\n`;
+      for (const f of directHits) {
+        output += `- ${f.path}:${f.line} (${f.fragmentType})\n`;
+      }
+    }
+  }
+
+  return output;
+```
+
+**Prueba de verificación:** repetir "cómo funciona el stop loss" en DEEP mode y
+en Brous — la síntesis final debe mencionar `slPrice`/`placeOrder`, no solo
+`placeTrailingStop`.
+
+---
+
+## PROMPT 4 — Aplicar la misma señal de relevancia directa al pre-fetch de CHAT (Groq triage)
+
+**Por qué:** el mismo problema del Prompt 3 puede repetirse en el camino de
+DEEP pre-fetch dentro de runChatTurn (rama complexity === 'simple'), que
+también llama a formatDeepEvidenceForHaiku con toda la evidencia consolidada
+de las sub-preguntas. Como el fix del Prompt 3 ya vive dentro de esa función,
+no se necesita tocar código adicional — este prompt es solo la prueba de
+verificación cruzada.
+
+```
+No requiere cambios de código adicionales — formatDeepEvidenceForHaiku ya
+fue corregida en el PROMPT 3 y es compartida por DEEP mode y por el DEEP
+pre-fetch de CHAT/runChatTurn.
+
+Prueba de verificación: repetir "cómo funciona el stop loss" en CHAT 💬 mode
+después de aplicar los Prompts 1-3. Confirmar que:
+1. Escala a búsqueda de forma consistente (Prompt 1)
+2. La evidencia consolidada de las sub-preguntas incluye la sección
+   "⚠️ COINCIDENCIA DIRECTA CON LA PREGUNTA DEL USUARIO" si aplica (Prompt 3)
+3. La síntesis final menciona slPrice/placeOrder si el usuario preguntó por
+   stop loss, no solo placeTrailingStop
+```
