@@ -1129,8 +1129,17 @@ const SIGNAL_OS_TRANSLATIONS: DomainTranslation[] = [
   { term: 'trailingStop',       triggers: [/\btrailing\b/i, /\bstop\s*m[oó]vil\b/i],                     displayTriggers: '"trailing" o "stop móvil" o "trailing stop"' },
   { term: 'moving_plan',        triggers: [/\btrailing\b/i, /\bstop\s*m[oó]vil\b/i],                     displayTriggers: '"trailing" o "stop móvil" o "trailing stop"' },
   { term: 'rangeRate',          triggers: [/\btrailing\b/i, /\bstop\s*m[oó]vil\b/i],                     displayTriggers: '"trailing" o "stop móvil" o "trailing stop"' },
+  { term: 'effectiveSlPct',     triggers: [/\bstop\s*loss\b/i, /\bSL\b/i, /\bstop\s*fijo\b/i, /\bpartial\s*TP\s*\/?\s*SL\b/i], displayTriggers: '"stop loss" o "SL" o "stop fijo" o "Partial TP/SL" (SIN mencionar "trailing")' },
+  { term: 'slPrice',            triggers: [/\bstop\s*loss\b/i, /\bSL\b/i, /\bstop\s*fijo\b/i, /\bpartial\s*TP\s*\/?\s*SL\b/i], displayTriggers: '"stop loss" o "SL" o "stop fijo" o "Partial TP/SL" (SIN mencionar "trailing")' },
   { term: 'circuitBreaker',     triggers: [/\bstreak\b/i, /\bracha\b/i, /\bp[eé]rdidas?\s*consecutivas?\b/i], displayTriggers: '"streak" o "racha" o "pérdidas consecutivas"' },
 ];
+
+/** Devuelve true si el repo pertenece al dominio Signal OS (Ahorar).
+ *  Centraliza la regla para que tanto extractKeywordsForSearch como el
+ *  FAST READ PATH usen la misma detección sin duplicar la expresión. */
+function isSignalOS(repo: string): boolean {
+  return /ahorar/i.test(repo);
+}
 
 /** Verifica que al menos uno de los triggers literales de una traducción de
  *  dominio aparezca de verdad en el prompt del usuario — evita que Groq
@@ -2024,9 +2033,17 @@ router.post('/generate', async (req, res) => {
 
         // Reusar términos e historial ya computados por classifyAndRespondFast
         // (evita llamadas duplicadas a extractKeywordsForSearch y loadFastHistory).
-        const fastKeywords = (_fastClassification?.type === 'search' && _fastClassification.terms.length > 0)
+        const fastKeywordsRaw = (_fastClassification?.type === 'search' && _fastClassification.terms.length > 0)
           ? _fastClassification.terms
           : await extractKeywordsForSearch(prompt, repo);
+        // Aplicar el mismo grounding de dominio que extractKeywordsForSearch,
+        // incluso cuando los términos vinieron de classifyAndRespondFast —
+        // evita que FAST mode omita las traducciones (trailing→trailingStop,
+        // stop loss→effectiveSlPct/slPrice) que sí aplica extractKeywordsForSearch.
+        const fastDomainMatches = isSignalOS(repo)
+          ? SIGNAL_OS_TRANSLATIONS.filter(t => t.triggers.some(re => re.test(prompt))).map(t => t.term)
+          : [];
+        const fastKeywords = [...new Set([...fastKeywordsRaw, ...fastDomainMatches])];
         const fastPattern = fastKeywords.length > 0
           ? fastKeywords.join('|')
           : prompt.split(/\s+/).filter(w => w.length > 4).slice(0, 3).join('|');
@@ -6326,6 +6343,15 @@ ejemplos, o dice algo como "explicá más", "dame el detalle", "mostrame el cód
 
 No inferás lo que no leíste. Citá fragmentos exactos (breves) para respaldar tus afirmaciones, \
 incluso en el modo comprimido.
+
+REGLA ANTI-RELLENO NUMÉRICO — obligatoria: si el fragmento menciona el NOMBRE de una \
+constante (ej. MIN_SL_PCT, MAX_SL_PCT, ATR_SL_MULT) pero NO muestra su valor asignado \
+literalmente en el código visible, NUNCA completes ni estimes ese valor — ni con un número \
+"típico" del dominio, ni por cálculo inverso a partir de otros ejemplos. Escribí explícitamente \
+que la constante existe pero su valor no está confirmado en el fragmento disponible \
+(ej: "el porcentaje exacto de MIN_SL_PCT no está confirmado en este fragmento"). \
+Esto aplica en modo comprimido y expandido por igual — la brevedad nunca justifica \
+completar un dato no verificado.
 
 Al sintetizar: usá los nombres técnicos de trading exactos (**FVG**, **EMA**, **SuperTrend**, \
 **RSI**, **ADX**, **ATR**, **Score**, etc.) — nunca los parafrasees con lenguaje genérico. \
