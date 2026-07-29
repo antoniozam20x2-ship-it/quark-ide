@@ -1,0 +1,58 @@
+# Prompt — Grounding en el follow-up de FAST mode (isLikelyFollowUp)
+
+**Por qué:** al preguntar "cómo funciona el stop loss" con una sesión previa
+sobre señales/scores, FAST mode entró por la rama de "pregunta de seguimiento"
+(`isLikelyFollowUp` devolvió true) y reusó el fragmento cacheado de la
+pregunta anterior — que no tenía nada que ver con stop loss. En vez de decir
+"no encontré nada relevante en el contexto ya leído", el modelo generó una
+respuesta con apariencia técnica y números específicos completamente
+inventados (+0.4%/-0.2% para 15M, etc.) que no existen en el código real.
+Es el mismo patrón de fondo que ya corregimos en el camino de contexto
+cacheado de CHAT (Prompt 1 de la ronda anterior) y en `repo_knowledge`
+(Prompt 2), pero acá aplicado al flujo de FAST mode, que todavía no tiene
+esa verificación.
+
+```
+En agent.ts, dentro de la sección "── FAST FOLLOW-UP PATH ──" de la ruta
+/generate (dentro del bloque `if (_isFollowUp) { ... }`), busca:
+
+          const cachedFragment = _lastFastAss!.fragment as string;
+          const fragmentCovers = !isFragmentInsufficient(cachedFragment, fastKeywords);
+
+Reemplázalo por:
+
+          const cachedFragment = _lastFastAss!.fragment as string;
+          // Grounding: además de "no es insuficiente" (heurística de longitud/forma),
+          // verificar que al menos un término real de la pregunta actual aparece
+          // literalmente en el fragmento cacheado — evita que isLikelyFollowUp
+          // reutilice contexto de un tema distinto (ej. señales/scores) para
+          // responder una pregunta nueva no relacionada (ej. stop loss), lo que
+          // llevaba al modelo a inventar detalles plausibles pero falsos.
+          const fastFollowUpGroundingTerms = localKeywordFallback(prompt, 6)
+            .map(t => t.toLowerCase())
+            .filter(t => t.length >= 3);
+          const isCachedFragmentGrounded = fastFollowUpGroundingTerms.length === 0
+            || fastFollowUpGroundingTerms.some(t => cachedFragment.toLowerCase().includes(t));
+          const fragmentCovers = isCachedFragmentGrounded && !isFragmentInsufficient(cachedFragment, fastKeywords);
+          if (!isCachedFragmentGrounded) {
+            console.log(`[fast-followup] fragmento cacheado no grounded contra "${prompt.slice(0, 60)}" — tratando como fallback (búsqueda adicional)`);
+          }
+
+No cambies el resto del bloque — el `if (fragmentCovers) { ... } else { ... }`
+que sigue ya maneja correctamente el caso "insuficiente" con una búsqueda
+adicional (`fuPattern`/`searchWithTestFallback`); con este cambio, ese mismo
+camino de fallback también se activa cuando el fragmento simplemente no
+tiene relación con la pregunta nueva, no solo cuando es demasiado corto o
+incompleto.
+```
+
+**Prueba de verificación:** repetir la secuencia que originó el bug —
+primero preguntar algo sobre señales/scores en FAST mode, luego (en la
+misma sesión, dentro de la ventana de follow-up) preguntar "cómo funciona
+el stop loss en la repo de Ahorar". Ahora debe:
+1. Detectar que el fragmento cacheado no tiene relación con "stop loss"
+2. Caer al camino de búsqueda adicional (`🔍 El contexto ya leído no cubre
+   esta pregunta — buscando en archivos adicionales...`)
+3. Devolver información real de `placeTrailingStop`/`placeOrder`, o decir
+   explícitamente que no encontró nada — nunca debe inventar porcentajes
+   o valores que no estén en el código.

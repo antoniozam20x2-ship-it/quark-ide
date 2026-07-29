@@ -1929,7 +1929,21 @@ router.post('/generate', async (req, res) => {
           send('action', { text: '⚡ FAST — pregunta de seguimiento, evaluando contexto ya leído...' });
 
           const cachedFragment = _lastFastAss!.fragment as string;
-          const fragmentCovers = !isFragmentInsufficient(cachedFragment, fastKeywords);
+          // Grounding: además de "no es insuficiente" (heurística de longitud/forma),
+          // verificar que al menos un término real de la pregunta actual aparece
+          // literalmente en el fragmento cacheado — evita que isLikelyFollowUp
+          // reutilice contexto de un tema distinto (ej. señales/scores) para
+          // responder una pregunta nueva no relacionada (ej. stop loss), lo que
+          // llevaba al modelo a inventar detalles plausibles pero falsos.
+          const fastFollowUpGroundingTerms = localKeywordFallback(prompt, 6)
+            .map(t => t.toLowerCase())
+            .filter(t => t.length >= 3);
+          const isCachedFragmentGrounded = fastFollowUpGroundingTerms.length === 0
+            || fastFollowUpGroundingTerms.some(t => cachedFragment.toLowerCase().includes(t));
+          const fragmentCovers = isCachedFragmentGrounded && !isFragmentInsufficient(cachedFragment, fastKeywords);
+          if (!isCachedFragmentGrounded) {
+            console.log(`[fast-followup] fragmento cacheado no grounded contra "${prompt.slice(0, 60)}" — tratando como fallback (búsqueda adicional)`);
+          }
 
           // Prompt compartido entre ambas ramas — incluye REGLA DE CONTINUIDAD (Cambio 4)
           const fuSystemPrompt =
