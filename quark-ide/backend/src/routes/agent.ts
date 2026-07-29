@@ -604,10 +604,12 @@ async function callGroqAgent(
       const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> }
       return json.choices?.[0]?.message?.content ?? ''
     } catch (err) {
-      console.warn(`[agent] Groq key failed: ${(err as Error).message}`)
+      const msg = (err as Error).message;
+      const promptLen = prompt.length + system.length;
+      console.warn(`[agent] Groq key failed (prompt: ~${promptLen} chars): ${msg}`);
     }
   }
-  throw new Error('All Groq keys failed')
+  throw new Error(`All Groq keys failed — prompt total: ~${prompt.length + system.length} chars`)
 }
 
 async function callDeepSeekAgent(prompt: string, system: string, maxTokens = 4096): Promise<string> {
@@ -6802,6 +6804,16 @@ async function runChatTurn(
     ? `\n\nCONTEXTO ADICIONAL de otras herramientas de este sistema (Quark Agent, War Room) sobre este mismo repo, investigado recientemente:\n${sharedSummaries.map(s => `[${s.origin}] ${s.summary}`).join('\n')}`
     : '';
   cacheHint = cacheHint + sharedHint;
+
+  // Límite defensivo: cacheHint puede crecer sin cota con conceptos muy
+  // investigados (repo_knowledge + contexto compartido + investigaciones
+  // previas acumuladas) y provocar que el prompt total exceda el límite
+  // de tokens de Groq, causando fallo en las 3 keys sin distinción de causa.
+  const CACHE_HINT_CHAR_LIMIT = 6000;
+  if (cacheHint.length > CACHE_HINT_CHAR_LIMIT) {
+    console.warn(`[runChatTurn] cacheHint truncado: ${cacheHint.length} → ${CACHE_HINT_CHAR_LIMIT} chars`);
+    cacheHint = cacheHint.slice(0, CACHE_HINT_CHAR_LIMIT) + '\n\n[... contexto adicional truncado por longitud — usar deep_search si falta información específica]';
+  }
 
   // Inyectar hallazgo en cacheHint para que Groq pueda responder basándose en la investigación
   // previa sin necesitar tools — no altera qué camino toma classifyComplexity, solo mejora
