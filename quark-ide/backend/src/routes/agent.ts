@@ -878,6 +878,7 @@ function filterGroundedTerms(terms: string[], currentPrompt: string, history: an
 async function classifyAndRespondFast(
   prompt: string,
   fastHistory: any[],
+  repo: string,
 ): Promise<FastClassification> {
   const keys = getGroqKeys();
 
@@ -957,9 +958,11 @@ o
 
     if (parsed.type === 'chat' && typeof parsed.answer === 'string') {
       // Capa de seguridad: si el clasificador dijo "chat" pero el mensaje
-      // contiene vocabulario de dominio, no confiar — forzar search.
-      if (DOMAIN_TERMS_RE.test(prompt)) {
-        console.warn('[classifyAndRespondFast] override: clasificado como chat pero contiene término de dominio, forzando search');
+      // coincide con un símbolo real del repo, no confiar — forzar search.
+      // Repo-agnóstico: usa el índice real de símbolos, no una lista fija.
+      const grounding = await isGroundedInRepoSymbols(prompt, repo);
+      if (grounding.grounded) {
+        console.warn(`[classifyAndRespondFast] override: clasificado como chat pero "${grounding.matchedTerm}" coincide con símbolo real "${grounding.matchedSymbol}", forzando search`);
         return { type: 'search', terms: extractSearchKeywords(prompt) };
       }
       return parsed;
@@ -1891,7 +1894,7 @@ router.post('/generate', async (req, res) => {
 
     if (!deepMode) {
       _fastHistoryForClassify = sessionId ? await loadFastHistory(sessionId) : [];
-      const classification = await classifyAndRespondFast(prompt, _fastHistoryForClassify);
+      const classification = await classifyAndRespondFast(prompt, _fastHistoryForClassify, repo);
       _fastClassification = classification;
 
       if (classification.type === 'chat') {

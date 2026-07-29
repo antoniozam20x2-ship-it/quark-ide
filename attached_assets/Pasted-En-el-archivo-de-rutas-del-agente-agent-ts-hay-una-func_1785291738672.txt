@@ -1,0 +1,64 @@
+En el archivo de rutas del agente (agent.ts), hay una función `classifyAndRespondFast` 
+que clasifica mensajes de FAST mode como "chat" o "search". Tiene una capa de seguridad 
+que usa una regex fija `DOMAIN_TERMS_RE` (con términos de trading hardcodeados: FVG, RVOL, 
+ATR, etc.) para forzar "search" cuando el clasificador dice "chat" mal. Esta regex no 
+escala a otros repos (Core AI, Sniper OS) que tienen vocabulario propio no incluido ahí.
+
+Ya existe en el mismo archivo una función `isGroundedInRepoSymbols(message, repo)` que 
+consulta el índice REAL de símbolos del repo vía `getRepoSymbolNames(repo)` y hace 
+fuzzy-match — es repo-agnóstico y no requiere mantenimiento manual. Se usa hoy solo en 
+el triage de CHAT mode.
+
+CAMBIO REQUERIDO — reemplazar el uso de DOMAIN_TERMS_RE en classifyAndRespondFast por 
+isGroundedInRepoSymbols, siguiendo estos pasos exactos:
+
+1. Cambiar la firma de la función de:
+   async function classifyAndRespondFast(
+     prompt: string,
+     fastHistory: any[],
+   ): Promise<FastClassification> {
+
+   a:
+   async function classifyAndRespondFast(
+     prompt: string,
+     fastHistory: any[],
+     repo: string,
+   ): Promise<FastClassification> {
+
+2. Dentro de esa misma función, reemplazar este bloque:
+     if (parsed.type === 'chat' && typeof parsed.answer === 'string') {
+       // Capa de seguridad: si el clasificador dijo "chat" pero el mensaje
+       // contiene vocabulario de dominio, no confiar — forzar search.
+       if (DOMAIN_TERMS_RE.test(prompt)) {
+         console.warn('[classifyAndRespondFast] override: clasificado como chat pero contiene término de dominio, forzando search');
+         return { type: 'search', terms: extractSearchKeywords(prompt) };
+       }
+       return parsed;
+     }
+
+   por:
+     if (parsed.type === 'chat' && typeof parsed.answer === 'string') {
+       // Capa de seguridad: si el clasificador dijo "chat" pero el mensaje
+       // coincide con un símbolo real del repo, no confiar — forzar search.
+       // Repo-agnóstico: usa el índice real de símbolos, no una lista fija.
+       const grounding = await isGroundedInRepoSymbols(prompt, repo);
+       if (grounding.grounded) {
+         console.warn(`[classifyAndRespondFast] override: clasificado como chat pero "${grounding.matchedTerm}" coincide con símbolo real "${grounding.matchedSymbol}", forzando search`);
+         return { type: 'search', terms: extractSearchKeywords(prompt) };
+       }
+       return parsed;
+     }
+
+3. Buscar el único call site de classifyAndRespondFast (dentro de router.post('/generate', ...)):
+     const classification = await classifyAndRespondFast(prompt, _fastHistoryForClassify);
+
+   y cambiarlo a:
+     const classification = await classifyAndRespondFast(prompt, _fastHistoryForClassify, repo);
+
+4. Dejar la constante DOMAIN_TERMS_RE definida donde está (no borrarla todavía, puede 
+   quedar sin uso por ahora — no tocar nada más de esa función).
+
+NO toques SIGNAL_OS_TRANSLATIONS, isDomainTermGrounded, ni extractKeywordsForSearch — 
+eso es un cambio separado que se hará después.
+
+Verificá que compila con tsc sin errores antes de terminar.
