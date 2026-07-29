@@ -1,0 +1,133 @@
+# Prompt — Grounding con acrónimos cortos (SL, TP, RR, ADX...) + default seguro sin términos
+
+**Por qué:** confirmado en producción — "Explícame el SL fijo" reutilizó un fragmento
+cacheado sobre `placeTrailingStop` (turno anterior, tema distinto) y generó una
+explicación inventada de "stop loss fijo" con ejemplo numérico ($100 → $95) que no
+viene del código, citando la misma línea `autonomousAgent.ts:879` como si la respaldara.
+
+Causa raíz — dos bugs relacionados:
+
+1. `localKeywordFallback` descarta con `w.length > 4` cualquier palabra de 4 letras o
+   menos. Eso incluye SL, TP, RR, ADX, RSI, EMA, ATR — el vocabulario más denso y más
+   importante del dominio de trading. "SL" y "fijo" (4 letras) no sobreviven el filtro.
+2. Con el resultado vacío, tres lugares del código usan el patrón
+   `terms.length === 0 || terms.some(...)` — un array vacío hace que la condición sea
+   `true` por el operador `||`. O sea: cuando no se pudo extraer NINGÚN término de la
+   pregunta, el código interpreta eso como "está grounded" y confía en el fragmento
+   cacheado sin haber verificado nada. El default correcto ante ausencia de evidencia
+   es desconfiar, no confiar — mismo criterio fail-safe que ya usa
+   `evaluateSearchConfidence` en otra parte del archivo ("preferir un salto extra de
+   búsqueda antes que cortar información de más").
+
+## Fix 1 — preservar acrónimos cortos en localKeywordFallback
+
+```
+En agent.ts, dentro de localKeywordFallback, agregá una categoría nueva para
+acrónimos de 2-5 letras mayúsculas (SL, TP, RR, EMA, RSI, ADX, ATR...), y excluilos
+del filtro genérico de "palabras largas" para no duplicarlos:
+
+function localKeywordFallback(prompt: string, max = 4): string[] {
+  const words = prompt.split(/\s+/);
+  const isCapsSnake = (w: string) => /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(w);
+  const isCamel     = (w: string) => /^[a-z][a-z0-9]*[A-Z][a-zA-Z0-9]+$/.test(w);
+  const isSnake     = (w: string) => /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(w);
+  const isShortId   = (w: string) => /^[A-Za-z]\d{1,2}$/.test(w); // S1, S6, T2...
+  // Acrónimos cortos (SL, TP, RR, EMA, RSI, ATR, ADX...) — 2-5 letras mayúsculas.
+  // Sin esto, w.length > 4 los descarta y el término más denso del dominio de
+  // trading queda invisible para cualquier chequeo de grounding aguas abajo.
+  const isAcronym   = (w: string) => /^[A-Z]{2,5}$/.test(w.replace(/[?.,;:!]+$/, ''));
+
+  const ranked = [
+    ...words.filter(isCapsSnake),
+    ...words.filter(isCamel),
+    ...words.filter(isSnake),
+    ...words.filter(isShortId),
+    ...words.filter(isAcronym),
+    ...words.filter(w =>
+      w.length > 4 &&
+      !KEYWORD_STOPWORDS.has(w.toLowerCase()) &&
+      !isCapsSnake(w) && !isCamel(w) && !isSnake(w) && !isShortId(w) && !isAcronym(w)
+    ),
+  ];
+  return [...new Set(ranked)].slice(0, max);
+}
+```
+
+## Fix 2 — invertir el default en los 3 chequeos de grounding
+
+Reemplazá los siguientes 3 bloques EXACTOS (buscalos por el texto, están en distintas
+funciones del mismo archivo):
+
+**2a — follow-up de FAST:**
+```
+Buscar:
+          const fastFollowUpGroundingTerms = localKeywordFallback(prompt, 6)
+            .map(t => t.toLowerCase())
+            .filter(t => t.length >= 3);
+          const isCachedFragmentGrounded = fastFollowUpGroundingTerms.length === 0
+            || fastFollowUpGroundingTerms.some(t => cachedFragment.toLowerCase().includes(t));
+
+Reemplazar por:
+          const fastFollowUpGroundingTerms = localKeywordFallback(prompt, 6)
+            .map(t => t.toLowerCase())
+            .filter(t => t.length >= 2);
+          const isCachedFragmentGrounded = fastFollowUpGroundingTerms.length > 0
+            && fastFollowUpGroundingTerms.some(t => cachedFragment.toLowerCase().includes(t));
+```
+(bajé el `>= 3` a `>= 2` porque "SL" tiene 2 caracteres — con `>= 3` seguiría
+filtrándose incluso después del Fix 1)
+
+**2b — contexto cacheado de CHAT:**
+```
+Buscar:
+        const chatCachedGroundingTerms = localKeywordFallback(userMessage, 6);
+        const chatCachedFragmentGrounded = chatCachedGroundingTerms.length === 0
+          ? true // sin términos técnicos extraíbles — dejar que Groq decida como antes
+          : chatCachedGroundingTerms.some(t => (chatFastLastAss?.fragment ?? '').toLowerCase().includes(t.toLowerCase()));
+
+Reemplazar por:
+        const chatCachedGroundingTerms = localKeywordFallback(userMessage, 6);
+        const chatCachedFragmentGrounded = chatCachedGroundingTerms.length > 0
+          && chatCachedGroundingTerms.some(t => (chatFastLastAss?.fragment ?? '').toLowerCase().includes(t.toLowerCase()));
+```
+
+**2c — loadRepoKnowledgeVerified:**
+```
+Buscar:
+    const groundingTerms = localKeywordFallback(originalQuery, 6);
+    const isGroundedInSummary = groundingTerms.length === 0
+      || groundingTerms.some(t => raw.summary.toLowerCase().includes(t.toLowerCase()));
+
+Reemplazar por:
+    const groundingTerms = localKeywordFallback(originalQuery, 6);
+    const isGroundedInSummary = groundingTerms.length > 0
+      && groundingTerms.some(t => raw.summary.toLowerCase().includes(t.toLowerCase()));
+```
+
+## Consecuencia esperada — no es un efecto secundario, es el fix
+
+Con este cambio, cuando una pregunta no tiene NINGÚN término reconocible (ni acrónimo,
+ni camelCase, ni snake_case), el sistema ya no asume que el fragmento cacheado sirve —
+fuerza una búsqueda nueva. Esto es más lento en ese caso puntual (poco frecuente: casi
+toda pregunta de dominio real trae al menos un acrónimo o identificador), pero elimina
+la posibilidad de alucinar sobre un tema distinto al cacheado. Es el mismo tradeoff que
+ya aceptaste en `evaluateSearchConfidence` — preferir un salto extra de búsqueda antes
+que una respuesta inventada.
+
+**Nota — no toca `isDomainTermGrounded`:** ese es un bug distinto (el `return true`
+cuando el término no está en `SIGNAL_OS_TRANSLATIONS`, que dejó pasar `"trailing stop"`
+sin filtrar en el caso anterior). Este prompt no lo incluye a propósito — mejor un
+cambio a la vez, verificado, que dos fixes mezclados en el mismo diff.
+
+**Prueba de verificación:**
+1. Preguntar "cómo funciona el stop loss" y esperar la respuesta.
+2. En el MISMO turno de sesión, preguntar "Explícame el SL fijo" → debe DESCARTAR el
+   fragmento cacheado de `placeTrailingStop` (porque "SL" ahora sí se extrae pero no
+   aparece literalmente en ese fragmento) y disparar una búsqueda nueva — no debe
+   repetir la explicación inventada con el ejemplo de $100→$95.
+3. Confirmar en logs que aparece el mensaje de "buscando en archivos adicionales" (o
+   equivalente) en vez de "usando contexto ya disponible" para la pregunta 2.
+4. Probar una pregunta sin ningún término técnico (ej. "¿por qué?") inmediatamente
+   después de una respuesta técnica — debe seguir funcionando el camino de "pregunta
+   puramente referencial" (Señal 3 de `isLikelyFollowUp`), que es independiente de este
+   fix y no debería romperse.

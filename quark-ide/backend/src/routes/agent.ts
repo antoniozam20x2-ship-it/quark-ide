@@ -707,16 +707,22 @@ function localKeywordFallback(prompt: string, max = 4): string[] {
   const isCamel     = (w: string) => /^[a-z][a-z0-9]*[A-Z][a-zA-Z0-9]+$/.test(w);
   const isSnake     = (w: string) => /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(w);
   const isShortId   = (w: string) => /^[A-Za-z]\d{1,2}$/.test(w); // S1, S6, T2...
+  // Acrónimos cortos (SL, TP, RR, EMA, RSI, ATR, ADX...) — 2-5 letras mayúsculas.
+  // Sin esto, w.length > 4 los descarta y el término más denso y más
+  // importante del dominio de trading queda invisible para cualquier
+  // chequeo de grounding aguas abajo.
+  const isAcronym   = (w: string) => /^[A-Z]{2,5}$/.test(w.replace(/[?.,;:!]+$/, ''));
 
   const ranked = [
     ...words.filter(isCapsSnake),
     ...words.filter(isCamel),
     ...words.filter(isSnake),
     ...words.filter(isShortId),
+    ...words.filter(isAcronym),
     ...words.filter(w =>
       w.length > 4 &&
       !KEYWORD_STOPWORDS.has(w.toLowerCase()) &&
-      !isCapsSnake(w) && !isCamel(w) && !isSnake(w) && !isShortId(w)
+      !isCapsSnake(w) && !isCamel(w) && !isSnake(w) && !isShortId(w) && !isAcronym(w)
     ),
   ];
   return [...new Set(ranked)].slice(0, max);
@@ -2045,9 +2051,9 @@ router.post('/generate', async (req, res) => {
           // llevaba al modelo a inventar detalles plausibles pero falsos.
           const fastFollowUpGroundingTerms = localKeywordFallback(prompt, 6)
             .map(t => t.toLowerCase())
-            .filter(t => t.length >= 3);
-          const isCachedFragmentGrounded = fastFollowUpGroundingTerms.length === 0
-            || fastFollowUpGroundingTerms.some(t => cachedFragment.toLowerCase().includes(t));
+            .filter(t => t.length >= 2);
+          const isCachedFragmentGrounded = fastFollowUpGroundingTerms.length > 0
+            && fastFollowUpGroundingTerms.some(t => cachedFragment.toLowerCase().includes(t));
           const fragmentCovers = isCachedFragmentGrounded && !isFragmentInsufficient(cachedFragment, fastKeywords);
           if (!isCachedFragmentGrounded) {
             console.log(`[fast-followup] fragmento cacheado no grounded contra "${prompt.slice(0, 60)}" — tratando como fallback (búsqueda adicional)`);
@@ -5383,8 +5389,8 @@ async function loadRepoKnowledgeVerified(
   // aparece literalmente en el resumen guardado.
   if (originalQuery) {
     const groundingTerms = localKeywordFallback(originalQuery, 6);
-    const isGroundedInSummary = groundingTerms.length === 0
-      || groundingTerms.some(t => raw.summary.toLowerCase().includes(t.toLowerCase()));
+    const isGroundedInSummary = groundingTerms.length > 0
+      && groundingTerms.some(t => raw.summary.toLowerCase().includes(t.toLowerCase()));
     if (!isGroundedInSummary) {
       console.warn(`[repo_knowledge] "${raw.concept}" — no grounded contra la pregunta original ("${originalQuery.slice(0, 60)}"), descartando caché`);
       return null;
@@ -6849,9 +6855,8 @@ async function runChatTurn(
         // forma de pregunta de seguimiento, sin depender de reglas fijas de matching.
         let chatCachedHandled = false;
         const chatCachedGroundingTerms = localKeywordFallback(userMessage, 6);
-        const chatCachedFragmentGrounded = chatCachedGroundingTerms.length === 0
-          ? true // sin términos técnicos extraíbles — dejar que Groq decida como antes
-          : chatCachedGroundingTerms.some(t => (chatFastLastAss?.fragment ?? '').toLowerCase().includes(t.toLowerCase()));
+        const chatCachedFragmentGrounded = chatCachedGroundingTerms.length > 0
+          && chatCachedGroundingTerms.some(t => (chatFastLastAss?.fragment ?? '').toLowerCase().includes(t.toLowerCase()));
         if (chatFastLastAss?.fragment && !chatCachedFragmentGrounded) {
           console.log(`[chat-fast-cached-context] fragmento cacheado no grounded contra "${userMessage.slice(0, 60)}" — saltando a búsqueda nueva`);
         }
