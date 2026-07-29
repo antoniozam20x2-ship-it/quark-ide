@@ -1,0 +1,133 @@
+# Prompt — Resolución semántica de conceptos con memoria aprendida (repo-agnóstica)
+
+**Por qué:** `SIGNAL_OS_TRANSLATIONS` solo se activa con `isSignalOS = /ahorar/i.test(repo)`.
+Los otros repos no tienen ningún mecanismo de traducción concepto→símbolo — cuando
+`extractKeywordsForSearch` falla en encontrar el término literal o fuzzy-match, cae
+directo a `localKeywordFallback` (regex local sin lectura de código) sin ningún intento
+de razonar sobre el código real. Agregar un repo nuevo hoy significa escribir y mantener
+una tabla nueva. Esto no escala a 5 repos, y mucho menos a los que vengan después.
+
+El patrón correcto ya existe en el codebase, pero solo se usa en DEEP: `runDeepSearchPipeline`
++ `evaluateSearchConfidence` leen código real, razonan, iteran, y `repo_knowledge` (tabla
+`(repo, concept) → summary/source_files`) ya es memoria persistente aprendida, no escrita a
+mano. Este prompt conecta ese pipeline como fallback de `extractKeywordsForSearch`, en vez
+de agregar una tabla más.
+
+## Diseño — 3 capas, en orden, todas repo-agnósticas salvo la primera (que ya lo es)
+
+1. **Literal + fuzzy contra símbolos reales** (ya existe — `findRealSymbolMatches` +
+   `getRepoSymbolNames`, usado en `unifiedGrepSearch` paso 1.5). No tocar.
+2. **Memoria aprendida** (`repo_knowledge`, ya existe). Si ya se resolvió este concepto
+   para este repo alguna vez, se sirve directo — sin volver a leer ni razonar.
+3. **Resolución semántica nueva** (este prompt): si 1 y 2 no dieron nada, leer los
+   archivos más probables del repo, pedirle a un modelo que identifique el símbolo
+   basándose en el código real (no en una tabla), confirmar que el símbolo propuesto
+   existe de verdad, y guardar el resultado en `repo_knowledge` para la próxima vez.
+
+```
+En agent.ts, agregá esta función nueva cerca de extractKeywordsForSearch. Reutiliza
+funciones que ya existen — no dupliques lógica de lectura de archivos ni de skeleton:
+
+async function resolveConceptSemantically(
+  userQuery: string,
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+): Promise<{ symbols: string[]; fragment: string; sourceFile: string } | null> {
+  // 1. Candidatos: reutilizar listFilesFiltered (ya prioriza server/lib/routes/services)
+  const filePaths = await listFilesFiltered(repo);
+  const topPaths = filePaths.split('\n').filter(Boolean).slice(0, 12);
+
+  // 2. Skeletons: reutilizar generateStructuralSkeleton, ya usado en el DEEP READ path
+  const skeletonParts: string[] = [];
+  await Promise.allSettled(topPaths.map(async (fp) => {
+    try {
+      const fc = await getFileContent(fp, repo);
+      const sk = generateStructuralSkeleton(fc, fp);
+      if (sk && sk !== fc) {
+        skeletonParts.push(`--- ${fp} ---\n${sk.split('\n').slice(0, 25).join('\n')}`);
+      }
+    } catch { /* skip */ }
+  }));
+  if (skeletonParts.length === 0) return null;
+
+  // 3. Preguntarle al modelo qué símbolo corresponde — SIN mencionarle nombres de otros
+  //    repos ni ninguna tabla. Solo el esqueleto real de ESTE repo.
+  send('action', { text: '🧭 Sin match directo — leyendo estructura del repo para razonar...' });
+  const raw = await generateWithFallbackDeep(
+    `PREGUNTA DEL USUARIO: ${userQuery}\n\nESQUELETO DE ARCHIVOS DE ESTE REPO:\n${skeletonParts.join('\n\n')}`,
+    `Sos un ingeniero leyendo este repo por primera vez, sin ninguna tabla de traducciones
+previa. Identificá qué función/constante/variable del esqueleto corresponde al concepto
+de la pregunta, basándote ÚNICAMENTE en los nombres y la estructura visible en ESTE
+esqueleto — no en convenciones de otros proyectos que puedas conocer.
+Respondé SOLO con JSON: {"path": "archivo.ts", "candidateSymbols": ["symA", "symB"]}
+Si no hay ningún candidato razonable, respondé {"path": null, "candidateSymbols": []}.`,
+  );
+
+  let parsed: { path: string | null; candidateSymbols: string[] };
+  try {
+    parsed = JSON.parse(raw.trim().replace(/^```json\s*/i, '').replace(/```\s*$/, ''));
+  } catch { return null; }
+  if (!parsed.path || parsed.candidateSymbols.length === 0) return null;
+
+  // 4. Confirmar contra el índice real — el candidato debe EXISTIR de verdad,
+  //    no basta con que el modelo lo haya propuesto.
+  for (const symName of parsed.candidateSymbols) {
+    const sym = await lookupSymbol(symName, repo);
+    if (sym) {
+      const fc = await getFileContent(sym.filePath, repo);
+      const section = readEnclosingFunction(fc, sym.lineNumber) ?? smartReadSection(fc, sym.lineNumber, 40);
+      if (!section) continue;
+
+      send('action', { text: `✅ Concepto resuelto por lectura real: "${userQuery.slice(0, 40)}" → ${symName} (${sym.filePath}:${sym.lineNumber})` });
+
+      // 5. Guardar en repo_knowledge — la próxima vez este mismo repo lo sirve directo,
+      //    sin volver a leer ni razonar. Esto es "la traducción queda en contexto",
+      //    generalizado a memoria persistente entre sesiones.
+      const concept = conceptSlug(localKeywordFallback(userQuery, 1)[0] ?? userQuery.slice(0, 20));
+      await saveRepoKnowledge(repo, concept, section.excerpt, [{ path: sym.filePath, startLine: section.startLine, endLine: section.endLine }], 'medium');
+
+      return { symbols: [symName], fragment: section.excerpt, sourceFile: sym.filePath };
+    }
+  }
+  return null; // ningún candidato propuesto existe de verdad — no inventar
+}
+
+Modificá extractKeywordsForSearch así — el orden de fallback pasa a ser:
+
+  1. Groq + SIGNAL_OS_TRANSLATIONS (como hoy — dejalo, no rompe nada, sigue sirviendo
+     de atajo rápido cuando pega).
+  2. Si groundedTerms queda vacío: ANTES de caer a localKeywordFallback, probar
+     loadRepoKnowledgeVerified(repo, [conceptSlug candidato], prompt) — memoria ya
+     aprendida para este repo. Si hay match grounded, usarlo directo.
+  3. Si tampoco hay memoria: llamar a resolveConceptSemantically(prompt, repo, send).
+     Si devuelve símbolos, usarlos como keywords de búsqueda.
+  4. Solo si los tres pasos anteriores fallan: localKeywordFallback como último recurso
+     (comportamiento actual, sin cambios).
+```
+
+**Por qué esto resuelve "agregar dominios" de raíz:** ningún paso de este flujo
+menciona el nombre de un repo. `listFilesFiltered`, `generateStructuralSkeleton`,
+`lookupSymbol`, `saveRepoKnowledge` ya son genéricos — se usan hoy en el DEEP path
+para cualquier repo. Lo único que hacía esto imposible en FAST era que
+`extractKeywordsForSearch` no tenía ningún camino de escape hacia esa maquinaria
+cuando la tabla no alcanzaba. Con este cambio, el repo #6 que agregues el año que
+viene funciona el primer día, sin ningún prompt nuevo para Replit.
+
+**Costo:** la resolución semántica solo se dispara cuando 1 y 2 fallan — o sea, la
+primera vez que alguien pregunta por un concepto nuevo en un repo. Paga un skeleton +
+una llamada a Gemini/DeepSeek (fallback chain ya existente). Todas las preguntas
+siguientes sobre el mismo concepto, en ese mismo repo, salen de `repo_knowledge` sin
+volver a leer nada.
+
+**Prueba de verificación:**
+1. En Ahorar: "cómo funciona el stop loss" → debe resolver a `effectiveSlPct`/`slPrice`
+   igual que con la tabla (por resolución semántica esta vez, no por regex).
+2. **Prueba clave — repo sin ninguna tabla:** elegí uno de tus otros repos (ej.
+   Trade-SnipeOS) y preguntá por un concepto de dominio de trading que exista ahí con
+   nombre no obvio (ej. algo equivalente a "stop loss" o "circuit breaker" con otro
+   nombre de variable). Debe resolverse SIN que hayas escrito ninguna línea de código
+   específica para ese repo — si esto funciona, confirma que el problema está resuelto
+   de raíz, no repo por repo.
+3. Repetir la pregunta del punto 2 una segunda vez → debe responder desde
+   `repo_knowledge` (sin el paso de lectura de skeletons), y podés confirmarlo en los
+   logs: no debería aparecer "🧭 Sin match directo — leyendo estructura..." la segunda vez.

@@ -1132,11 +1132,15 @@ function isDomainTermGrounded(term: string, prompt: string): boolean {
   return entry.triggers.some(re => re.test(prompt));
 }
 
-async function extractKeywordsForSearch(prompt: string, repo: string = ''): Promise<string[]> {
+async function extractKeywordsForSearch(
+  prompt: string,
+  repo: string = '',
+  send: (event: string, data: Record<string, unknown>) => void = () => {},
+): Promise<string[]> {
   const keys = getGroqKeys();
   if (keys.length === 0) {
-    console.warn(`[extractKeywordsForSearch] FALLBACK LOCAL — sin Groq keys — query: "${prompt.slice(0, 80)}"`);
-    return localKeywordFallback(prompt);
+    console.warn(`[extractKeywordsForSearch] sin Groq keys — intentando memoria/semántica — query: "${prompt.slice(0, 80)}"`);
+    return fallbackToMemoryOrSemantic(prompt, repo, send);
   }
 
   const isSignalOS = /ahorar/i.test(repo);
@@ -1198,8 +1202,8 @@ REGLAS:
           return grounded;
         });
         if (groundedTerms.length === 0) {
-          console.warn(`[extractKeywordsForSearch] todos los términos fueron descartados por grounding — usando fallback local`);
-          return localKeywordFallback(prompt);
+          console.warn(`[extractKeywordsForSearch] todos los términos fueron descartados por grounding — intentando memoria/semántica`);
+          return fallbackToMemoryOrSemantic(prompt, repo, send);
         }
         console.log(`[agent] AI keywords (post-grounding): [${groundedTerms.join(', ')}]`);
         return groundedTerms;
@@ -1210,8 +1214,112 @@ REGLAS:
     }
   }
 
-  console.warn(`[extractKeywordsForSearch] FALLBACK LOCAL — todas las keys fallaron — query: "${prompt.slice(0, 80)}"`);
+  console.warn(`[extractKeywordsForSearch] todas las keys fallaron — intentando memoria/semántica — query: "${prompt.slice(0, 80)}"`);
+  return fallbackToMemoryOrSemantic(prompt, repo, send);
+}
+
+/**
+ * Fallback de 3 pasos cuando Groq no produce keywords grounded:
+ *  1. Memoria aprendida (repo_knowledge) — sin releer ni razonar.
+ *  2. Resolución semántica nueva — lee skeletons reales y confirma el símbolo.
+ *  3. localKeywordFallback — último recurso, sin acceso al código.
+ */
+async function fallbackToMemoryOrSemantic(
+  prompt: string,
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+): Promise<string[]> {
+  if (repo) {
+    // Paso 2 — memoria aprendida
+    const candidateKws = localKeywordFallback(prompt, 4);
+    const cached = await loadRepoKnowledgeVerified(repo, candidateKws, prompt);
+    if (cached) {
+      console.log(`[extractKeywordsForSearch] resuelto desde repo_knowledge: "${cached.concept}"`);
+      return [cached.concept];
+    }
+
+    // Paso 3 — resolución semántica por lectura real del repo
+    const resolved = await resolveConceptSemantically(prompt, repo, send);
+    if (resolved) {
+      console.log(`[extractKeywordsForSearch] resuelto semánticamente: [${resolved.symbols.join(', ')}]`);
+      return resolved.symbols;
+    }
+  }
+
+  // Paso 4 — último recurso
+  console.warn(`[extractKeywordsForSearch] FALLBACK LOCAL — query: "${prompt.slice(0, 80)}"`);
   return localKeywordFallback(prompt);
+}
+
+/**
+ * Resolución semántica repo-agnóstica: lee skeletons de los archivos más
+ * relevantes del repo, le pide al modelo que identifique el símbolo que
+ * corresponde al concepto de la pregunta, confirma que el símbolo existe
+ * de verdad en el índice local, y guarda el resultado en repo_knowledge
+ * para servir las próximas consultas sobre el mismo concepto sin releer.
+ */
+async function resolveConceptSemantically(
+  userQuery: string,
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+): Promise<{ symbols: string[]; fragment: string; sourceFile: string } | null> {
+  // 1. Candidatos: reutilizar listFilesFiltered (ya prioriza server/lib/routes/services)
+  const filePaths = await listFilesFiltered(repo);
+  const topPaths = filePaths.split('\n').filter(Boolean).slice(0, 12);
+
+  // 2. Skeletons: reutilizar generateStructuralSkeleton, ya usado en el DEEP READ path
+  const skeletonParts: string[] = [];
+  await Promise.allSettled(topPaths.map(async (fp) => {
+    try {
+      const fc = await getFileContent(fp, repo);
+      const sk = generateStructuralSkeleton(fc, fp);
+      if (sk && sk !== fc) {
+        skeletonParts.push(`--- ${fp} ---\n${sk.split('\n').slice(0, 25).join('\n')}`);
+      }
+    } catch { /* skip */ }
+  }));
+  if (skeletonParts.length === 0) return null;
+
+  // 3. Preguntarle al modelo qué símbolo corresponde — SIN mencionarle nombres de otros
+  //    repos ni ninguna tabla. Solo el esqueleto real de ESTE repo.
+  send('action', { text: '🧭 Sin match directo — leyendo estructura del repo para razonar...' });
+  const raw = await generateWithFallbackDeep(
+    `PREGUNTA DEL USUARIO: ${userQuery}\n\nESQUELETO DE ARCHIVOS DE ESTE REPO:\n${skeletonParts.join('\n\n')}`,
+    `Sos un ingeniero leyendo este repo por primera vez, sin ninguna tabla de traducciones
+previa. Identificá qué función/constante/variable del esqueleto corresponde al concepto
+de la pregunta, basándote ÚNICAMENTE en los nombres y la estructura visible en ESTE
+esqueleto — no en convenciones de otros proyectos que puedas conocer.
+Respondé SOLO con JSON: {"path": "archivo.ts", "candidateSymbols": ["symA", "symB"]}
+Si no hay ningún candidato razonable, respondé {"path": null, "candidateSymbols": []}.`,
+  );
+
+  let parsed: { path: string | null; candidateSymbols: string[] };
+  try {
+    parsed = JSON.parse(raw.trim().replace(/^```json\s*/i, '').replace(/```\s*$/, ''));
+  } catch { return null; }
+  if (!parsed.path || parsed.candidateSymbols.length === 0) return null;
+
+  // 4. Confirmar contra el índice real — el candidato debe EXISTIR de verdad,
+  //    no basta con que el modelo lo haya propuesto.
+  for (const symName of parsed.candidateSymbols) {
+    const sym = await lookupSymbol(symName, repo);
+    if (sym) {
+      const fc = await getFileContent(sym.filePath, repo);
+      const section = readEnclosingFunction(fc, sym.lineNumber) ?? smartReadSection(fc, sym.lineNumber, 40);
+      if (!section) continue;
+
+      send('action', { text: `✅ Concepto resuelto por lectura real: "${userQuery.slice(0, 40)}" → ${symName} (${sym.filePath}:${sym.lineNumber})` });
+
+      // 5. Guardar en repo_knowledge — la próxima vez este mismo repo lo sirve directo,
+      //    sin volver a leer ni razonar. Esto es "la traducción queda en contexto",
+      //    generalizado a memoria persistente entre sesiones.
+      const concept = conceptSlug(localKeywordFallback(userQuery, 1)[0] ?? userQuery.slice(0, 20));
+      await saveRepoKnowledge(repo, concept, section.excerpt, [{ path: sym.filePath, startLine: section.startLine, endLine: section.endLine }], 'medium');
+
+      return { symbols: [symName], fragment: section.excerpt, sourceFile: sym.filePath };
+    }
+  }
+  return null; // ningún candidato propuesto existe de verdad — no inventar
 }
 
 async function searchAndLoadFiles(
