@@ -1152,14 +1152,7 @@ async function extractKeywordsForSearch(
     return fallbackToMemoryOrSemantic(prompt, repo, send);
   }
 
-  const isSignalOS = /ahorar/i.test(repo);
-  const signalOSLayer = isSignalOS ? `
-TRADUCCIONES ESPECÍFICAS (solo para este repo — aplicalas SOLO si el prompt menciona literalmente uno de los triggers indicados):
-${SIGNAL_OS_TRANSLATIONS.map(t => `- ${t.displayTriggers} → ${t.term}`).join('\n')}
-` : '';
-
   const systemPrompt = `Extraé los identificadores técnicos y nombres propios del prompt del usuario para buscar en GitHub Code Search.
-${signalOSLayer}
 REGLAS:
 - Extraé exactamente los términos técnicos, nombres de funciones, clases o variables que aparecen en el prompt.
 - No agregues términos de contexto genérico que no estén mencionados en el prompt.
@@ -1199,23 +1192,23 @@ REGLAS:
       const raw = json.choices?.[0]?.message?.content ?? '[]';
       const parsed = JSON.parse(raw.trim()) as unknown;
       if (Array.isArray(parsed) && parsed.every((t) => typeof t === 'string')) {
-        // Grounding: descartar traducciones de dominio cuyo trigger literal
-        // NO aparece en el prompt real — Groq puede generalizar por parecido
-        // semántico (ej. "pérdidas" → circuitBreaker) sin que el trigger
-        // exacto ("streak"/"racha") esté presente.
-        const groundedTerms = (parsed as string[]).filter(t => {
-          const grounded = isDomainTermGrounded(t, prompt);
-          if (!grounded) {
-            console.warn(`[extractKeywordsForSearch] descartando "${t}" — trigger de dominio no encontrado literalmente en: "${prompt.slice(0, 80)}"`);
+        // Reparación repo-agnóstica: para cada término devuelto por Groq, buscar
+        // si coincide (fuzzy) con un símbolo real del repo. Si hay match, usar
+        // el nombre canónico real en vez del término crudo — reemplaza la
+        // necesidad de una tabla de traducciones por repo.
+        const realSymbolNames = await getRepoSymbolNames(repo);
+        const repairedTerms = (parsed as string[]).map(t => {
+          if (realSymbolNames.length === 0) return t;
+          const fuzzyMatches = findRealSymbolMatches(t, realSymbolNames, 1);
+          if (fuzzyMatches.length > 0 && fuzzyMatches[0] !== t) {
+            console.log(`[extractKeywordsForSearch] "${t}" → símbolo real "${fuzzyMatches[0]}"`);
+            return fuzzyMatches[0];
           }
-          return grounded;
+          return t;
         });
-        if (groundedTerms.length === 0) {
-          console.warn(`[extractKeywordsForSearch] todos los términos fueron descartados por grounding — intentando memoria/semántica`);
-          return fallbackToMemoryOrSemantic(prompt, repo, send);
-        }
-        console.log(`[agent] AI keywords (post-grounding): [${groundedTerms.join(', ')}]`);
-        return groundedTerms;
+        const dedupedTerms = [...new Set(repairedTerms)];
+        console.log(`[agent] AI keywords (post-repair): [${dedupedTerms.join(', ')}]`);
+        return dedupedTerms;
       }
       console.warn(`[extractKeywordsForSearch] respuesta no es array JSON válido ("${raw.slice(0, 60)}") — probando siguiente key`);
     } catch (err) {

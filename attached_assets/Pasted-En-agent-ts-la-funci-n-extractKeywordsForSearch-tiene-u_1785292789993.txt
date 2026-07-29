@@ -1,0 +1,76 @@
+En agent.ts, la función `extractKeywordsForSearch` tiene una capa hardcodeada para un 
+solo repo: detecta `isSignalOS = /ahorar/i.test(repo)` e inyecta una tabla fija 
+`SIGNAL_OS_TRANSLATIONS` (trigger de lenguaje natural → nombre de función canónico, 
+ej. "FVG" → checkS6Bull) en el system prompt de Groq. Después valida cada término 
+devuelto con `isDomainTermGrounded()`, que solo chequea la tabla de Signal OS.
+
+Esto no escala: cada repo nuevo necesitaría su propia tabla mantenida a mano.
+
+Ya existe en el archivo `findRealSymbolMatches(term, symbolNames, maxResults)` y 
+`getRepoSymbolNames(repo)` (importado de localRepos.js) — el mismo mecanismo repo-agnóstico 
+que ya usa `unifiedGrepSearch` (paso 1.5, fuzzy match) y `isGroundedInRepoSymbols`. 
+Reemplazan la necesidad de una tabla de traducciones: en vez de mapear triggers de lenguaje 
+natural a nombres canónicos a mano, se busca directamente en el índice real de símbolos 
+del repo cuál se parece al término extraído.
+
+CAMBIOS REQUERIDOS en extractKeywordsForSearch:
+
+1. Eliminar estas líneas (declaración de isSignalOS y signalOSLayer):
+   const isSignalOS = /ahorar/i.test(repo);
+   const signalOSLayer = isSignalOS ? `
+   TRADUCCIONES ESPECÍFICAS (solo para este repo — aplicalas SOLO si el prompt menciona literalmente uno de los triggers indicados):
+   ${SIGNAL_OS_TRANSLATIONS.map(t => `- ${t.displayTriggers} → ${t.term}`).join('\n')}
+   ` : '';
+
+2. En la construcción de systemPrompt, quitar la interpolación ${signalOSLayer} — dejar 
+   el system prompt genérico sin esa sección (el resto del prompt no cambia).
+
+3. Reemplazar el bloque de post-procesamiento que usa isDomainTermGrounded:
+      if (Array.isArray(parsed) && parsed.every((t) => typeof t === 'string')) {
+        // Grounding: descartar traducciones de dominio cuyo trigger literal
+        // NO aparece en el prompt real — Groq puede generalizar por parecido
+        // semántico (ej. "pérdidas" → circuitBreaker) sin que el trigger
+        // exacto ("streak"/"racha") esté presente.
+        const groundedTerms = (parsed as string[]).filter(t => {
+          const grounded = isDomainTermGrounded(t, prompt);
+          if (!grounded) {
+            console.warn(`[extractKeywordsForSearch] descartando "${t}" — trigger de dominio no encontrado literalmente en: "${prompt.slice(0, 80)}"`);
+          }
+          return grounded;
+        });
+        if (groundedTerms.length === 0) {
+          console.warn(`[extractKeywordsForSearch] todos los términos fueron descartados por grounding — usando fallback local`);
+          return localKeywordFallback(prompt);
+        }
+        console.log(`[agent] AI keywords (post-grounding): [${groundedTerms.join(', ')}]`);
+        return groundedTerms;
+      }
+
+   por:
+      if (Array.isArray(parsed) && parsed.every((t) => typeof t === 'string')) {
+        // Reparación repo-agnóstica: para cada término devuelto por Groq, buscar
+        // si coincide (fuzzy) con un símbolo real del repo. Si hay match, usar
+        // el nombre canónico real en vez del término crudo — reemplaza la
+        // necesidad de una tabla de traducciones por repo.
+        const realSymbolNames = await getRepoSymbolNames(repo);
+        const repairedTerms = (parsed as string[]).map(t => {
+          if (realSymbolNames.length === 0) return t;
+          const fuzzyMatches = findRealSymbolMatches(t, realSymbolNames, 1);
+          if (fuzzyMatches.length > 0 && fuzzyMatches[0] !== t) {
+            console.log(`[extractKeywordsForSearch] "${t}" → símbolo real "${fuzzyMatches[0]}"`);
+            return fuzzyMatches[0];
+          }
+          return t;
+        });
+        const dedupedTerms = [...new Set(repairedTerms)];
+        console.log(`[agent] AI keywords (post-repair): [${dedupedTerms.join(', ')}]`);
+        return dedupedTerms;
+      }
+
+4. Dejar SIGNAL_OS_TRANSLATIONS e isDomainTermGrounded definidas pero sin uso — no las 
+   borres todavía, es un cleanup para más adelante.
+
+NO toques classifyAndRespondFast, isGroundedInRepoSymbols, unifiedGrepSearch, ni ningún 
+otro punto del pipeline — este cambio es exclusivamente dentro de extractKeywordsForSearch.
+
+Verificá que compila con tsc sin errores antes de terminar.
