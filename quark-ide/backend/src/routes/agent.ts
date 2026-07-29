@@ -6682,7 +6682,12 @@ async function runChatTurn(
         0,
       );
 
-      if (!groqAnswer.trim().startsWith('NEEDS_TOOLS:')) {
+      // Parsing tolerante: Groq puede envolver el sentinel en markdown
+      // (**NEEDS_TOOLS:**), agregar texto antes, o variar mayúsculas/espacios.
+      // startsWith() exacto se rompe con cualquiera de esas variantes.
+      const needsToolsMatch = groqAnswer.match(/\*{0,2}NEEDS_TOOLS:\*{0,2}\s*(.*)/is);
+
+      if (!needsToolsMatch) {
         send('chat_message', { text: groqAnswer });
         messages.push({ role: 'assistant', content: [{ type: 'text', text: groqAnswer }] });
         await saveChatHistory(sessionId, messages);
@@ -6694,7 +6699,7 @@ async function runChatTurn(
         return;
       }
 
-      groqReason = groqAnswer.replace('NEEDS_TOOLS:', '').trim();
+      groqReason = needsToolsMatch[1].trim();
     }
 
     // ── Router de complejidad de búsqueda ─────────────────────────────────────

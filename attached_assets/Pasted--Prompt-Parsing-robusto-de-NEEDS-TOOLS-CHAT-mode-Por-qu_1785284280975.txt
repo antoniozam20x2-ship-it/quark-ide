@@ -1,0 +1,83 @@
+# Prompt — Parsing robusto de NEEDS_TOOLS: (CHAT 💬 mode)
+
+**Por qué:** con `temperature: 0` ya aplicado, Groq ahora decide de forma
+consistente que hay que escalar a búsqueda — pero a veces devuelve el
+sentinel envuelto en markdown (`**NEEDS_TOOLS:**` en vez de `NEEDS_TOOLS:`).
+El chequeo actual usa `.trim().startsWith('NEEDS_TOOLS:')`, que no matchea
+contra esa variante, así que la respuesta se muestra tal cual (con el
+sentinel visible) en vez de disparar la búsqueda — haciendo que CHAT 💬
+mode se comporte distinto a Brous 💬 pese a compartir el mismo backend,
+tal como pasó con "NEEDS_SEARCH:" en el camino de contexto cacheado
+(ya corregido). Este es el mismo patrón de fragilidad, en el punto de
+entrada del triage.
+
+```
+En agent.ts, dentro de runChatTurn, busca este bloque exacto:
+
+      groqAnswer = await callGroqAgent(
+        userMessage,
+        await buildTriagePrompt(cacheHint, repo),
+        fastFinding ? 768 : 512,
+        groqHistory,
+        0,
+      );
+
+      if (!groqAnswer.trim().startsWith('NEEDS_TOOLS:')) {
+        send('chat_message', { text: groqAnswer });
+        messages.push({ role: 'assistant', content: [{ type: 'text', text: groqAnswer }] });
+        await saveChatHistory(sessionId, messages);
+        // Guardar resumen de la respuesta de Groq en contexto compartido
+        const groqSharedSummary = await summarizeForSharedContext(groqAnswer);
+        if (groqSharedSummary) {
+          await saveContextSummary(repo, groqSharedSummary, 'chat').catch(() => {});
+        }
+        return;
+      }
+
+      groqReason = groqAnswer.replace('NEEDS_TOOLS:', '').trim();
+    }
+
+Reemplázalo por:
+
+      groqAnswer = await callGroqAgent(
+        userMessage,
+        await buildTriagePrompt(cacheHint, repo),
+        fastFinding ? 768 : 512,
+        groqHistory,
+        0,
+      );
+
+      // Parsing tolerante: Groq puede envolver el sentinel en markdown
+      // (**NEEDS_TOOLS:**), agregar texto antes, o variar mayúsculas/espacios.
+      // startsWith() exacto se rompe con cualquiera de esas variantes.
+      const needsToolsMatch = groqAnswer.match(/\*{0,2}NEEDS_TOOLS:\*{0,2}\s*(.*)/is);
+
+      if (!needsToolsMatch) {
+        send('chat_message', { text: groqAnswer });
+        messages.push({ role: 'assistant', content: [{ type: 'text', text: groqAnswer }] });
+        await saveChatHistory(sessionId, messages);
+        // Guardar resumen de la respuesta de Groq en contexto compartido
+        const groqSharedSummary = await summarizeForSharedContext(groqAnswer);
+        if (groqSharedSummary) {
+          await saveContextSummary(repo, groqSharedSummary, 'chat').catch(() => {});
+        }
+        return;
+      }
+
+      groqReason = needsToolsMatch[1].trim();
+    }
+
+No toques nada fuera de este bloque — el resto de runChatTurn (grounding,
+DEEP pre-fetch, Haiku) sigue igual.
+```
+
+**Nota sobre el bloque `if (grounding.grounded) { ... }` que precede a esto:**
+ese bloque ya construye `groqAnswer` manualmente como
+`` `NEEDS_TOOLS: "${grounding.matchedTerm}" coincide con...` `` — ese formato
+ya es compatible con el nuevo regex, no requiere cambios.
+
+**Prueba de verificación:** repetir "cómo funciona el stop loss" en CHAT 💬
+mode varias veces en sesiones nuevas. Si Groq devuelve el sentinel con
+markdown (`**NEEDS_TOOLS:**`) o con texto antes, ahora debe igual disparar
+la búsqueda — el comportamiento debe quedar indistinguible del de Brous
+💬 para la misma pregunta, ya que ambos comparten `runChatTurn`.
