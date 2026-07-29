@@ -1155,6 +1155,18 @@ function isDomainTermGrounded(term: string, prompt: string): boolean {
   return entry.triggers.some(re => re.test(prompt));
 }
 
+/** Calcula, de forma puramente determinística (sin IA), qué términos de
+ *  SIGNAL_OS_TRANSLATIONS tienen su trigger literal presente en el prompt.
+ *  Se usa para FORZAR estas traducciones incluso cuando Groq no las propone
+ *  — el grounding existente solo puede filtrar lo que Groq devuelve, no
+ *  agregar lo que Groq omitió. */
+function getForcedDomainMatches(prompt: string, repo: string): string[] {
+  if (!isSignalOS(repo)) return [];
+  return SIGNAL_OS_TRANSLATIONS
+    .filter(t => t.triggers.some(re => re.test(prompt)))
+    .map(t => t.term);
+}
+
 async function extractKeywordsForSearch(
   prompt: string,
   repo: string = '',
@@ -1163,7 +1175,9 @@ async function extractKeywordsForSearch(
   const keys = getGroqKeys();
   if (keys.length === 0) {
     console.warn(`[extractKeywordsForSearch] sin Groq keys — intentando memoria/semántica — query: "${prompt.slice(0, 80)}"`);
-    return fallbackToMemoryOrSemantic(prompt, repo, send);
+    const fallbackTerms = await fallbackToMemoryOrSemantic(prompt, repo, send);
+    const forced = getForcedDomainMatches(prompt, repo);
+    return [...new Set([...fallbackTerms, ...forced])];
   }
 
   const systemPrompt = `Extraé los identificadores técnicos y nombres propios del prompt del usuario para buscar en GitHub Code Search.
@@ -1221,8 +1235,13 @@ REGLAS:
           return t;
         });
         const dedupedTerms = [...new Set(repairedTerms)];
-        console.log(`[agent] AI keywords (post-repair): [${dedupedTerms.join(', ')}]`);
-        return dedupedTerms;
+        const forcedMatches = getForcedDomainMatches(prompt, repo);
+        const finalTerms = [...new Set([...dedupedTerms, ...forcedMatches])];
+        if (forcedMatches.length > 0) {
+          console.log(`[extractKeywordsForSearch] forzando traducciones de dominio no propuestas por Groq: [${forcedMatches.join(', ')}]`);
+        }
+        console.log(`[agent] AI keywords (post-repair + forced): [${finalTerms.join(', ')}]`);
+        return finalTerms;
       }
       console.warn(`[extractKeywordsForSearch] respuesta no es array JSON válido ("${raw.slice(0, 60)}") — probando siguiente key`);
     } catch (err) {
@@ -1231,7 +1250,9 @@ REGLAS:
   }
 
   console.warn(`[extractKeywordsForSearch] todas las keys fallaron — intentando memoria/semántica — query: "${prompt.slice(0, 80)}"`);
-  return fallbackToMemoryOrSemantic(prompt, repo, send);
+  const fallbackTerms = await fallbackToMemoryOrSemantic(prompt, repo, send);
+  const forced = getForcedDomainMatches(prompt, repo);
+  return [...new Set([...fallbackTerms, ...forced])];
 }
 
 /**
