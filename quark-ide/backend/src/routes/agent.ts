@@ -1095,6 +1095,43 @@ Respuesta esperada:
   return [];
 }
 
+// Tabla estructurada de traducciones de dominio — cada entrada define sus
+// triggers literales (regex) para poder VERIFICAR que el trigger realmente
+// está en el prompt del usuario antes de aceptar la traducción, en vez de
+// confiar en que Groq respetó la instrucción "solo si menciona exactamente".
+interface DomainTranslation {
+  term: string;
+  triggers: RegExp[];
+  displayTriggers: string; // texto legible para el prompt de Groq
+}
+
+const SIGNAL_OS_TRANSLATIONS: DomainTranslation[] = [
+  { term: 'checkS1Bull',        triggers: [/\bRVOL\b/i, /\bse[ñn]al\s*S1\b/i],                          displayTriggers: '"RVOL" o "señal S1"' },
+  { term: 'checkS2',            triggers: [/\bSMC\b/i, /\bsmart\s*money\b/i, /\bse[ñn]al\s*S2\b/i],       displayTriggers: '"señal S2" o "SMC" o "smart money"' },
+  { term: 'checkS3Bull',        triggers: [/\balineaci[oó]n\b/i, /\bEMA\b/i, /\bse[ñn]al\s*S3\b/i],       displayTriggers: '"señal S3" o "alineación" o "EMA"' },
+  { term: 'checkS4',            triggers: [/\bse[ñn]al\s*S4\b/i],                                         displayTriggers: '"señal S4"' },
+  { term: 'checkS5ImpulsBull',  triggers: [/\bimpulso\b/i, /\bearly\b/i, /\bse[ñn]al\s*S5\b/i],           displayTriggers: '"señal S5" o "impulso" o "early"' },
+  { term: 'checkS6Bull',        triggers: [/\bFVG\b/i, /\bfair\s*value\s*gap\b/i, /\bse[ñn]al\s*S6\b/i],  displayTriggers: '"señal S6" o "FVG" o "fair value gap"' },
+  { term: 'trailingStop',       triggers: [/\btrailing\b/i, /\bstop\s*m[oó]vil\b/i],                     displayTriggers: '"trailing" o "stop móvil" o "trailing stop"' },
+  { term: 'moving_plan',        triggers: [/\btrailing\b/i, /\bstop\s*m[oó]vil\b/i],                     displayTriggers: '"trailing" o "stop móvil" o "trailing stop"' },
+  { term: 'rangeRate',          triggers: [/\btrailing\b/i, /\bstop\s*m[oó]vil\b/i],                     displayTriggers: '"trailing" o "stop móvil" o "trailing stop"' },
+  { term: 'circuitBreaker',     triggers: [/\bstreak\b/i, /\bracha\b/i, /\bp[eé]rdidas?\s*consecutivas?\b/i], displayTriggers: '"streak" o "racha" o "pérdidas consecutivas"' },
+];
+
+/** Verifica que al menos uno de los triggers literales de una traducción de
+ *  dominio aparezca de verdad en el prompt del usuario — evita que Groq
+ *  devuelva una traducción por parecido semántico sin el trigger real.
+ *  También acepta el término cuando el propio identificador canónico aparece
+ *  literalmente en el prompt (ej. el usuario escribe "circuitBreaker" directamente). */
+function isDomainTermGrounded(term: string, prompt: string): boolean {
+  const entry = SIGNAL_OS_TRANSLATIONS.find(t => t.term === term);
+  if (!entry) return true; // no es un término mapeado — no aplica este chequeo
+  // Aceptar si el identificador canónico aparece literalmente en el prompt
+  const canonicalRe = new RegExp(`\\b${term}\\b`);
+  if (canonicalRe.test(prompt)) return true;
+  return entry.triggers.some(re => re.test(prompt));
+}
+
 async function extractKeywordsForSearch(prompt: string, repo: string = ''): Promise<string[]> {
   const keys = getGroqKeys();
   if (keys.length === 0) {
@@ -1104,15 +1141,8 @@ async function extractKeywordsForSearch(prompt: string, repo: string = ''): Prom
 
   const isSignalOS = /ahorar/i.test(repo);
   const signalOSLayer = isSignalOS ? `
-TRADUCCIONES ESPECÍFICAS (solo para este repo — aplicalas si el prompt menciona exactamente estos conceptos):
-- "RVOL" o "señal S1" → checkS1Bull
-- "señal S2" o "SMC" o "smart money" → checkS2
-- "señal S3" o "alineación" o "EMA" → checkS3Bull
-- "señal S4" → checkS4
-- "señal S5" o "impulso" o "early" → checkS5ImpulsBull
-- "señal S6" o "FVG" o "fair value gap" → checkS6Bull
-- "trailing" o "stop móvil" o "trailing stop" → trailingStop, moving_plan, rangeRate
-- "streak" o "racha" o "pérdidas consecutivas" → circuitBreaker
+TRADUCCIONES ESPECÍFICAS (solo para este repo — aplicalas SOLO si el prompt menciona literalmente uno de los triggers indicados):
+${SIGNAL_OS_TRANSLATIONS.map(t => `- ${t.displayTriggers} → ${t.term}`).join('\n')}
 ` : '';
 
   const systemPrompt = `Extraé los identificadores técnicos y nombres propios del prompt del usuario para buscar en GitHub Code Search.
@@ -1156,8 +1186,23 @@ REGLAS:
       const raw = json.choices?.[0]?.message?.content ?? '[]';
       const parsed = JSON.parse(raw.trim()) as unknown;
       if (Array.isArray(parsed) && parsed.every((t) => typeof t === 'string')) {
-        console.log(`[agent] AI keywords: [${parsed.join(', ')}]`);
-        return parsed as string[];
+        // Grounding: descartar traducciones de dominio cuyo trigger literal
+        // NO aparece en el prompt real — Groq puede generalizar por parecido
+        // semántico (ej. "pérdidas" → circuitBreaker) sin que el trigger
+        // exacto ("streak"/"racha") esté presente.
+        const groundedTerms = (parsed as string[]).filter(t => {
+          const grounded = isDomainTermGrounded(t, prompt);
+          if (!grounded) {
+            console.warn(`[extractKeywordsForSearch] descartando "${t}" — trigger de dominio no encontrado literalmente en: "${prompt.slice(0, 80)}"`);
+          }
+          return grounded;
+        });
+        if (groundedTerms.length === 0) {
+          console.warn(`[extractKeywordsForSearch] todos los términos fueron descartados por grounding — usando fallback local`);
+          return localKeywordFallback(prompt);
+        }
+        console.log(`[agent] AI keywords (post-grounding): [${groundedTerms.join(', ')}]`);
+        return groundedTerms;
       }
       console.warn(`[extractKeywordsForSearch] respuesta no es array JSON válido ("${raw.slice(0, 60)}") — probando siguiente key`);
     } catch (err) {
