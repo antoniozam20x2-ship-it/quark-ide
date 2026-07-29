@@ -816,11 +816,12 @@ const GEN_KEYWORDS   = /\b(genera|generar|crea|crear|escribe|escribir|implementa
 const ANALYSIS_KEYWORDS = /\b(qué significa|qué es|cómo funciona|explica|cuándo se activa|por qué|cuáles son|qué argumentos|qué condiciones|cómo se calcula|señal|signal|S1|S2|S3|S4|S5|S6|score|scoring|bias|screener|scanner|trailing|streak|circuit)\b/i;
 
 function detectReadIntent(prompt: string): boolean {
-  const hasRead     = READ_KEYWORDS.test(prompt);
-  const hasGen      = GEN_KEYWORDS.test(prompt);
-  const hasAnalysis = ANALYSIS_KEYWORDS.test(prompt);
-  // Read intent only if has read keywords AND no explicit generation keywords
-  return (hasRead || hasAnalysis) && !hasGen;
+  // Default a 'read' — solo es 'modify' si hay una señal EXPLÍCITA de generación/
+  // modificación en el texto (GEN_KEYWORDS). Sin esa señal, cualquier pregunta
+  // factual o ambigua (que no matchea ningún verbo conocido) cae en 'read', que
+  // es el camino seguro y grounded contra el índice de símbolos.
+  const hasGen = GEN_KEYWORDS.test(prompt);
+  return !hasGen;
 }
 
 async function classifyIntentWithAI(prompt: string): Promise<'read' | 'modify'> {
@@ -844,6 +845,10 @@ Responde solo la palabra, sin explicación, sin puntuación.`;
   try {
     const raw = await callGroqAgent(prompt, systemPrompt, 10);
     const cleaned = raw.trim().toLowerCase();
+    if (cleaned.includes('modify') && !GEN_KEYWORDS.test(prompt)) {
+      console.warn(`[classifyIntentWithAI] Groq dijo "modify" pero no hay verbo explícito de generación en el mensaje — forzando "read" (prompt: "${prompt.slice(0, 60)}")`);
+      return 'read';
+    }
     return cleaned.includes('modify') ? 'modify' : 'read';
   } catch {
     return detectReadIntent(prompt) ? 'read' : 'modify';
