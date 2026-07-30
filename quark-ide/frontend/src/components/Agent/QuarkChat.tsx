@@ -431,7 +431,12 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
     }}>
 
       {/* ── Header ──────────────────────────────────────────────────────────── */}
+      {/* position + zIndex here are REQUIRED: backdrop-filter creates a stacking
+          context, and without an explicit z-index the message feed (later in DOM)
+          paints over the absolutely-positioned ProjectSwitcher dropdown. */}
       <div style={{
+        position: 'relative',
+        zIndex: 10,
         display: 'flex',
         alignItems: 'center',
         background: T.glassBg,

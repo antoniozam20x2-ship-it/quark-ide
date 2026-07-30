@@ -130,18 +130,22 @@ export default function ProjectSwitcher({ activeProject, onSwitch }: Props) {
         }}>▼</span>
       </button>
 
-      {/* Dropdown */}
+      {/* Dropdown — solid background required: this panel sits above glass chat
+          bubbles that have backdrop-filter (which create stacking contexts).
+          A semi-transparent background here would bleed through. z-index 9999
+          places it above the header's own stacking context (z-index: 10 in
+          QuarkChat) and any other composited layers in the layout. */}
       {open && (
         <div style={{
           position: 'absolute',
           top: '100%',
           left: 0,
           right: 0,
-          zIndex: 100,
-          background: '#0d0d1a',
-          border: '1px solid #1e1e3f',
+          zIndex: 9999,
+          background: '#121212',
+          border: '1px solid rgba(255,255,255,0.12)',
           borderTop: 'none',
-          boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.75), 0 2px 8px rgba(0,0,0,0.5)',
         }}>
           {PROJECTS.map((p) => {
             const isActive = p.repo === activeProject.repo;
