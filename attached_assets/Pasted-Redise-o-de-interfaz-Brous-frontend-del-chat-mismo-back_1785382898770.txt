@@ -1,0 +1,51 @@
+Rediseño de interfaz — Brous (frontend del chat, mismo backend que Quark Chat).
+
+PASO 1 — Investigar antes de tocar nada:
+Identificá el framework del frontend de Brous (React/Vue/vanilla JS/etc.), dónde 
+vive el componente de chat, y cómo actualmente consume (o no) el evento SSE 
+'model_active' que ya emite el backend con este shape:
+  { model: 'Groq (Llama 3.3 70B)', tier: 'fast' }
+  { model: 'Haiku 4.5', tier: 'balanced' }
+  { model: 'Sonnet 5', tier: 'deep' }
+No asumas la estructura — confirmala leyendo el código real primero.
+
+PASO 2 — Rediseño visual (oscuro minimalista, alto contraste):
+- Fondo: negro/casi negro (#0a0a0a o similar), NO gris medio.
+- Texto: blanco/gris muy claro (#f5f5f5) para contenido principal — contraste alto, 
+  legible sin esfuerzo.
+- Acentos: UN solo color de acento, usado con moderación (bordes activos, el 
+  indicador de modelo, estados de foco) — nada de múltiples colores neón compitiendo.
+- Tipografía: jerarquía clara por peso/tamaño, no por color. Evitar grises 
+  intermedios de bajo contraste para texto secundario — usar opacidad sobre blanco 
+  en su lugar (ej. texto blanco al 60-70% opacidad, no gris #666 plano).
+- Bordes y separadores: sutiles, 1px, bajo contraste respecto al fondo — la 
+  jerarquía la da el espaciado, no líneas gruesas.
+
+PASO 3 — Indicador de modelo activo con ícono 3D animado:
+Crear un componente que escuche 'model_active' y muestre:
+- Un ícono/chip 3D (usar CSS: transform-style: preserve-3d, perspective en el 
+  contenedor padre) que ROTA en loop (rotateY, animación infinita, ~3-4s por 
+  vuelta) SOLO mientras el modelo está generando/respondiendo. Al quedar en 
+  reposo, el ícono se asienta en su cara frontal (sin rotación).
+- Forma/geometría distinta por tier para diferenciar de un vistazo sin depender 
+  del texto:
+    · fast (Groq)    → geometría simple, ej. un triángulo/rombo 3D — sensación 
+                        de velocidad
+    · balanced (Haiku) → un hexágono o chip cúbico 3D
+    · deep (Sonnet)   → una esfera 3D con más detalle/sombreado — sensación de 
+                        mayor profundidad de procesamiento
+  Todas en escala de grises/blanco (consistente con el estilo minimalista) — la 
+  diferenciación es por FORMA y sutileza de sombra, no por color saturado.
+- Debajo o al lado del ícono, el nombre del modelo en texto pequeño (ej. "Sonnet 5").
+- Sombra/profundidad sutil (box-shadow o drop-shadow con blur suave) para reforzar 
+  la sensación 3D sin romper el minimalismo — nada de glow neón.
+- Transición suave (fade + scale) al cambiar de un modelo a otro entre turnos.
+
+RESTRICCIONES:
+- No modificar ninguna lógica de backend ni el shape del evento 'model_active'.
+- No tocar la lógica de routing (classifyIntent, runChatTurn, etc.) — esto es 
+  puramente visual/frontend.
+- Mantené la funcionalidad existente del chat intacta — es un rediseño, no una 
+  reescritura.
+
+Mostrame el diff antes de aplicar.

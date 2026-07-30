@@ -810,20 +810,20 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0,
-      background: '#0d0d1a', overflow: 'hidden',
+      background: '#0a0a0a', overflow: 'hidden',
     }}>
       {/* Header */}
       <div style={{
-        padding: '8px 12px', borderBottom: '1px solid #1e1e3f',
-        display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, background: '#0d0d1a',
+        padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.07)',
+        display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, background: '#0a0a0a',
       }}>
-        <span style={{ color: '#00ff88', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em' }}>
-          🤖 QUARK AGENT
+        <span style={{ color: 'rgba(255,255,255,0.88)', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em' }}>
+          QUARK AGENT
         </span>
-        <span style={{ color: '#3a3a5c', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+        <span style={{ color: 'rgba(255,255,255,0.28)', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
           — {activeProject.emoji} {activeProject.name}
           {isBackend && (
-            <span style={{ color: '#f59e0b', marginLeft: 6, fontSize: 10 }}>backend</span>
+            <span style={{ color: 'rgba(255,255,255,0.42)', marginLeft: 6, fontSize: 10 }}>backend</span>
           )}
         </span>
         {(feed.length > 0 || result || commitResult || fixResult) && !running && (
@@ -838,14 +838,14 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               saveSession([], null, null, null);
             }}
             style={{
-              background: 'rgba(0,255,136,0.06)', border: '1px solid #1e3f2a',
-              borderRadius: 4, color: '#00ff88',
+              background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 4, color: 'rgba(255,255,255,0.65)',
               fontFamily: 'JetBrains Mono, monospace', fontSize: 9, fontWeight: 700,
               padding: '3px 8px', cursor: 'pointer', letterSpacing: '0.04em',
               whiteSpace: 'nowrap', transition: 'background 0.15s', flexShrink: 0,
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(0,255,136,0.14)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(0,255,136,0.06)'; }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.09)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
           >
             ＋ Nueva sesión
           </button>
@@ -858,14 +858,14 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         display: 'flex', flexDirection: 'column', gap: 6,
       }}>
         {sessionLoading && (
-          <p style={{ color: '#3a3a5c', fontSize: 11, margin: 0, fontFamily: 'JetBrains Mono, monospace' }}>
-            ⚛ Cargando sesión...
+          <p style={{ color: 'rgba(255,255,255,0.28)', fontSize: 11, margin: 0, fontFamily: 'JetBrains Mono, monospace' }}>
+            Cargando sesión...
           </p>
         )}
         {!sessionLoading && feed.length === 0 && !running && !result && (
-          <p style={{ color: '#3a3a5c', fontSize: 12, margin: 0, lineHeight: 1.6 }}>
+          <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: 12, margin: 0, lineHeight: 1.6 }}>
             Describe lo que quieres construir en{' '}
-            <span style={{ color: '#00ff88' }}>{activeProject.name}</span>.
+            <span style={{ color: 'rgba(255,255,255,0.88)' }}>{activeProject.name}</span>.
             El Agent leerá el repo, generará los archivos y te dará la opción de hacer commit.
           </p>
         )}
@@ -879,7 +879,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               t.startsWith('DÓNDE:')    ? '#00D4FF' :
               t.startsWith('POR QUÉ:') ? '#FFD93D' :
               t.startsWith('SOLUCIÓN:') ? '#6BCB77' :
-              isAnalysis                 ? '#00ff88' :
+              isAnalysis                 ? 'rgba(255,255,255,0.88)' :
               t.startsWith('⚠️')          ? '#FFD93D' :
               t.startsWith('🎯')          ? '#00D4FF' :
               (t.startsWith('🔍') || t.startsWith('📖') || t.startsWith('📂') || t.startsWith('⚡')) ? '#6b7280' :
@@ -895,9 +895,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                       ),
                       code: ({ children }) => (
                         <code style={{
-                          background: '#0a0a16',
-                          border: '1px solid #1e1e3f',
-                          color: '#a78bfa',
+                          background: '#080808',
+                          border: '1px solid rgba(255,255,255,0.07)',
+                          color: 'rgba(255,255,255,0.55)',
                           borderRadius: 3,
                           padding: '1px 5px',
                           fontSize: 11,
@@ -922,9 +922,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
           if (ev.event === 'file') return (
             <div key={i} style={{
-              background: '#0a0a16', border: '1px solid #1e1e3f', borderLeft: '2px solid #00ff88',
+              background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)', borderLeft: '2px solid rgba(255,255,255,0.22)',
               borderRadius: 4, padding: '3px 10px',
-              color: '#6b7280', fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
+              color: 'rgba(255,255,255,0.38)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
             }}>
               📄 {ev.path}
             </div>
@@ -932,23 +932,23 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
           if (ev.event === 'code') return (
             <div key={i} style={{
-              background: '#0a0a16',
-              border: '1px solid #1e1e3f',
-              borderLeft: '2px solid #7c3aed',
+              background: '#080808',
+              border: '1px solid rgba(255,255,255,0.07)',
+              borderLeft: '2px solid rgba(255,255,255,0.2)',
               borderRadius: 6,
               overflow: 'hidden',
             }}>
               {/* file path header */}
               <div style={{
                 padding: '4px 10px',
-                borderBottom: '1px solid #1e1e3f',
-                color: '#7c3aed',
+                borderBottom: '1px solid rgba(255,255,255,0.07)',
+                color: 'rgba(255,255,255,0.45)',
                 fontSize: 10,
                 fontFamily: 'JetBrains Mono, monospace',
                 letterSpacing: '0.05em',
                 display: 'flex', alignItems: 'center', gap: 6,
               }}>
-                <span style={{ color: '#3a3a5c' }}>📄</span>
+                <span style={{ color: 'rgba(255,255,255,0.28)' }}>📄</span>
                 {ev.path}
               </div>
               {/* code content */}
@@ -956,7 +956,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                 padding: '10px 12px',
                 fontFamily: 'JetBrains Mono, monospace',
                 fontSize: 10,
-                color: '#a0a0c0',
+                color: 'rgba(255,255,255,0.55)',
                 whiteSpace: 'pre-wrap',
                 overflowX: 'auto',
                 maxHeight: 300,
@@ -970,9 +970,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
           if (ev.event === 'error') return (
             <div key={i} style={{
-              background: 'rgba(255,68,68,0.08)', border: '1px solid #3f1e1e',
+              background: 'rgba(255,68,68,0.06)', border: '1px solid rgba(255,68,68,0.2)',
               borderRadius: 4, padding: '6px 10px',
-              color: '#ff4444', fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
+              color: 'rgba(255,120,120,0.9)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
             }}>
               ❌ {ev.text}
             </div>
@@ -981,9 +981,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           if (ev.event === 'user_message') return (
             <div key={i} style={{
               alignSelf: 'flex-end', maxWidth: '80%',
-              background: '#3b0764', border: '1px solid #5b21b6',
+              background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
               borderRadius: '10px 10px 2px 10px', padding: '8px 12px',
-              color: '#e9d5ff', fontSize: 12, lineHeight: 1.6,
+              color: 'rgba(255,255,255,0.88)', fontSize: 12, lineHeight: 1.6,
               fontFamily: 'system-ui, sans-serif', whiteSpace: 'pre-wrap',
             }}>
               {ev.text}
@@ -992,10 +992,10 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
           if (ev.event === 'chat_message') return (
             <div key={i} style={{
-              background: '#0f1629', border: '1px solid #1e2d5c',
-              borderLeft: '2px solid #38bdf8',
+              background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)',
+              borderLeft: '2px solid rgba(255,255,255,0.22)',
               borderRadius: '2px 10px 10px 10px', padding: '10px 14px',
-              color: '#e2e8f0', fontSize: 12, lineHeight: 1.75,
+              color: 'rgba(255,255,255,0.88)', fontSize: 12, lineHeight: 1.75,
               fontFamily: 'system-ui, sans-serif', whiteSpace: 'pre-wrap',
               maxWidth: '92%',
             }}>
@@ -1009,18 +1009,18 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
             const isRejected = !chatPatches.some(p => p.id === ev.patchId);
             return (
               <div key={i} style={{
-                border: `1px solid ${isRejected ? '#2d1515' : '#5b21b6'}`,
-                borderLeft: `2px solid ${isRejected ? '#3a3a5c' : '#a78bfa'}`,
-                borderRadius: 6, overflow: 'hidden', background: '#0c0c1e',
-                opacity: isRejected ? 0.45 : 1, transition: 'opacity 0.2s',
+                border: `1px solid ${isRejected ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.1)'}`,
+                borderLeft: `2px solid ${isRejected ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.28)'}`,
+                borderRadius: 6, overflow: 'hidden', background: '#080808',
+                opacity: isRejected ? 0.4 : 1, transition: 'opacity 0.2s',
               }}>
                 {/* header */}
                 <div style={{
-                  padding: '5px 10px', borderBottom: '1px solid #1e1e3f',
+                  padding: '5px 10px', borderBottom: '1px solid rgba(255,255,255,0.07)',
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  background: '#0a0a16',
+                  background: '#0a0a0a',
                 }}>
-                  <span style={{ color: '#a78bfa', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+                  <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
                     📝 {ev.path}
                   </span>
                   {!isRejected ? (
@@ -1037,25 +1037,25 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                       ✕ Rechazar
                     </button>
                   ) : (
-                    <span style={{ color: '#3a3a5c', fontSize: 9, fontFamily: 'JetBrains Mono, monospace' }}>rechazado</span>
+                    <span style={{ color: 'rgba(255,255,255,0.22)', fontSize: 9, fontFamily: 'JetBrains Mono, monospace' }}>rechazado</span>
                   )}
                 </div>
                 {/* reasoning */}
                 {ev.reasoning && (
                   <div style={{
-                    padding: '5px 10px', color: '#6b7280', fontSize: 10,
-                    fontFamily: 'JetBrains Mono, monospace', borderBottom: '1px solid #1a1a2e',
+                    padding: '5px 10px', color: 'rgba(255,255,255,0.35)', fontSize: 10,
+                    fontFamily: 'JetBrains Mono, monospace', borderBottom: '1px solid rgba(255,255,255,0.06)',
                   }}>
                     {ev.reasoning}
                   </div>
                 )}
                 {/* diff — two columns */}
                 <div style={{ display: 'flex', gap: 0 }}>
-                  <div style={{ flex: 1, minWidth: 0, borderRight: '1px solid #1a1a2e' }}>
+                  <div style={{ flex: 1, minWidth: 0, borderRight: '1px solid rgba(255,255,255,0.06)' }}>
                     <div style={{
-                      padding: '2px 8px', color: '#3a3a5c', fontSize: 9,
+                      padding: '2px 8px', color: 'rgba(255,255,255,0.28)', fontSize: 9,
                       fontFamily: 'JetBrains Mono, monospace',
-                      borderBottom: '1px solid #1a1a2e', background: '#080810',
+                      borderBottom: '1px solid rgba(255,255,255,0.06)', background: '#060606',
                     }}>ANTES</div>
                     <div style={{
                       fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
@@ -1065,7 +1065,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                     }}>
                       {oldLines.map((line, li) => (
                         <div key={li} style={{ display: 'flex', background: 'rgba(239,68,68,0.12)', minHeight: '1.55em' }}>
-                          <span style={{ color: '#2a2a4a', userSelect: 'none', minWidth: 28, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>{li + 1}</span>
+                          <span style={{ color: 'rgba(255,255,255,0.12)', userSelect: 'none', minWidth: 28, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>{li + 1}</span>
                           <span style={{ color: '#fca5a5' }}>{line || ' '}</span>
                         </div>
                       ))}
@@ -1073,9 +1073,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{
-                      padding: '2px 8px', color: '#3a3a5c', fontSize: 9,
+                      padding: '2px 8px', color: 'rgba(255,255,255,0.28)', fontSize: 9,
                       fontFamily: 'JetBrains Mono, monospace',
-                      borderBottom: '1px solid #1a1a2e', background: '#080810',
+                      borderBottom: '1px solid rgba(255,255,255,0.06)', background: '#060606',
                     }}>DESPUÉS</div>
                     <div style={{
                       fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
@@ -1085,7 +1085,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                     }}>
                       {newLines.map((line, li) => (
                         <div key={li} style={{ display: 'flex', background: 'rgba(34,197,94,0.08)', minHeight: '1.55em' }}>
-                          <span style={{ color: '#2a2a4a', userSelect: 'none', minWidth: 28, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>{li + 1}</span>
+                          <span style={{ color: 'rgba(255,255,255,0.12)', userSelect: 'none', minWidth: 28, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>{li + 1}</span>
                           <span style={{ color: '#86efac' }}>{line || ' '}</span>
                         </div>
                       ))}
@@ -1098,17 +1098,17 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
           if (ev.event === 'replit_prompt') return (
             <div key={i} style={{
-              background: 'linear-gradient(135deg, #2d1b69 0%, #1a0533 100%)',
-              border: '1px solid #7c3aed',
+              background: 'rgba(255,255,255,0.03)',
+              border: '1px solid rgba(255,255,255,0.12)',
               borderRadius: 8,
               padding: 12,
               margin: '8px 0',
             }}>
-              <div style={{ color: '#a78bfa', fontWeight: 'bold', marginBottom: 8, fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
-                🟣 PROMPT PARA REPLIT
+              <div style={{ color: 'rgba(255,255,255,0.65)', fontWeight: 700, marginBottom: 8, fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
+                PROMPT PARA REPLIT
               </div>
               <pre style={{
-                color: '#e2d9f3',
+                color: 'rgba(255,255,255,0.78)',
                 fontSize: 11,
                 whiteSpace: 'pre-wrap',
                 fontFamily: 'JetBrains Mono, monospace',
@@ -1121,9 +1121,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                 onClick={() => navigator.clipboard.writeText(ev.text ?? '')}
                 style={{
                   marginTop: 8,
-                  background: '#7c3aed',
-                  color: 'white',
-                  border: 'none',
+                  background: 'rgba(255,255,255,0.08)',
+                  color: 'rgba(255,255,255,0.7)',
+                  border: '1px solid rgba(255,255,255,0.15)',
                   borderRadius: 4,
                   padding: '6px 12px',
                   cursor: 'pointer',
@@ -1139,31 +1139,75 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           return null;
         })}
 
-        {running && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ color: '#00ff88', fontSize: 18 }}>⚛</span>
-            <span style={{ color: '#3a3a5c', fontSize: 12, fontFamily: 'JetBrains Mono, monospace' }}>
-              procesando
-              <span className="thinking-dots" />
-            </span>
-            {activeModel && (
+        {/* 3D model indicator — persists between turns, animates only while running */}
+        {activeModel && (
+          <div
+            key={activeModel.tier}
+            className="model-icon-wrap"
+            style={{ display: 'flex', alignItems: 'center', gap: 10 }}
+          >
+            {/* 3D icon */}
+            <div style={{ perspective: '72px', width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              {activeModel.tier === 'fast' && (
+                <div
+                  className={running ? 'model-icon-spinning' : undefined}
+                  style={{
+                    width: 18, height: 18,
+                    transformStyle: 'preserve-3d',
+                    clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)',
+                    background: 'linear-gradient(145deg, rgba(255,255,255,0.92) 0%, rgba(255,255,255,0.48) 100%)',
+                    boxShadow: '0 2px 8px rgba(255,255,255,0.09)',
+                  }}
+                />
+              )}
+              {activeModel.tier === 'balanced' && (
+                <div
+                  className={running ? 'model-icon-spinning' : undefined}
+                  style={{
+                    width: 20, height: 20,
+                    transformStyle: 'preserve-3d',
+                    clipPath: 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)',
+                    background: 'linear-gradient(145deg, rgba(255,255,255,0.88) 0%, rgba(255,255,255,0.46) 100%)',
+                    boxShadow: '0 2px 8px rgba(255,255,255,0.07)',
+                  }}
+                />
+              )}
+              {activeModel.tier === 'deep' && (
+                <div
+                  className={running ? 'model-icon-spinning' : undefined}
+                  style={{
+                    width: 20, height: 20,
+                    transformStyle: 'preserve-3d',
+                    borderRadius: '50%',
+                    background: 'radial-gradient(circle at 35% 32%, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.46) 55%, rgba(255,255,255,0.08) 100%)',
+                    boxShadow: '0 2px 12px rgba(255,255,255,0.11), inset 0 -2px 6px rgba(0,0,0,0.35)',
+                  }}
+                />
+              )}
+            </div>
+            {/* model name + status */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
               <span style={{
-                fontSize: 11,
-                fontFamily: 'JetBrains Mono, monospace',
-                padding: '2px 7px',
-                borderRadius: 4,
-                fontWeight: 600,
-                color: activeModel.tier === 'fast' ? '#4ade80'
-                  : activeModel.tier === 'balanced' ? '#38bdf8'
-                  : '#a78bfa',
-                background: activeModel.tier === 'fast' ? '#4ade8018'
-                  : activeModel.tier === 'balanced' ? '#38bdf818'
-                  : '#a78bfa18',
-                border: `1px solid ${activeModel.tier === 'fast' ? '#4ade8040' : activeModel.tier === 'balanced' ? '#38bdf840' : '#a78bfa40'}`,
+                fontSize: 10, fontFamily: 'JetBrains Mono, monospace',
+                color: 'rgba(255,255,255,0.55)', letterSpacing: '0.03em',
+                whiteSpace: 'nowrap',
               }}>
-                ● {activeModel.model}
+                {activeModel.model}
               </span>
-            )}
+              {running && (
+                <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+                  procesando<span className="thinking-dots" />
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {running && !activeModel && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: 12, fontFamily: 'JetBrains Mono, monospace' }}>
+              procesando<span className="thinking-dots" />
+            </span>
           </div>
         )}
 
@@ -1190,12 +1234,12 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               <div style={{ display: 'flex', gap: 4, minHeight: 0 }}>
                 {/* original */}
                 <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <div style={{ color: '#6b7280', fontSize: 10, fontFamily: 'JetBrains Mono, monospace', padding: '2px 6px' }}>
+                  <div style={{ color: 'rgba(255,255,255,0.38)', fontSize: 10, fontFamily: 'JetBrains Mono, monospace', padding: '2px 6px' }}>
                     ANTES
                   </div>
                   <div style={{
-                    background: '#0a0a16', border: '1px solid #2d1515', borderRadius: 4,
-                    fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#a0a0c0',
+                    background: '#080808', border: '1px solid #2d1515', borderRadius: 4,
+                    fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: 'rgba(255,255,255,0.55)',
                     whiteSpace: 'pre-wrap', overflowX: 'auto', maxHeight: 280, overflowY: 'auto',
                     lineHeight: 1.6, padding: '8px 10px',
                   }}>
@@ -1209,12 +1253,12 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                 </div>
                 {/* fixed */}
                 <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <div style={{ color: '#6b7280', fontSize: 10, fontFamily: 'JetBrains Mono, monospace', padding: '2px 6px' }}>
+                  <div style={{ color: 'rgba(255,255,255,0.38)', fontSize: 10, fontFamily: 'JetBrains Mono, monospace', padding: '2px 6px' }}>
                     DESPUÉS
                   </div>
                   <div style={{
-                    background: '#0a0a16', border: '1px solid #153015', borderRadius: 4,
-                    fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#a0a0c0',
+                    background: '#080808', border: '1px solid #153015', borderRadius: 4,
+                    fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: 'rgba(255,255,255,0.55)',
                     whiteSpace: 'pre-wrap', overflowX: 'auto', maxHeight: 280, overflowY: 'auto',
                     lineHeight: 1.6, padding: '8px 10px',
                   }}>
@@ -1259,8 +1303,8 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                 borderRadius: 6, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6,
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ color: '#00ff88', fontSize: 12 }}>✅</span>
-                  <span style={{ color: '#00ff88', fontSize: 11, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace' }}>
+                  <span style={{ color: 'rgba(255,255,255,0.82)', fontSize: 12 }}>✅</span>
+                  <span style={{ color: 'rgba(255,255,255,0.82)', fontSize: 11, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace' }}>
                     Commit {shortSha} — {commitResult.files.length} archivo(s) modificado(s)
                   </span>
                 </div>
@@ -1290,7 +1334,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                     style={{
                       flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
                       background: 'rgba(124,58,237,0.12)', border: '1px solid #4c1d95',
-                      borderRadius: 6, color: '#a78bfa', fontSize: 11, fontWeight: 700,
+                      borderRadius: 6, color: 'rgba(255,255,255,0.55)', fontSize: 11, fontWeight: 700,
                       fontFamily: 'JetBrains Mono, monospace', padding: '7px 10px',
                       textDecoration: 'none', letterSpacing: '0.04em', transition: 'background 0.15s',
                     }}
@@ -1310,18 +1354,18 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                     <div key={idx} style={{
                       border: '1px solid #1e3a2a',
                       borderLeft: '2px solid #00ff88',
-                      borderRadius: 6, overflow: 'hidden', background: '#080f0a',
+                      borderRadius: 6, overflow: 'hidden', background: '#080808',
                     }}>
                       {/* header */}
                       <div style={{
                         padding: '5px 10px', borderBottom: '1px solid #1e3a2a',
                         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                        background: '#060d08',
+                        background: '#060606',
                       }}>
-                        <span style={{ color: '#00ff88', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+                        <span style={{ color: 'rgba(255,255,255,0.82)', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
                           📄 {file.path}
                         </span>
-                        <span style={{ color: '#3a5c4a', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+                        <span style={{ color: 'rgba(255,255,255,0.28)', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
                           {lines.length} líneas
                         </span>
                       </div>
@@ -1334,12 +1378,12 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                         {lines.map((line, i) => (
                           <div key={i} style={{ display: 'flex', gap: 0 }}>
                             <span style={{
-                              color: '#1e3a2a', userSelect: 'none',
+                              color: 'rgba(255,255,255,0.12)', userSelect: 'none',
                               minWidth: 32, textAlign: 'right', marginRight: 10, flexShrink: 0,
                             }}>
                               {i + 1}
                             </span>
-                            <span style={{ color: '#a0c0a8' }}>{line || ' '}</span>
+                            <span style={{ color: 'rgba(255,255,255,0.55)' }}>{line || ' '}</span>
                           </div>
                         ))}
                       </div>
@@ -1363,26 +1407,26 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                     const removed   = isNew ? 0 : diff.filter((d) => d.type === 'removed').length;
                     return (
                       <div key={idx} style={{
-                        border: '1px solid #1e1e3f',
+                        border: '1px solid rgba(255,255,255,0.07)',
                         borderLeft: '2px solid #7c3aed',
                         borderRadius: 6,
                         overflow: 'hidden',
-                        background: '#0a0a16',
+                        background: '#080808',
                       }}>
                         {/* header */}
                         <div style={{
                           padding: '5px 10px',
-                          borderBottom: '1px solid #1e1e3f',
+                          borderBottom: '1px solid rgba(255,255,255,0.07)',
                           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                         }}>
-                          <span style={{ color: '#7c3aed', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+                          <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
                             📄 {file.path}
                           </span>
                           <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, display: 'flex', gap: 8 }}>
                             {removed > 0 && <span style={{ color: '#f87171' }}>−{removed}</span>}
                             {added   > 0 && <span style={{ color: '#86efac' }}>+{added}</span>}
-                            {isNew && <span style={{ color: '#a78bfa' }}>nuevo archivo</span>}
-                            {!isNew && removed === 0 && added === 0 && <span style={{ color: '#3a3a5c' }}>sin cambios</span>}
+                            {isNew && <span style={{ color: 'rgba(255,255,255,0.55)' }}>nuevo archivo</span>}
+                            {!isNew && removed === 0 && added === 0 && <span style={{ color: 'rgba(255,255,255,0.28)' }}>sin cambios</span>}
                           </span>
                         </div>
                         {/* columns */}
@@ -1395,7 +1439,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                           }}>
                             {newLines.map((line, i) => (
                               <div key={i} style={{ display: 'flex', background: 'rgba(34,197,94,0.06)' }}>
-                                <span style={{ color: '#2a2a4a', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 8, flexShrink: 0 }}>
+                                <span style={{ color: 'rgba(255,255,255,0.12)', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 8, flexShrink: 0 }}>
                                   {i + 1}
                                 </span>
                                 <span style={{ color: '#86efac' }}>{line || ' '}</span>
@@ -1405,11 +1449,11 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                         ) : (
                           <div style={{ display: 'flex', gap: 0 }}>
                             {/* LEFT — original */}
-                            <div style={{ flex: 1, minWidth: 0, borderRight: '1px solid #1a1a2e' }}>
+                            <div style={{ flex: 1, minWidth: 0, borderRight: '1px solid rgba(255,255,255,0.06)' }}>
                               <div style={{
-                                padding: '2px 8px', color: '#3a3a5c', fontSize: 9,
+                                padding: '2px 8px', color: 'rgba(255,255,255,0.28)', fontSize: 9,
                                 fontFamily: 'JetBrains Mono, monospace',
-                                borderBottom: '1px solid #1a1a2e', background: '#080810',
+                                borderBottom: '1px solid rgba(255,255,255,0.06)', background: '#060606',
                               }}>ANTES</div>
                               <div style={{
                                 fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
@@ -1422,7 +1466,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                                     background: row.leftType === 'removed' ? 'rgba(239,68,68,0.12)' : 'transparent',
                                     minHeight: '1.55em',
                                   }}>
-                                    <span style={{ color: '#2a2a4a', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>
+                                    <span style={{ color: 'rgba(255,255,255,0.12)', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>
                                       {row.leftNum ?? ''}
                                     </span>
                                     <span style={{ color: row.leftType === 'removed' ? '#fca5a5' : '#3a3a5c' }}>
@@ -1435,9 +1479,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                             {/* RIGHT — new */}
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{
-                                padding: '2px 8px', color: '#3a3a5c', fontSize: 9,
+                                padding: '2px 8px', color: 'rgba(255,255,255,0.28)', fontSize: 9,
                                 fontFamily: 'JetBrains Mono, monospace',
-                                borderBottom: '1px solid #1a1a2e', background: '#080810',
+                                borderBottom: '1px solid rgba(255,255,255,0.06)', background: '#060606',
                               }}>DESPUÉS</div>
                               <div style={{
                                 fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
@@ -1450,7 +1494,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                                     background: row.rightType === 'added' ? 'rgba(34,197,94,0.08)' : 'transparent',
                                     minHeight: '1.55em',
                                   }}>
-                                    <span style={{ color: '#2a2a4a', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>
+                                    <span style={{ color: 'rgba(255,255,255,0.12)', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>
                                       {row.rightNum ?? ''}
                                     </span>
                                     <span style={{ color: row.rightType === 'added' ? '#86efac' : '#3a3a5c' }}>
@@ -1567,7 +1611,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                 <div style={{
                   background: 'rgba(0,255,136,0.04)', border: '1px solid #1e3f2a',
                   borderRadius: 6, padding: '8px 12px',
-                  color: '#4b6b58', fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
+                  color: 'rgba(255,255,255,0.42)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
                   display: 'flex', alignItems: 'center', gap: 6,
                 }}>
                   ✅ Análisis completado
@@ -1631,7 +1675,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                     ? 'rgba(124,58,237,0.18)' : 'rgba(124,58,237,0.07)',
                   border: confidencePayload.suggestedAction === 'deep'
                     ? '1px solid #7c3aed' : '1px solid #3b2a5a',
-                  borderRadius: 7, color: '#a78bfa',
+                  borderRadius: 7, color: 'rgba(255,255,255,0.55)',
                   fontFamily: 'JetBrains Mono, monospace',
                   fontSize: 11, fontWeight: confidencePayload.suggestedAction === 'deep' ? 700 : 500,
                   cursor: 'pointer', letterSpacing: '0.04em', transition: 'background 0.15s',
@@ -1721,7 +1765,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
               width: '100%', padding: '10px 14px',
               background: 'rgba(0,255,136,0.07)',
               border: '1px solid #1e3f2a',
-              borderRadius: 7, color: '#00ff88',
+              borderRadius: 7, color: 'rgba(255,255,255,0.82)',
               fontFamily: 'JetBrains Mono, monospace', 
               fontSize: 12, fontWeight: 700,
               cursor: 'pointer', letterSpacing: '0.05em', 
@@ -1753,17 +1797,17 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                   return (
                     <div key={idx} style={{
                       border: '1px solid #1e3a2a', borderLeft: '2px solid #00ff88',
-                      borderRadius: 6, overflow: 'hidden', background: '#080f0a',
+                      borderRadius: 6, overflow: 'hidden', background: '#080808',
                     }}>
                       <div style={{
                         padding: '5px 10px', borderBottom: '1px solid #1e3a2a',
                         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                        background: '#060d08',
+                        background: '#060606',
                       }}>
-                        <span style={{ color: '#00ff88', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+                        <span style={{ color: 'rgba(255,255,255,0.82)', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
                           📄 {file.path}
                         </span>
-                        <span style={{ color: '#3a5c4a', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+                        <span style={{ color: 'rgba(255,255,255,0.28)', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
                           {lines.length} líneas
                         </span>
                       </div>
@@ -1775,12 +1819,12 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                         {lines.map((line, i) => (
                           <div key={i} style={{ display: 'flex' }}>
                             <span style={{
-                              color: '#1e3a2a', userSelect: 'none',
+                              color: 'rgba(255,255,255,0.12)', userSelect: 'none',
                               minWidth: 32, textAlign: 'right', marginRight: 10, flexShrink: 0,
                             }}>
                               {i + 1}
                             </span>
-                            <span style={{ color: '#a0c0a8' }}>{line || ' '}</span>
+                            <span style={{ color: 'rgba(255,255,255,0.55)' }}>{line || ' '}</span>
                           </div>
                         ))}
                       </div>
@@ -1802,22 +1846,22 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                   const removed   = isNew ? 0 : diff.filter((d) => d.type === 'removed').length;
                   return (
                     <div key={idx} style={{
-                      border: '1px solid #1e1e3f', borderLeft: '2px solid #7c3aed',
-                      borderRadius: 6, overflow: 'hidden', background: '#0a0a16',
+                      border: '1px solid rgba(255,255,255,0.07)', borderLeft: '2px solid #7c3aed',
+                      borderRadius: 6, overflow: 'hidden', background: '#080808',
                     }}>
                       {/* header */}
                       <div style={{
-                        padding: '5px 10px', borderBottom: '1px solid #1e1e3f',
+                        padding: '5px 10px', borderBottom: '1px solid rgba(255,255,255,0.07)',
                         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                       }}>
-                        <span style={{ color: '#7c3aed', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+                        <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
                           📄 {file.path}
                         </span>
                         <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, display: 'flex', gap: 8 }}>
                           {removed > 0 && <span style={{ color: '#f87171' }}>−{removed}</span>}
                           {added   > 0 && <span style={{ color: '#86efac' }}>+{added}</span>}
-                          {isNew && <span style={{ color: '#a78bfa' }}>nuevo archivo</span>}
-                          {!isNew && removed === 0 && added === 0 && <span style={{ color: '#3a3a5c' }}>sin cambios</span>}
+                          {isNew && <span style={{ color: 'rgba(255,255,255,0.55)' }}>nuevo archivo</span>}
+                          {!isNew && removed === 0 && added === 0 && <span style={{ color: 'rgba(255,255,255,0.28)' }}>sin cambios</span>}
                         </span>
                       </div>
                       {/* columns */}
@@ -1829,7 +1873,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                         }}>
                           {newLines.map((line, i) => (
                             <div key={i} style={{ display: 'flex', background: 'rgba(34,197,94,0.06)' }}>
-                              <span style={{ color: '#2a2a4a', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 8, flexShrink: 0 }}>
+                              <span style={{ color: 'rgba(255,255,255,0.12)', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 8, flexShrink: 0 }}>
                                 {i + 1}
                               </span>
                               <span style={{ color: '#86efac' }}>{line || ' '}</span>
@@ -1839,11 +1883,11 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                       ) : (
                         <div style={{ display: 'flex', gap: 0 }}>
                           {/* LEFT — original */}
-                          <div style={{ flex: 1, minWidth: 0, borderRight: '1px solid #1a1a2e' }}>
+                          <div style={{ flex: 1, minWidth: 0, borderRight: '1px solid rgba(255,255,255,0.06)' }}>
                             <div style={{
-                              padding: '2px 8px', color: '#3a3a5c', fontSize: 9,
+                              padding: '2px 8px', color: 'rgba(255,255,255,0.28)', fontSize: 9,
                               fontFamily: 'JetBrains Mono, monospace',
-                              borderBottom: '1px solid #1a1a2e', background: '#080810',
+                              borderBottom: '1px solid rgba(255,255,255,0.06)', background: '#060606',
                             }}>ANTES</div>
                             <div style={{
                               fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
@@ -1856,7 +1900,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                                   background: row.leftType === 'removed' ? 'rgba(239,68,68,0.12)' : 'transparent',
                                   minHeight: '1.55em',
                                 }}>
-                                  <span style={{ color: '#2a2a4a', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>
+                                  <span style={{ color: 'rgba(255,255,255,0.12)', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>
                                     {row.leftNum ?? ''}
                                   </span>
                                   <span style={{ color: row.leftType === 'removed' ? '#fca5a5' : '#3a3a5c' }}>
@@ -1869,9 +1913,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                           {/* RIGHT — new */}
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{
-                              padding: '2px 8px', color: '#3a3a5c', fontSize: 9,
+                              padding: '2px 8px', color: 'rgba(255,255,255,0.28)', fontSize: 9,
                               fontFamily: 'JetBrains Mono, monospace',
-                              borderBottom: '1px solid #1a1a2e', background: '#080810',
+                              borderBottom: '1px solid rgba(255,255,255,0.06)', background: '#060606',
                             }}>DESPUÉS</div>
                             <div style={{
                               fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
@@ -1884,7 +1928,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                                   background: row.rightType === 'added' ? 'rgba(34,197,94,0.08)' : 'transparent',
                                   minHeight: '1.55em',
                                 }}>
-                                  <span style={{ color: '#2a2a4a', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>
+                                  <span style={{ color: 'rgba(255,255,255,0.12)', userSelect: 'none', minWidth: 32, textAlign: 'right', marginRight: 6, flexShrink: 0 }}>
                                     {row.rightNum ?? ''}
                                   </span>
                                   <span style={{ color: row.rightType === 'added' ? '#86efac' : '#3a3a5c' }}>
@@ -1943,7 +1987,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                       style={{
                         flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
                         background: 'rgba(124,58,237,0.12)', border: '1px solid #4c1d95',
-                        borderRadius: 6, color: '#a78bfa', fontFamily: 'JetBrains Mono, monospace',
+                        borderRadius: 6, color: 'rgba(255,255,255,0.55)', fontFamily: 'JetBrains Mono, monospace',
                         fontSize: 11, fontWeight: 700, padding: '9px 12px', textAlign: 'center',
                         letterSpacing: '0.04em', textDecoration: 'none',
                       }}
@@ -1963,12 +2007,12 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
       {/* Input */}
       <div style={{
         display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 12px',
-        borderTop: '1px solid #1e1e3f', flexShrink: 0, background: '#0d0d1a',
+        borderTop: '1px solid rgba(255,255,255,0.07)', flexShrink: 0, background: '#0a0a0a',
       }}>
         {/* Modo de razonamiento */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
           <span style={{
-            color: '#3a3a5c', fontSize: 10, fontFamily: 'JetBrains Mono, monospace',
+            color: 'rgba(255,255,255,0.25)', fontSize: 10, fontFamily: 'JetBrains Mono, monospace',
             letterSpacing: '0.06em',
           }}>
             MODO
@@ -1976,9 +2020,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           <button
             onClick={() => setMode('fast')}
             style={{
-              background: mode === 'fast' ? 'rgba(0,255,136,0.15)' : 'transparent',
-              border: `1px solid ${mode === 'fast' ? '#00ff88' : '#1e1e3f'}`,
-              borderRadius: 4, color: mode === 'fast' ? '#00ff88' : '#3a3a5c',
+              background: mode === 'fast' ? 'rgba(255,255,255,0.07)' : 'transparent',
+              border: `1px solid ${mode === 'fast' ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.07)'}`,
+              borderRadius: 4, color: mode === 'fast' ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.28)',
               fontSize: 10, fontWeight: 700, padding: '3px 8px', cursor: 'pointer',
               fontFamily: 'JetBrains Mono, monospace',
             }}
@@ -1988,9 +2032,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           <button
             onClick={() => setMode('deep')}
             style={{
-              background: mode === 'deep' ? 'rgba(124,58,237,0.15)' : 'transparent',
-              border: `1px solid ${mode === 'deep' ? '#7c3aed' : '#1e1e3f'}`,
-              borderRadius: 4, color: mode === 'deep' ? '#a78bfa' : '#3a3a5c',
+              background: mode === 'deep' ? 'rgba(255,255,255,0.07)' : 'transparent',
+              border: `1px solid ${mode === 'deep' ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.07)'}`,
+              borderRadius: 4, color: mode === 'deep' ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.28)',
               fontSize: 10, fontWeight: 700, padding: '3px 8px', cursor: 'pointer',
               fontFamily: 'JetBrains Mono, monospace',
             }}
@@ -2000,9 +2044,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           <button
             onClick={() => setMode('chat')}
             style={{
-              background: mode === 'chat' ? 'rgba(56,189,248,0.15)' : 'transparent',
-              border: `1px solid ${mode === 'chat' ? '#38bdf8' : '#1e1e3f'}`,
-              borderRadius: 4, color: mode === 'chat' ? '#38bdf8' : '#3a3a5c',
+              background: mode === 'chat' ? 'rgba(255,255,255,0.07)' : 'transparent',
+              border: `1px solid ${mode === 'chat' ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.07)'}`,
+              borderRadius: 4, color: mode === 'chat' ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.28)',
               fontSize: 10, fontWeight: 700, padding: '3px 8px', cursor: 'pointer',
               fontFamily: 'JetBrains Mono, monospace',
             }}
@@ -2012,9 +2056,9 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           <button
             onClick={() => setMode('auto')}
             style={{
-              background: mode === 'auto' ? 'rgba(251,146,60,0.15)' : 'transparent',
-              border: `1px solid ${mode === 'auto' ? '#f97316' : '#1e1e3f'}`,
-              borderRadius: 4, color: mode === 'auto' ? '#fb923c' : '#3a3a5c',
+              background: mode === 'auto' ? 'rgba(255,255,255,0.07)' : 'transparent',
+              border: `1px solid ${mode === 'auto' ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.07)'}`,
+              borderRadius: 4, color: mode === 'auto' ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.28)',
               fontSize: 10, fontWeight: 700, padding: '3px 8px', cursor: 'pointer',
               fontFamily: 'JetBrains Mono, monospace',
             }}
@@ -2025,10 +2069,10 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
         {mode === 'auto' && (
           <div style={{
-            fontSize: 10, color: '#78350f',
+            fontSize: 10, color: 'rgba(255,255,255,0.38)',
             fontFamily: 'JetBrains Mono, monospace',
-            background: 'rgba(251,146,60,0.06)',
-            border: '1px solid rgba(249,115,22,0.2)',
+            background: 'rgba(255,255,255,0.03)',
+            border: '1px solid rgba(255,255,255,0.08)',
             borderRadius: 4, padding: '4px 8px', lineHeight: 1.5,
           }}>
             🤖 AUTO explora y edita de forma autónoma en un entorno aislado. Revisa el diff antes de aprobar.
@@ -2038,7 +2082,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
         {/* Repo selector */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{
-            color: '#3a3a5c', fontSize: 10, fontFamily: 'JetBrains Mono, monospace',
+            color: 'rgba(255,255,255,0.25)', fontSize: 10, fontFamily: 'JetBrains Mono, monospace',
             letterSpacing: '0.06em', whiteSpace: 'nowrap',
           }}>
             REPO
@@ -2053,8 +2097,8 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
             }}
             disabled={running}
             style={{
-              flex: 1, height: 26, background: '#0a0a16', border: '1px solid #1e1e3f',
-              borderRadius: 4, color: '#00ff88', fontSize: 11,
+              flex: 1, height: 26, background: '#0a0a0a', border: '1px solid rgba(255,255,255,0.07)',
+              borderRadius: 4, color: 'rgba(255,255,255,0.7)', fontSize: 11,
               fontFamily: 'JetBrains Mono, monospace', padding: '0 6px',
               cursor: running ? 'not-allowed' : 'pointer', outline: 'none',
             }}
