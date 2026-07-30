@@ -152,6 +152,63 @@ interface ConfidencePayload {
 
 const FIX_KEYWORDS = /\b(corrige|corrígeme|fix|arregla|repara|soluciona)\b/i;
 
+// ── Design tokens — mirrors QuarkChat.tsx/Brous for visual consistency ─────────
+const T = {
+  // Tier accent colors (ModelIndicator shape + model name + active mode button)
+  tierFast:     '#f5a623',   // amber  — Groq / FAST mode
+  tierBalanced: '#22d3ee',   // cyan   — Haiku / DEEP mode
+  tierDeep:     '#a855f7',   // violet — Sonnet / AUTO mode
+  modeChat:     '#34d399',   // emerald — CHAT mode (conversational, not search)
+
+  // Semantic action message colors
+  actionFound:     '#34d399',
+  actionSynthesis: '#38bdf8',
+  actionWarn:      '#f5a623',
+  actionError:     '#ef4444',
+  actionNeutral:   'rgba(255,255,255,0.45)',
+
+  // Keyword highlight in assistant messages
+  keyword: '#f2c14e',
+
+  // Liquid glass
+  glassBg:        'rgba(255,255,255,0.06)',
+  glassBorder:    'rgba(255,255,255,0.12)',
+  glassBorderHi:  'rgba(255,255,255,0.20)',
+  glassHighlight: 'rgba(255,255,255,0.15)',
+  glassBlur:      'blur(20px) saturate(180%)',
+
+  // User bubble tint
+  userTint: 'rgba(168,85,247,0.11)',
+} as const;
+
+/** Map real backend emoji/patterns to semantic color. */
+function categorizeActionMsg(text: string): string {
+  if (/^❌/.test(text))               return T.actionError;
+  if (/^⚠️/.test(text))              return T.actionWarn;
+  if (/^(📌|📂|⚡|✅)/.test(text))  return T.actionFound;
+  if (/^(💡|📚)/.test(text))         return T.actionSynthesis;
+  if (/Plan ejecutado/i.test(text))  return T.actionSynthesis;
+  if (/^🧠\s+Paso/.test(text))       return T.actionNeutral;  // step indicator
+  if (/^🧠/.test(text))              return T.actionSynthesis; // analysis
+  if (/^🎯/.test(text))              return T.actionSynthesis;
+  // QuarkAgent-specific diagnostic labels
+  if (/^CAUSA:/.test(text))          return T.actionError;
+  if (/^DÓNDE:/.test(text))          return T.actionSynthesis;
+  if (/^POR QUÉ:/.test(text))        return T.actionWarn;
+  if (/^SOLUCIÓN:/.test(text))       return T.actionFound;
+  return T.actionNeutral;
+}
+
+/** Parse **bold** markdown into golden <span>s; rest stays neutral. */
+function parseMarkdownBold(text: string): React.ReactNode {
+  const parts = text.split(/\*\*(.+?)\*\*/g);
+  return parts.map((part, i) =>
+    i % 2 === 1
+      ? <span key={i} style={{ color: T.keyword, fontWeight: 600 }}>{part}</span>
+      : part
+  );
+}
+
 interface Props {
   activeProject: Project;
   onApplyToEditor: (code: string) => void;
@@ -810,12 +867,17 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0,
-      background: '#0a0a0a', overflow: 'hidden',
+      background: 'radial-gradient(ellipse at 50% 20%, #0d0d12 0%, #050506 100%)', overflow: 'hidden',
     }}>
-      {/* Header */}
+      {/* Header — position+zIndex required: backdrop-filter creates a stacking context;
+          without explicit z-index the feed content (later in DOM) paints over dropdowns. */}
       <div style={{
-        padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.07)',
-        display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, background: '#0a0a0a',
+        position: 'relative', zIndex: 10,
+        padding: '8px 12px', borderBottom: `1px solid ${T.glassBorder}`,
+        display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
+        background: T.glassBg,
+        backdropFilter: T.glassBlur, WebkitBackdropFilter: T.glassBlur,
+        boxShadow: `inset 0 1px 0 ${T.glassHighlight}`,
       }}>
         <span style={{ color: 'rgba(255,255,255,0.88)', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em' }}>
           QUARK AGENT
@@ -1155,8 +1217,8 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                     width: 18, height: 18,
                     transformStyle: 'preserve-3d',
                     clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)',
-                    background: 'linear-gradient(145deg, rgba(255,255,255,0.92) 0%, rgba(255,255,255,0.48) 100%)',
-                    boxShadow: '0 2px 8px rgba(255,255,255,0.09)',
+                    background: `linear-gradient(145deg, ${T.tierFast} 0%, ${T.tierFast}66 100%)`,
+                    boxShadow: `0 0 8px ${T.tierFast}55, 0 2px 6px rgba(0,0,0,0.6), inset 0 1px 0 ${T.tierFast}88`,
                   }}
                 />
               )}
