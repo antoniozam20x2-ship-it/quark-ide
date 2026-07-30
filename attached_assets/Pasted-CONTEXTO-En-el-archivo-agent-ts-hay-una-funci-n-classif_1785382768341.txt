@@ -1,0 +1,43 @@
+CONTEXTO: En el archivo agent.ts hay una función classifyIntent() que decide si un 
+mensaje del usuario en el chat pide una EXPLICACIÓN (modo lectura, responde Haiku) 
+o pide MODIFICAR CÓDIGO (modo escritura, escala a Sonnet 5 para generar un patch). 
+Esta decisión se toma con una regex llamada GENERATE_SIGNALS que busca verbos de 
+acción en el mensaje del usuario.
+
+BUG CONFIRMADO: la regex actual solo matchea formas verbales EXACTAS (ej. "corrige", 
+"cambia", "arregla" — imperativo/presente). No cubre infinitivos ni otras 
+conjugaciones. Por eso mensajes reales como "puedes corregirlo", "que lo corrija", 
+"ejecutar el cambio" NUNCA disparan el modo de escritura — el chat se queda 
+atascado explicando en loop sin nunca aplicar el fix que el usuario pidió.
+
+TAREA: Localizar la constante GENERATE_SIGNALS dentro de la función classifyIntent() 
+en agent.ts, y reemplazarla por esta versión (usa raíces de palabra en vez de 
+formas exactas, y una clase Unicode-aware para que las tildes no rompan el match):
+
+const GENERATE_SIGNALS = /\b(corrig|correg|corrij|arregl|implement|agreg|añad|cre[aá]|refactor|escrib|modific|cambi|propon|ejecut|resolv|resuelv|remov|remuev|aplic|elimin|borr|insert|reemplaz|update|fix|patch)[\p{L}\p{N}_]*\b/iu;
+
+VERIFICACIÓN OBLIGATORIA — no basta con que compile, hay que simular el match real 
+(en Node.js, con un script rápido) sobre estos 11 casos:
+
+DEBEN matchear (intent = generate):
+1. "puedes corregirlo"
+2. "que lo corrija"
+3. "ejecutar el cambio"
+4. "ejecuta el cambio"
+5. "resuélvelo"
+6. "aplicá el fix"
+7. "remuévelo"
+8. "remové eso"
+
+NO deben matchear (intent = explain — no romper esto):
+9. "cómo funciona el circuit breaker"
+10. "explícame la señal S6"
+11. "por qué falla esto"
+
+Si los 11 casos pasan, mostrame el diff antes de aplicarlo. Si alguno falla, 
+mostrame la simulación completa (qué matcheó y qué no) antes de tocar nada — no 
+apliques el cambio a ciegas.
+
+RESTRICCIÓN: NO toques ninguna otra lógica de classifyComplexity, 
+classifyIntentWithAI, ni ningún otro clasificador del archivo — es un cambio 
+aislado a esta única línea de regex.

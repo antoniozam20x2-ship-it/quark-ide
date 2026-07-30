@@ -3766,7 +3766,7 @@ function classifyEffort(message: string): 'medium' | 'high' | 'xhigh' {
 // Classifies whether the user wants an EXPLANATION (Haiku handles end-to-end)
 // or CODE GENERATION/MODIFICATION (Haiku explores, Sonnet patches).
 function classifyIntent(message: string): 'explain' | 'generate' {
-  const GENERATE_SIGNALS = /\b(corrige|corrigí|arregla|arreglá|implementa|implementá|agrega|agregá|añade|añadí|crea|creá|refactor|escribe|escribí|modifica|modificá|cambia|cambiá|propone|proponé|propone un patch|haz el cambio|hacé el cambio|fix|patch|añadir|agregar|crear|modificar|cambiar|implementar|escribir|elimina|eliminá|borrá|borrar|remov|delet|insert|reemplaz|reemplazá|update|añadi)\b/i;
+  const GENERATE_SIGNALS = /\b(corrig|correg|corrij|arregl|implement|agreg|añad|cre[aá]|refactor|escrib|modific|cambi|propon|ejecut|resolv|resu[eé]lv|remov|remu[eé]v|aplic|elimin|borr|insert|reemplaz|update|fix|patch)[\p{L}\p{N}_]*\b/iu;
   return GENERATE_SIGNALS.test(message) ? 'generate' : 'explain';
 }
 
