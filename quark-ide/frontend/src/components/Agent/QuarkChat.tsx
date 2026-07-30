@@ -4,12 +4,61 @@ import type { Project } from '../../App';
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? 'https://backend-production-0d77.up.railway.app').replace(/\/$/, '');
 
+// ── Design tokens ──────────────────────────────────────────────────────────────
+const T = {
+  // Tier accent colors (ModelIndicator shape + model name text)
+  tierFast:     '#f5a623',   // amber  — Groq
+  tierBalanced: '#22d3ee',   // cyan   — Haiku
+  tierDeep:     '#a855f7',   // violet — Sonnet
+
+  // Semantic action message colors (map real backend emojis)
+  actionFound:    '#34d399',              // emerald — evidence / found
+  actionSynthesis:'#38bdf8',              // sky     — reasoning / synthesis
+  actionWarn:     '#f5a623',              // amber   — warning
+  actionError:    '#ef4444',              // red     — error
+  actionNeutral:  'rgba(255,255,255,0.45)', // gray  — in-progress, steps
+
+  // Keyword highlight (bold terms in assistant messages)
+  keyword: '#f2c14e',
+
+  // Text hierarchy
+  textPrimary:   'rgba(255,255,255,0.92)',
+  textSecondary: 'rgba(255,255,255,0.50)',
+  textTertiary:  'rgba(255,255,255,0.28)',
+
+  // Liquid glass material
+  glassBg:        'rgba(255,255,255,0.06)',
+  glassBorder:    'rgba(255,255,255,0.12)',
+  glassBorderHi:  'rgba(255,255,255,0.20)',
+  glassHighlight: 'rgba(255,255,255,0.15)',  // inset top shine
+  glassBlur:      'blur(20px) saturate(180%)',
+
+  // User bubble tint — deep/violet at low opacity over glass
+  userTint: 'rgba(168,85,247,0.11)',
+} as const;
+
+// ── CSS animations injected once ───────────────────────────────────────────────
+if (typeof document !== 'undefined' && !document.getElementById('quark-chat-anims')) {
+  const s = document.createElement('style');
+  s.id = 'quark-chat-anims';
+  s.textContent = `
+    @keyframes qk-spin-y {
+      from { transform: rotateY(0deg); }
+      to   { transform: rotateY(360deg); }
+    }
+    @keyframes qk-flip-x {
+      0%   { transform: rotateX(0deg); }
+      100% { transform: rotateX(360deg); }
+    }
+  `;
+  document.head.appendChild(s);
+}
+
 // ── Interfaces ─────────────────────────────────────────────────────────────────
 
 interface ChatMsg {
   role: 'user' | 'assistant' | 'action' | 'deep_search';
   text: string;
-  /** true only for messages received live during this session — drives FileActivityCard animation */
   isNew?: boolean;
 }
 
@@ -32,66 +81,78 @@ interface ActiveModel {
   tier: 'fast' | 'balanced' | 'deep';
 }
 
-// ── CSS animations — injected once into <head> ─────────────────────────────────
-if (typeof document !== 'undefined' && !document.getElementById('quark-chat-anims')) {
-  const s = document.createElement('style');
-  s.id = 'quark-chat-anims';
-  s.textContent = `
-    @keyframes qk-spin-y {
-      from { transform: rotateY(0deg); }
-      to   { transform: rotateY(360deg); }
-    }
-    @keyframes qk-flip-x {
-      0%   { transform: rotateX(0deg); }
-      100% { transform: rotateX(360deg); }
-    }
-  `;
-  document.head.appendChild(s);
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+/** Map real backend emojis/patterns to a semantic color. */
+function categorizeActionMessage(text: string): string {
+  if (/^❌/.test(text))                          return T.actionError;
+  if (/^⚠️/.test(text))                         return T.actionWarn;
+  if (/^(📌|📂|⚡|✅)/.test(text))             return T.actionFound;
+  if (/^(💡|📚)/.test(text))                    return T.actionSynthesis;
+  if (/Plan ejecutado/i.test(text))              return T.actionSynthesis;
+  // 🧠 Paso X  → neutral step; 🧠 [anything else] → synthesis
+  if (/^🧠\s+Paso/.test(text))                  return T.actionNeutral;
+  if (/^🧠/.test(text))                         return T.actionSynthesis;
+  // 🔎 🔬 🗺️ ⏳ ⏸️ and everything else → neutral/in-progress
+  return T.actionNeutral;
 }
 
-// ── File-activity detector ─────────────────────────────────────────────────────
+/** Parse **bold** markdown into golden <span>s; rest stays neutral. */
+function parseMarkdownBold(text: string): React.ReactNode {
+  const parts = text.split(/\*\*(.+?)\*\*/g);
+  return parts.map((part, i) =>
+    i % 2 === 1
+      ? <span key={i} style={{ color: T.keyword, fontWeight: 600 }}>{part}</span>
+      : part
+  );
+}
+
+/** File-activity events (trigger FileActivityCard flip). */
 const FILE_ACTIVITY_RE = /🔎|📖|📂|📌|⚡|buscando|leyendo|símbolo|evidencia/i;
 function isFileActivity(text: string) { return FILE_ACTIVITY_RE.test(text); }
 
 // ── ModelIndicator ─────────────────────────────────────────────────────────────
-// Shows a CSS-3D shape (diamond / hexagon / sphere) for the active model tier.
-// Spins while running; stays visible and settled when idle.
+// Geometry: diamond (fast) / hexagon (balanced) / sphere (deep) — unchanged.
+// Material: each tier now uses ITS OWN color gradient.
 
 function ModelIndicator({ model, tier, running }: { model: string; tier: 'fast' | 'balanced' | 'deep'; running: boolean }) {
+  const color = tier === 'fast' ? T.tierFast : tier === 'balanced' ? T.tierBalanced : T.tierDeep;
+
   const base: React.CSSProperties = {
     width: 20,
     height: 20,
     flexShrink: 0,
-    boxShadow: '0 2px 8px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.14)',
     animation: running ? 'qk-spin-y 3s linear infinite' : 'none',
     transformStyle: 'preserve-3d',
     willChange: 'transform',
-    transition: 'animation 0.3s',
+    // Subtle glow matching the tier color
+    boxShadow: `0 0 8px ${color}55, 0 2px 6px rgba(0,0,0,0.6), inset 0 1px 0 ${color}88`,
   };
 
   let shapeStyle: React.CSSProperties;
   if (tier === 'fast') {
+    // Diamond — amber
     shapeStyle = {
       ...base,
-      background: 'linear-gradient(135deg, rgba(255,255,255,0.38) 0%, rgba(255,255,255,0.10) 100%)',
+      background: `linear-gradient(135deg, ${color} 0%, ${color}66 100%)`,
       clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)',
     };
   } else if (tier === 'balanced') {
+    // Hexagon — cyan
     shapeStyle = {
       ...base,
-      background: 'linear-gradient(135deg, rgba(255,255,255,0.32) 0%, rgba(255,255,255,0.09) 100%)',
+      background: `linear-gradient(135deg, ${color} 0%, ${color}55 100%)`,
       clipPath: 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)',
     };
   } else {
-    // deep → sphere via radial-gradient + border-radius
+    // Sphere — violet, radial for volume
     shapeStyle = {
       ...base,
-      background: 'radial-gradient(circle at 34% 34%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.18) 45%, rgba(255,255,255,0.04) 100%)',
+      background: `radial-gradient(circle at 34% 34%, ${color}ee 0%, ${color}88 45%, ${color}22 100%)`,
       borderRadius: '50%',
     };
   }
 
-  // Show only first two dash-segments so it stays compact ("claude-haiku", "llama3-8b", etc.)
   const shortModel = model.split('-').slice(0, 2).join('-');
 
   return (
@@ -99,7 +160,8 @@ function ModelIndicator({ model, tier, running }: { model: string; tier: 'fast' 
       <div style={shapeStyle} />
       <span style={{
         fontSize: 10,
-        color: 'rgba(255,255,255,0.38)',
+        color,
+        opacity: 0.85,
         letterSpacing: '0.05em',
         fontFamily: 'JetBrains Mono, ui-monospace, monospace',
         textTransform: 'uppercase',
@@ -111,8 +173,7 @@ function ModelIndicator({ model, tier, running }: { model: string; tier: 'fast' 
 }
 
 // ── FileActivityCard ───────────────────────────────────────────────────────────
-// Small 3D-card (rectangle = "file" metaphor) that flips once on mount when
-// isNew===true. Shown inline next to the action message text.
+// Tiny 3D document-card that flips once when a live file-activity event arrives.
 
 function FileActivityCard({ isNew }: { isNew: boolean }) {
   return (
@@ -123,11 +184,11 @@ function FileActivityCard({ isNew }: { isNew: boolean }) {
         flexShrink: 0,
         alignSelf: 'center',
         borderRadius: 2,
-        background: 'linear-gradient(160deg, rgba(255,255,255,0.28) 0%, rgba(255,255,255,0.07) 100%)',
-        boxShadow: '0 1px 5px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.14)',
+        background: `linear-gradient(160deg, ${T.actionFound}55 0%, ${T.actionFound}18 100%)`,
+        boxShadow: `0 1px 5px rgba(0,0,0,0.5), inset 0 1px 0 ${T.actionFound}66`,
+        border: `1px solid ${T.actionFound}44`,
         transformStyle: 'preserve-3d',
         animation: isNew ? 'qk-flip-x 0.6s ease forwards' : 'none',
-        border: '1px solid rgba(255,255,255,0.12)',
       }}
     />
   );
@@ -155,7 +216,6 @@ function uiHistoryKey(sessionId: string) {
   return `quark-chat-ui:${sessionId}`;
 }
 
-// Strip isNew before persisting — prevents stale animation flags on reload
 function stripIsNew(msgs: ChatMsg[]): ChatMsg[] {
   return msgs.map(({ role, text }) => ({ role, text }));
 }
@@ -175,7 +235,6 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Auto-resize textarea
   const adjustTextareaHeight = () => {
     const el = textareaRef.current;
     if (!el) return;
@@ -225,7 +284,6 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
     return () => { cancelled = true; };
   }, [sessionId]);
 
-  // ── Persistir historial UI (sin isNew) ───────────────────────────────────────
   useEffect(() => {
     if (messages.length > 0) {
       localStorage.setItem(uiHistoryKey(sessionId), JSON.stringify(stripIsNew(messages)));
@@ -359,11 +417,29 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0a0a0a' }}>
+  // Fast-mode button uses tier amber — coincidence is intentional
+  const fastModeColor = T.tierFast;
 
-      {/* ── Header ── */}
-      <div style={{ borderBottom: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center' }}>
+  return (
+    // Outer shell — deep radial gradient background
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      height: '100%',
+      background: 'radial-gradient(ellipse at 50% 20%, #0d0d12 0%, #050506 100%)',
+      position: 'relative',
+    }}>
+
+      {/* ── Header ──────────────────────────────────────────────────────────── */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        background: T.glassBg,
+        backdropFilter: T.glassBlur,
+        WebkitBackdropFilter: T.glassBlur,
+        borderBottom: `1px solid ${T.glassBorder}`,
+        boxShadow: `inset 0 1px 0 ${T.glassHighlight}`,
+      }}>
         <div style={{ flex: 1 }}>
           <ProjectSwitcher activeProject={activeProject} onSwitch={onProjectChange} />
         </div>
@@ -371,7 +447,7 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
         {/* Brand label */}
         <div style={{
           padding: '0 14px',
-          color: 'rgba(255,255,255,0.45)',
+          color: T.textSecondary,
           fontWeight: 600,
           fontSize: 12,
           flexShrink: 0,
@@ -398,9 +474,9 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
             flexShrink: 0,
             marginRight: 12,
             background: 'transparent',
-            border: '1px solid rgba(255,255,255,0.08)',
+            border: `1px solid ${T.glassBorder}`,
             borderRadius: '6px',
-            color: 'rgba(255,255,255,0.28)',
+            color: T.textTertiary,
             padding: '4px 10px',
             fontSize: '11px',
             cursor: streaming ? 'not-allowed' : 'pointer',
@@ -412,13 +488,13 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
           }}
           onMouseEnter={e => {
             if (!streaming) {
-              e.currentTarget.style.borderColor = '#c14b4b';
-              e.currentTarget.style.color = '#c14b4b';
+              e.currentTarget.style.borderColor = T.actionError;
+              e.currentTarget.style.color = T.actionError;
             }
           }}
           onMouseLeave={e => {
-            e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)';
-            e.currentTarget.style.color = 'rgba(255,255,255,0.28)';
+            e.currentTarget.style.borderColor = T.glassBorder;
+            e.currentTarget.style.color = T.textTertiary;
           }}
         >
           <span style={{ fontSize: '12px' }}>↺</span>
@@ -426,11 +502,18 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
         </button>
       </div>
 
-      {/* ── Message feed ── */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      {/* ── Message feed ────────────────────────────────────────────────────── */}
+      <div style={{
+        flex: 1,
+        overflowY: 'auto',
+        padding: '16px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px',
+      }}>
 
         {historyLoading && (
-          <div style={{ color: 'rgba(255,255,255,0.28)', fontSize: '13px', alignSelf: 'center', marginTop: '8px' }}>
+          <div style={{ color: T.textTertiary, fontSize: '13px', alignSelf: 'center', marginTop: '8px' }}>
             Cargando historial...
           </div>
         )}
@@ -439,96 +522,115 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
           <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '85%' }}>
 
             {m.role === 'deep_search' ? (
-              /* DEEP SEARCH pill */
+              // ── DEEP SEARCH pill ──────────────────────────────────────────
               <div style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '7px',
-                padding: '5px 12px',
-                borderRadius: '20px',
+                padding: '5px 14px',
+                borderRadius: '999px',
                 fontSize: '12px',
                 fontWeight: 600,
-                background: 'rgba(255,255,255,0.04)',
-                border: '1px solid rgba(255,255,255,0.16)',
-                color: 'rgba(255,255,255,0.65)',
+                background: `rgba(168,85,247,0.08)`,
+                backdropFilter: T.glassBlur,
+                WebkitBackdropFilter: T.glassBlur,
+                border: `1px solid rgba(168,85,247,0.28)`,
+                boxShadow: `inset 0 1px 0 rgba(168,85,247,0.20)`,
+                color: T.tierDeep,
                 letterSpacing: '0.03em',
               }}>
                 <span style={{ fontSize: '14px' }}>🔭</span>
-                <span style={{ color: 'rgba(255,255,255,0.45)', fontWeight: 700, letterSpacing: '0.06em' }}>DEEP</span>
-                <span style={{ color: 'rgba(255,255,255,0.45)', fontWeight: 400, maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <span style={{ fontWeight: 700, letterSpacing: '0.07em' }}>DEEP</span>
+                <span style={{
+                  color: T.textSecondary,
+                  fontWeight: 400,
+                  maxWidth: '260px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}>
                   {m.text}
                 </span>
               </div>
 
             ) : m.role === 'action' ? (
-              /* ACTION message — inline FileActivityCard for file events */
+              // ── ACTION message ────────────────────────────────────────────
               <div style={{
                 display: 'flex',
                 alignItems: 'flex-start',
                 gap: '7px',
-                padding: '6px 10px',
+                padding: '4px 8px',
                 borderRadius: '8px',
                 fontSize: '13px',
-                color: 'rgba(255,255,255,0.45)',
-                opacity: 0.85,
+                color: categorizeActionMessage(m.text),
+                lineHeight: '1.45',
               }}>
                 {isFileActivity(m.text) && <FileActivityCard isNew={!!m.isNew} />}
-                <span style={{ lineHeight: '1.45' }}>{m.text}</span>
+                <span>{m.text}</span>
               </div>
 
             ) : m.role === 'user' ? (
-              /* USER bubble */
+              // ── USER bubble — glass + violet tint ────────────────────────
               <div style={{
-                padding: '9px 13px',
-                borderRadius: '12px',
+                padding: '10px 14px',
+                borderRadius: '16px 16px 4px 16px',
                 fontSize: '15px',
-                background: 'rgba(255,255,255,0.09)',
-                border: '1px solid rgba(255,255,255,0.16)',
-                color: 'rgba(255,255,255,0.92)',
+                background: `linear-gradient(135deg, ${T.userTint} 0%, rgba(255,255,255,0.05) 100%)`,
+                backdropFilter: T.glassBlur,
+                WebkitBackdropFilter: T.glassBlur,
+                border: `1px solid ${T.glassBorderHi}`,
+                boxShadow: `inset 0 1px 0 ${T.glassHighlight}, 0 2px 12px rgba(0,0,0,0.3)`,
+                color: T.textPrimary,
                 lineHeight: '1.55',
               }}>
                 {m.text}
               </div>
 
             ) : (
-              /* ASSISTANT bubble */
+              // ── ASSISTANT bubble — glass, bold terms highlighted ──────────
               <div style={{
-                padding: '9px 13px',
-                borderRadius: '10px',
+                padding: '10px 14px',
+                borderRadius: '4px 16px 16px 16px',
                 fontSize: '15px',
-                background: '#0d0d0d',
-                border: '1px solid rgba(255,255,255,0.08)',
-                color: 'rgba(255,255,255,0.92)',
-                lineHeight: '1.6',
+                background: T.glassBg,
+                backdropFilter: T.glassBlur,
+                WebkitBackdropFilter: T.glassBlur,
+                border: `1px solid ${T.glassBorder}`,
+                boxShadow: `inset 0 1px 0 ${T.glassHighlight}, 0 2px 12px rgba(0,0,0,0.3)`,
+                color: T.textPrimary,
+                lineHeight: '1.65',
               }}>
-                {m.text}
+                {parseMarkdownBold(m.text)}
               </div>
             )}
           </div>
         ))}
 
-        {/* ── Pending patch proposal ── */}
+        {/* ── Pending patch proposal ────────────────────────────────────────── */}
         {pendingPatch && (
           <div style={{
-            border: '1px solid rgba(255,255,255,0.16)',
-            borderRadius: '10px',
-            padding: '14px',
-            background: '#0d0d0d',
+            borderRadius: '16px',
+            padding: '16px',
+            background: `rgba(168,85,247,0.06)`,
+            backdropFilter: T.glassBlur,
+            WebkitBackdropFilter: T.glassBlur,
+            border: `1px solid rgba(168,85,247,0.25)`,
+            boxShadow: `inset 0 1px 0 rgba(168,85,247,0.18), 0 4px 20px rgba(0,0,0,0.4)`,
           }}>
-            <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '13px', marginBottom: '4px', fontWeight: 500 }}>
+            <div style={{ color: T.textPrimary, fontSize: '13px', marginBottom: '4px', fontWeight: 500 }}>
               📝 {pendingPatch.path}
             </div>
-            <div style={{ color: 'rgba(255,255,255,0.45)', fontSize: '13px', marginBottom: '10px' }}>
+            <div style={{ color: T.textSecondary, fontSize: '13px', marginBottom: '10px', lineHeight: '1.5' }}>
               {pendingPatch.reasoning}
             </div>
-            <details style={{ marginBottom: '10px' }}>
-              <summary style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px', cursor: 'pointer' }}>
+            <details style={{ marginBottom: '12px' }}>
+              <summary style={{ color: T.textTertiary, fontSize: '12px', cursor: 'pointer', userSelect: 'none' }}>
                 Ver diff
               </summary>
-              <pre style={{ fontSize: '11px', color: 'rgba(193,75,75,0.9)', whiteSpace: 'pre-wrap', marginTop: '6px' }}>
+              <pre style={{ fontSize: '11px', color: `${T.actionError}cc`, whiteSpace: 'pre-wrap', marginTop: '6px' }}>
                 - {pendingPatch.old_str}
               </pre>
-              <pre style={{ fontSize: '11px', color: 'rgba(77,154,106,0.9)', whiteSpace: 'pre-wrap' }}>
+              <pre style={{ fontSize: '11px', color: `${T.actionFound}cc`, whiteSpace: 'pre-wrap' }}>
                 + {pendingPatch.new_str}
               </pre>
             </details>
@@ -536,13 +638,15 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
               <button
                 onClick={approvePatch}
                 style={{
-                  background: '#4d9a6a',
-                  color: 'rgba(255,255,255,0.92)',
-                  border: 'none',
-                  padding: '6px 14px',
-                  borderRadius: '6px',
+                  background: `${T.actionFound}22`,
+                  color: T.actionFound,
+                  border: `1px solid ${T.actionFound}55`,
+                  padding: '6px 16px',
+                  borderRadius: '8px',
                   fontSize: '13px',
                   cursor: 'pointer',
+                  fontWeight: 500,
+                  transition: 'all 0.15s',
                 }}
               >
                 ✅ Aplicar
@@ -550,13 +654,15 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
               <button
                 onClick={() => setPendingPatch(null)}
                 style={{
-                  background: '#c14b4b',
-                  color: 'rgba(255,255,255,0.92)',
-                  border: 'none',
-                  padding: '6px 14px',
-                  borderRadius: '6px',
+                  background: `${T.actionError}22`,
+                  color: T.actionError,
+                  border: `1px solid ${T.actionError}55`,
+                  padding: '6px 16px',
+                  borderRadius: '8px',
                   fontSize: '13px',
                   cursor: 'pointer',
+                  fontWeight: 500,
+                  transition: 'all 0.15s',
                 }}
               >
                 ❌ Rechazar
@@ -566,21 +672,31 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
         )}
 
         {streaming && (
-          <div style={{ color: 'rgba(255,255,255,0.28)', fontSize: '13px' }}>
+          <div style={{ color: T.textTertiary, fontSize: '13px', paddingLeft: '8px' }}>
             Quark está pensando...
           </div>
         )}
         <div ref={bottomRef} />
       </div>
 
-      {/* ── Input area ── */}
-      <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      {/* ── Input area ──────────────────────────────────────────────────────── */}
+      <div style={{
+        borderTop: `1px solid ${T.glassBorder}`,
+        padding: '10px 12px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px',
+        background: T.glassBg,
+        backdropFilter: T.glassBlur,
+        WebkitBackdropFilter: T.glassBlur,
+        boxShadow: `inset 0 1px 0 ${T.glassHighlight}`,
+      }}>
 
         {/* Fast mode indicator */}
         {forceGroq && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: '6px',
-            fontSize: '11px', color: '#c9a227',
+            fontSize: '11px', color: fastModeColor,
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
             letterSpacing: '0.04em',
           }}>
@@ -598,10 +714,10 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
             title={forceGroq ? 'Modo rápido activo — click para desactivar' : 'Activar modo rápido (Groq directo para este mensaje)'}
             style={{
               flexShrink: 0,
-              background: forceGroq ? 'rgba(201,162,39,0.14)' : 'rgba(255,255,255,0.04)',
-              border: forceGroq ? '1px solid #c9a227' : '1px solid rgba(255,255,255,0.08)',
-              borderRadius: '8px',
-              color: forceGroq ? '#c9a227' : 'rgba(255,255,255,0.28)',
+              background: forceGroq ? `${fastModeColor}18` : 'rgba(255,255,255,0.04)',
+              border: forceGroq ? `1px solid ${fastModeColor}88` : `1px solid ${T.glassBorder}`,
+              borderRadius: '10px',
+              color: forceGroq ? fastModeColor : T.textTertiary,
               padding: '0 10px',
               height: '40px',
               fontSize: '14px',
@@ -625,11 +741,11 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
             rows={1}
             style={{
               flex: 1,
-              background: '#0d0d0d',
-              color: 'rgba(255,255,255,0.92)',
-              border: '1px solid rgba(255,255,255,0.08)',
-              borderRadius: '8px',
-              padding: '10px 12px',
+              background: 'rgba(255,255,255,0.04)',
+              color: T.textPrimary,
+              border: `1px solid ${T.glassBorder}`,
+              borderRadius: '10px',
+              padding: '10px 13px',
               fontSize: '15px',
               resize: 'none',
               overflowY: 'hidden',
@@ -640,25 +756,26 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
               outline: 'none',
               transition: 'border-color 0.15s',
             }}
-            onFocus={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.22)'; }}
-            onBlur={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
+            onFocus={e => { e.currentTarget.style.borderColor = T.glassBorderHi; }}
+            onBlur={e => { e.currentTarget.style.borderColor = T.glassBorder; }}
           />
 
-          {/* Cancel / Send button */}
+          {/* Cancel / Send */}
           {streaming ? (
             <button
               onClick={cancelSend}
               title="Cancelar envío"
               style={{
-                background: '#c14b4b',
-                color: 'rgba(255,255,255,0.92)',
-                border: 'none',
-                borderRadius: '8px',
+                background: `${T.actionError}22`,
+                color: T.actionError,
+                border: `1px solid ${T.actionError}55`,
+                borderRadius: '10px',
                 padding: '0 18px',
                 fontSize: '15px',
                 height: '40px',
                 flexShrink: 0,
                 cursor: 'pointer',
+                transition: 'all 0.15s',
               }}
             >
               ⏸️
@@ -669,15 +786,16 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
               disabled={!input.trim()}
               title="Enviar mensaje"
               style={{
-                background: input.trim() ? 'rgba(255,255,255,0.12)' : 'transparent',
-                color: input.trim() ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.22)',
-                border: input.trim() ? '1px solid rgba(255,255,255,0.25)' : '1px solid rgba(255,255,255,0.08)',
-                borderRadius: '8px',
+                background: input.trim() ? 'rgba(255,255,255,0.10)' : 'transparent',
+                color: input.trim() ? T.textPrimary : T.textTertiary,
+                border: input.trim() ? `1px solid ${T.glassBorderHi}` : `1px solid ${T.glassBorder}`,
+                borderRadius: '10px',
                 padding: '0 18px',
                 fontSize: '15px',
                 height: '40px',
                 flexShrink: 0,
                 cursor: input.trim() ? 'pointer' : 'not-allowed',
+                boxShadow: input.trim() ? `inset 0 1px 0 ${T.glassHighlight}` : 'none',
                 transition: 'all 0.15s',
               }}
             >
