@@ -1,0 +1,163 @@
+Agent
+Set up the imported project
+The user just imported this project from a GitHub repository. It could be anything — an app to run on Replit, a library, a fork to study, code to reuse — so the first thing to do is ask what they want; everything after depends on the answer.
+
+The app is already up and running! Quark IDE is an AI-powered browser IDE with a React frontend (port 5000) and an Express backend (port 3001). It supports Claude, Gemini, and GitHub integration for AI-assisted coding, a war room planner, debugger, and more.
+
+A few things worth knowing before you decide what to do next:
+
+The UI loaded cleanly, but full functionality needs some API keys set up (none are configured yet): ANTHROPIC_API_KEY, GEMINI_API_KEY, GITHUB_TOKEN, and optionally DATABASE_URL for PostgreSQL persistence.
+The interface is currently in Spanish — that appears to be the app's default language.
+CONTEXTO: El archivo src/components/Agent/QuarkChat.tsx (proyecto Brous) ya fue rediseñado en una pasada anterior — tiene paleta oscura minimalista y un indicador 3D por tier de modelo (diamante=fast, hexágono=balanced, esfera=deep) que ya funciona. Esta pasada NO reemplaza esa base — evoluciona el sistema de color sobre lo que ya existe.
+
+PASO 0: Leé el archivo actual completo antes de tocar nada. Confirmame que existe la estructura que describo (componente ModelIndicator, tokens de color en un objeto T, manejo de eventos SSE model_active/action/chat_message/deep_search).
+
+OBJETIVO — Sistema de color semántico + efecto "liquid glass":
+
+FONDO Y PANELES (glassmorphism real, no solo oscuro plano):
+
+Fondo base: negro profundo con leve gradiente radial para dar sensación de profundidad (ej. radial-gradient desde #0d0d12 en el centro hacia #050506 en los bordes).
+Todo panel/burbuja/chip (mensajes, patch pendiente, header, input) debe usar el efecto glass real: background con opacidad baja sobre color (rgba(255,255,255,0.06) de base), backdrop-filter: blur(20px) saturate(180%), borde 1px rgba(255,255,255,0.12), y un highlight superior sutil vía box-shadow: inset 0 1px 0 rgba(255,255,255,0.15) — el brillo característico del "liquid glass" de Apple. Bordes redondeados generosos (14-18px).
+COLOR POR TIER DE MODELO (aplicar tanto al ModelIndicator 3D como al texto del nombre del modelo en el header/mensajes):
+
+fast (Groq) → ámbar/naranja vívido (#f5a623 o similar)
+balanced (Haiku) → cian eléctrico (#22d3ee)
+deep (Sonnet) → violeta/magenta (#a855f7) El ícono 3D de cada tier debe usar SU color (gradiente del color del tier, no blanco/gris como en la pasada anterior) — mantené la geometría distinta por tier (diamante/hexágono/esfera), solo cambia el color del material.
+COLOR POR TIPO DE MENSAJE 'action' (categorizar por el emoji/texto que ya manda el backend — no inventar categorías nuevas, mapear las reales):
+
+Búsqueda en progreso (🔎 Buscando, 🧠 Paso, 🔬 Paso, 🗺️ Plan) → gris/blanco neutro, tenue (todavía no hay resultado)
+Evidencia encontrada (📌 Evidencia leída, 📂 Encontrado, ⚡ Símbolo(s) en índice, ✅) → verde esmeralda vívido (#34d399) — comunica "encontrado"
+Síntesis/razonamiento (💡, 🧠 seguido de análisis, 📚 Conocimiento persistente, "Plan ejecutado") → azul cielo (#38bdf8)
+Advertencia (⚠️) → ámbar (#f5a623, mismo tono que tier fast está bien, es coincidencia aceptable)
+Error (❌) → rojo (#ef4444) Implementación: una función categorizeActionMessage(text: string) que devuelva el color según el emoji/patrón inicial del string — usar los emojis reales tal cual los manda el backend, no inventar un sistema propio.
+RESALTADO DE TÉRMINOS TÉCNICOS (el backend YA envía términos clave marcados con negrita en markdown plano dentro de evt.text — ej. "FVG", "trailingStop", "S6", "EMA10"; confirmalo leyendo cómo llegan los mensajes chat_message reales). En vez de renderizar ese texto como negrita plana, parseá el patrón palabra y renderizalo como un con:
+
+Color dorado/premium vívido (#f2c14e)
+Peso semibold (600), sin necesidad de negrita real además del color
+El resto del texto (prosa, explicaciones) se mantiene en blanco/gris claro de alto contraste, SIN color — el contraste entre "prosa neutra" y "términos dorados" es lo que debe leerse como premium. Escribí esto como una función/componente de parseo simple (split por /**(.+?)**/g), no una librería de markdown completa.
+BURBUJA DE USUARIO: tinte sutil con glass — background con un toque del violeta del tier "deep" a muy baja opacidad (rgba(168,85,247,0.10)) sobre el glass base, para diferenciarla de las burbujas del asistente sin ser chillón.
+
+RESTRICCIONES:
+
+NO cambiar la geometría de las figuras 3D del ModelIndicator (diamante/ hexágono/esfera) — solo su color/gradiente.
+NO tocar lógica de eventos SSE, sesión, ni funcionalidad existente.
+NO renombrar el archivo ni crear uno nuevo — editar QuarkChat.tsx en su ubicación actual. El commit debe decir "Update QuarkChat.tsx".
+Correr npm run build y confirmar compilación limpia antes de terminar.
+Mostrame el diff completo antes de aplicar, y una captura o descripción de cómo se ve cada categoría de color aplicada (tier, evidencia encontrada, síntesis, palabra clave) antes de commitear.
+
+24 hours ago
+PASO 0 confirmado. El archivo existe exactamente como describís: ModelIndicator (líneas 60–111) con las tres geometrías, manejo de model_active/action/deep_search/chat_message/patch_proposal/error en el SSE loop. Lo que no existe actualmente es un objeto T de tokens — los colores están inline. Lo creo ahora como parte de este trabajo.
+
+Procediendo con todos los cambios:
+
+Build clean — zero TypeScript errors. Let me grab a screenshot and check logs, then describe exactly what each color category looks like.
+
+Todo aplicado y compilado limpio (tsc && vite build — 0 errores). HMR confirmó el hot-reload del archivo.
+
+Descripción de cada categoría de color tal como queda:
+
+Fondo — radial-gradient(ellipse at 50% 20%, #0d0d12 → #050506). Centro levemente azul-negro, bordes casi negro puro. Da sensación de profundidad sin ser un degradado obvio.
+
+Glass — todos los paneles (header, burbujas, patch card, input area) tienen background: rgba(255,255,255,0.06) + backdrop-filter: blur(20px) saturate(180%) + border: rgba(255,255,255,0.12) + box-shadow: inset 0 1px 0 rgba(255,255,255,0.15). Ese último valor es el brillo superior característico del liquid glass. Bordes 10–16px.
+
+ModelIndicator por tier:
+
+fast → diamante (clip-path rombo) en ámbar #f5a623, gradiente sólido-a-semitransparente, glow ámbar sutil. Nombre del modelo en ámbar tenue.
+balanced → hexágono en cian #22d3ee, mismo tratamiento. Nombre en cian tenue.
+deep → esfera en violeta #a855f7, radial-gradient desde #a855f7ee en el centro hacia #a855f722 en el borde. Nombre en violeta tenue.
+Action messages por categoría:
+
+Emoji real	Color	Lectura semántica
+📌 📂 ⚡ ✅	esmeralda #34d399	Encontrado / evidencia confirmada
+💡 📚 + "Plan ejecutado" + 🧠 [análisis]	cian #38bdf8	Síntesis / razonamiento
+⚠️	ámbar #f5a623	Advertencia
+❌	rojo #ef4444	Error
+🔎 🔬 🗺️ ⏳ 🧠 Paso X	gris rgba(255,255,255,0.45)	En progreso, sin resultado todavía
+Términos **bold** en mensajes del asistente — parseados a <span color: #f2c14e, fontWeight: 600>. La prosa que los rodea queda en blanco neutro (rgba(255,255,255,0.92)). El contraste dorado-sobre-blanco es el que comunica "término técnico premium" sin usar negrita tipográfica.
+
+Burbuja de usuario — glass base + tinte rgba(168,85,247,0.11) (violeta del tier deep a muy baja opacidad). Radius asimétrico 16px 16px 4px 16px (punta inferior derecha) para diferenciarla visualmente de las burbujas del asistente (4px 16px 16px 16px).
+
+FileActivityCard — ahora usa el verde esmeralda del tier "found" (#34d399) en su gradiente y borde, coherente con el color que tiene el texto de la línea de acción que lo acompaña.
+
+BUG: Al abrir el selector de repositorios (el dropdown "SIGNAL OS ▼" en el header de Brous, componente ProjectSwitcher en src/components/Projects/ProjectSwitcher.tsx), el panel desplegado se superpone con el texto de los mensajes del chat detrás de él — se ve semitransparente/mezclado, no como una capa sólida encima.
+
+PASO 1 — Diagnóstico: Leé ProjectSwitcher.tsx completo y confirmá:
+
+¿El dropdown tiene su propio background sólido u opaco, o depende de opacidad baja / transparencia?
+¿Tiene z-index explícito, y es mayor al de los elementos del chat detrás?
+¿Está usando position: absolute/fixed correctamente, o puede estar renderizando dentro del flujo normal del documento (lo que causaría que el chat "empuje" o se mezcle visualmente con él en vez de quedar encima)?
+Si QuarkChat.tsx (el componente hermano, ya rediseñado con efecto glass — backdrop-filter: blur() y backgrounds con rgba de baja opacidad) tiene algún panel con backdrop-filter que pueda estar creando un nuevo stacking context que interfiera con el z-index del dropdown, señalalo también.
+PASO 2 — Fix: Según lo que encuentres:
+
+Si falta background sólido en el dropdown: agregar un fondo opaco real (no glass transparente) para este elemento específico — un dropdown de navegación necesita legibilidad total, a diferencia de los paneles de contenido del chat. Sugerido: background: #121212 sólido (no rgba), con borde rgba(255,255,255,0.12) y sombra fuerte (box-shadow: 0 8px 24px rgba(0,0,0,0.6)) para que se lea claramente por encima de todo.
+Si es un problema de z-index: asegurar que el dropdown tenga z-index significativamente mayor (ej. 1000+) que cualquier elemento del chat.
+Si es un problema de stacking context por backdrop-filter en QuarkChat.tsx: NO remuevas el efecto glass de los paneles del chat — en cambio, asegurate de que el dropdown de ProjectSwitcher se renderice en un stacking context más alto (nuevo z-index en un ancestro con position relative, o portal si el framework lo permite).
+VERIFICACIÓN: abrí el selector de repos con varios mensajes de chat visibles detrás, confirmá que el dropdown se lee 100% claro y sólido, sin ningún texto del chat sangrando a través.
+
+NO toques la lógica de selección de proyecto, solo el aspecto visual/capas.
+
+23 hours ago
+Diagnóstico — tres problemas combinados:
+
+Background del dropdown: #0d0d1a es sólido en teoría, pero con zIndex: 100 insuficiente.
+z-index real: El dropdown tiene zIndex: 100, pero está atrapado dentro del stacking context creado por el header de QuarkChat. El header tiene backdrop-filter: blur(), lo que crea un nuevo stacking context — y como el header no tiene z-index explícito propio, el message feed (que viene después en el DOM) pinta encima de los hijos del header, incluyendo el dropdown absoluto.
+Causa raíz: backdrop-filter en el header genera stacking context, pero sin z-index explícito en el header mismo, el contenido que sigue en el DOM (feed de mensajes, que también tiene glass panels con backdrop-filter) puede pintar encima. El dropdown queda enterrado.
+Fix: en QuarkChat añadir position: relative, zIndex: 10 al header (eleva su stacking context sobre el feed). En ProjectSwitcher subir el dropdown a zIndex: 9999 y ponerlo con background sólido #121212.
+
+Now fix the dropdown itself — z-index 9999 + solid #121212 background + stronger shadow:
+
+Build limpio, HMR confirmó ambos archivos. El fix está completo.
+
+Qué se cambió y por qué:
+
+QuarkChat.tsx — header:
+
++ position: 'relative',
++ zIndex: 10,
+backdrop-filter en el header crea un stacking context implícito, pero sin z-index explícito ese contexto no tiene prioridad sobre el feed de mensajes (que aparece después en el DOM). Con zIndex: 10 el header queda formalmente por encima del feed y el input.
+
+ProjectSwitcher.tsx — dropdown:
+
+- zIndex: 100,
+- background: '#0d0d1a',
+- border: '1px solid #1e1e3f',
+- boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
++ zIndex: 9999,
++ background: '#121212',          ← sólido, no rgba
++ border: '1px solid rgba(255,255,255,0.12)',
++ boxShadow: '0 8px 32px rgba(0,0,0,0.75), 0 2px 8px rgba(0,0,0,0.5)',
+zIndex: 9999 lo saca de cualquier contexto de apilamiento que pueda interferir. El background #121212 es completamente opaco — ningún texto del chat puede sangrar a través. La sombra más fuerte refuerza la sensación de capa flotante sobre el contenido.
+
+CONTEXTO: El archivo src/components/Agent/QuarkAgent.tsx (proyecto Quark IDE) ya pasó por un rediseño anterior a paleta oscura minimalista (fondos #0a0a0a/#080808, texto blanco con opacidad, sin colores neón). Ahora hay que evolucionar ese sistema al mismo esquema "liquid glass" + colores semánticos que ya se aplicó con éxito en un componente hermano (QuarkChat.tsx, proyecto Brous, mismo backend). Esta pasada NO es un rediseño desde cero — es aplicar el mismo lenguaje visual sobre la base minimalista que ya existe acá.
+
+PASO 0 — Confirmar antes de tocar nada: Leé QuarkAgent.tsx completo (o al menos las secciones de: paneles/fondos, botones de modo Fast/Deep/Chat/Auto, indicador de modelo activo si existe, mensajes del chat/log). Confirmame:
+
+¿Los 4 modos (Fast, Deep, Chat 💬, Auto) son botones/tabs en el mismo componente, o Chat vive en un archivo separado (QuarkChat.tsx de este mismo proyecto, no confundir con el de Brous)?
+¿Existe ya algún indicador de modelo/tier acá, o es exclusivo de la vista de Chat?
+¿Cómo se renderizan los mensajes de log/acción (mismo formato de emojis que el backend manda: 🔎 Buscando, 📌 Evidencia leída, 💡, ⚠️, ❌, etc.)?
+OBJETIVO — Mismo sistema aplicado en Brous:
+
+GLASS PANELS: todo panel/tarjeta/chip (incluyendo los 4 botones de modo) usa backdrop-filter: blur(20px) saturate(180%), background rgba(255,255,255,0.06), borde 1px rgba(255,255,255,0.12), highlight superior vía box-shadow inset 0 1px 0 rgba(255,255,255,0.15), bordes redondeados 14-18px. Fondo base con gradiente radial sutil (#0d0d12 centro → #050506 bordes).
+
+COLOR POR MODO (aplicar al botón/tab activo de cada uno — inactivo se queda neutro/blanco tenue, como ya está):
+
+Fast → ámbar/naranja vívido (#f5a623)
+Deep → cian eléctrico (#22d3ee)
+Chat 💬 → verde esmeralda (#34d399) — distinto de los otros tres porque Chat no es un modo de búsqueda, es la interfaz conversacional
+Auto → violeta/magenta (#a855f7) Si ya existe un ModelIndicator 3D por tier (fast/balanced/deep) en este mismo archivo o en un componente compartido, usá la MISMA paleta que ya se aplicó en Brous para esos tiers (fast=#f5a623, balanced=#22d3ee, deep=#a855f7) para que sea consistente entre ambas herramientas.
+COLOR POR TIPO DE MENSAJE DE LOG (mismo mapeo que Brous):
+
+Búsqueda en progreso → gris/blanco tenue
+Evidencia encontrada (📌, 📂, ⚡, ✅) → verde esmeralda #34d399
+Síntesis/razonamiento (💡, 🧠 con análisis, "Plan ejecutado") → azul cielo #38bdf8
+Advertencia (⚠️) → ámbar #f5a623
+Error (❌) → rojo #ef4444 Si ya existe una función que categoriza estos mensajes (de la pasada anterior), reutilizala — no dupliques lógica.
+RESALTADO DE TÉRMINOS TÉCNICOS: mismo patrón — si el texto trae palabra en markdown plano, renderizarlo como span dorado (#f2c14e), semibold, resto del texto neutro. Si ya existe esta función en el archivo (de Brous se portó o se implementó acá también), reutilizala.
+
+RESTRICCIONES:
+
+NO tocar lógica de routing, llamadas al backend, ni el comportamiento de ningún modo — puramente visual.
+NO renombrar el archivo. Commit debe decir "Update QuarkAgent.tsx".
+Correr npm run build y confirmar compilación limpia.
+Si encontrás que Chat 💬 vive en un archivo separado dentro de este mismo proyecto, aplicá los mismos cambios ahí también y decime el nombre exacto del archivo en el diff.
+Mostrame el diff completo antes de aplicar.

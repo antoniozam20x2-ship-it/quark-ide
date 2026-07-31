@@ -179,6 +179,11 @@ const T = {
 
   // User bubble tint
   userTint: 'rgba(168,85,247,0.11)',
+
+  // Text hierarchy
+  textPrimary:   'rgba(255,255,255,0.92)',
+  textSecondary: 'rgba(255,255,255,0.50)',
+  textTertiary:  'rgba(255,255,255,0.28)',
 } as const;
 
 /** Map real backend emoji/patterns to semantic color. */
@@ -936,16 +941,7 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           if (ev.event === 'action') {
             const t = ev.text ?? '';
             const isAnalysis = t.startsWith('💡');
-            const actionColor =
-              t.startsWith('CAUSA:')    ? '#FF6B6B' :
-              t.startsWith('DÓNDE:')    ? '#00D4FF' :
-              t.startsWith('POR QUÉ:') ? '#FFD93D' :
-              t.startsWith('SOLUCIÓN:') ? '#6BCB77' :
-              isAnalysis                 ? 'rgba(255,255,255,0.88)' :
-              t.startsWith('⚠️')          ? '#FFD93D' :
-              t.startsWith('🎯')          ? '#00D4FF' :
-              (t.startsWith('🔍') || t.startsWith('📖') || t.startsWith('📂') || t.startsWith('⚡')) ? '#6b7280' :
-              '#4ade80';
+            const actionColor = categorizeActionMsg(t);
             if (isAnalysis) {
               return (
                 <div key={i} style={{ fontSize: 12, lineHeight: 1.6, color: '#d4d4dc', paddingLeft: 2 }}>
@@ -1043,9 +1039,12 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           if (ev.event === 'user_message') return (
             <div key={i} style={{
               alignSelf: 'flex-end', maxWidth: '80%',
-              background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-              borderRadius: '10px 10px 2px 10px', padding: '8px 12px',
-              color: 'rgba(255,255,255,0.88)', fontSize: 12, lineHeight: 1.6,
+              background: `linear-gradient(135deg, ${T.userTint} 0%, rgba(255,255,255,0.05) 100%)`,
+              backdropFilter: T.glassBlur, WebkitBackdropFilter: T.glassBlur,
+              border: `1px solid ${T.glassBorderHi}`,
+              boxShadow: `inset 0 1px 0 ${T.glassHighlight}, 0 2px 12px rgba(0,0,0,0.3)`,
+              borderRadius: '16px 16px 4px 16px', padding: '8px 12px',
+              color: T.textPrimary, fontSize: 12, lineHeight: 1.6,
               fontFamily: 'system-ui, sans-serif', whiteSpace: 'pre-wrap',
             }}>
               {ev.text}
@@ -1054,14 +1053,16 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
 
           if (ev.event === 'chat_message') return (
             <div key={i} style={{
-              background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)',
-              borderLeft: '2px solid rgba(255,255,255,0.22)',
-              borderRadius: '2px 10px 10px 10px', padding: '10px 14px',
-              color: 'rgba(255,255,255,0.88)', fontSize: 12, lineHeight: 1.75,
+              background: T.glassBg,
+              backdropFilter: T.glassBlur, WebkitBackdropFilter: T.glassBlur,
+              border: `1px solid ${T.glassBorder}`,
+              boxShadow: `inset 0 1px 0 ${T.glassHighlight}, 0 2px 12px rgba(0,0,0,0.3)`,
+              borderRadius: '4px 16px 16px 16px', padding: '10px 14px',
+              color: T.textPrimary, fontSize: 12, lineHeight: 1.75,
               fontFamily: 'system-ui, sans-serif', whiteSpace: 'pre-wrap',
               maxWidth: '92%',
             }}>
-              {ev.text}
+              {parseMarkdownBold(ev.text ?? '')}
             </div>
           );
 
@@ -1229,8 +1230,8 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                     width: 20, height: 20,
                     transformStyle: 'preserve-3d',
                     clipPath: 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)',
-                    background: 'linear-gradient(145deg, rgba(255,255,255,0.88) 0%, rgba(255,255,255,0.46) 100%)',
-                    boxShadow: '0 2px 8px rgba(255,255,255,0.07)',
+                    background: `linear-gradient(145deg, ${T.tierBalanced} 0%, ${T.tierBalanced}55 100%)`,
+                    boxShadow: `0 0 8px ${T.tierBalanced}55, 0 2px 6px rgba(0,0,0,0.6), inset 0 1px 0 ${T.tierBalanced}88`,
                   }}
                 />
               )}
@@ -1241,8 +1242,8 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
                     width: 20, height: 20,
                     transformStyle: 'preserve-3d',
                     borderRadius: '50%',
-                    background: 'radial-gradient(circle at 35% 32%, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.46) 55%, rgba(255,255,255,0.08) 100%)',
-                    boxShadow: '0 2px 12px rgba(255,255,255,0.11), inset 0 -2px 6px rgba(0,0,0,0.35)',
+                    background: `radial-gradient(circle at 34% 34%, ${T.tierDeep}ee 0%, ${T.tierDeep}88 45%, ${T.tierDeep}22 100%)`,
+                    boxShadow: `0 0 8px ${T.tierDeep}55, 0 2px 12px rgba(0,0,0,0.6), inset 0 -2px 6px rgba(0,0,0,0.35)`,
                   }}
                 />
               )}
@@ -1251,10 +1252,11 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
             <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
               <span style={{
                 fontSize: 10, fontFamily: 'JetBrains Mono, monospace',
-                color: 'rgba(255,255,255,0.55)', letterSpacing: '0.03em',
-                whiteSpace: 'nowrap',
+                color: activeModel.tier === 'fast' ? T.tierFast : activeModel.tier === 'balanced' ? T.tierBalanced : T.tierDeep,
+                opacity: 0.85, letterSpacing: '0.05em',
+                textTransform: 'uppercase', whiteSpace: 'nowrap',
               }}>
-                {activeModel.model}
+                {activeModel.model.split('-').slice(0, 2).join('-')}
               </span>
               {running && (
                 <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}>
@@ -2069,7 +2071,10 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
       {/* Input */}
       <div style={{
         display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 12px',
-        borderTop: '1px solid rgba(255,255,255,0.07)', flexShrink: 0, background: '#0a0a0a',
+        borderTop: `1px solid ${T.glassBorder}`, flexShrink: 0,
+        background: T.glassBg,
+        backdropFilter: T.glassBlur, WebkitBackdropFilter: T.glassBlur,
+        boxShadow: `inset 0 1px 0 ${T.glassHighlight}`,
       }}>
         {/* Modo de razonamiento */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -2082,11 +2087,11 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           <button
             onClick={() => setMode('fast')}
             style={{
-              background: mode === 'fast' ? 'rgba(255,255,255,0.07)' : 'transparent',
-              border: `1px solid ${mode === 'fast' ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.07)'}`,
-              borderRadius: 4, color: mode === 'fast' ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.28)',
+              background: mode === 'fast' ? `${T.tierFast}18` : 'transparent',
+              border: `1px solid ${mode === 'fast' ? `${T.tierFast}88` : T.glassBorder}`,
+              borderRadius: 4, color: mode === 'fast' ? T.tierFast : T.textTertiary,
               fontSize: 10, fontWeight: 700, padding: '3px 8px', cursor: 'pointer',
-              fontFamily: 'JetBrains Mono, monospace',
+              fontFamily: 'JetBrains Mono, monospace', transition: 'all 0.15s',
             }}
           >
             ⚡ FAST
@@ -2094,11 +2099,11 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           <button
             onClick={() => setMode('deep')}
             style={{
-              background: mode === 'deep' ? 'rgba(255,255,255,0.07)' : 'transparent',
-              border: `1px solid ${mode === 'deep' ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.07)'}`,
-              borderRadius: 4, color: mode === 'deep' ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.28)',
+              background: mode === 'deep' ? `${T.tierBalanced}18` : 'transparent',
+              border: `1px solid ${mode === 'deep' ? `${T.tierBalanced}88` : T.glassBorder}`,
+              borderRadius: 4, color: mode === 'deep' ? T.tierBalanced : T.textTertiary,
               fontSize: 10, fontWeight: 700, padding: '3px 8px', cursor: 'pointer',
-              fontFamily: 'JetBrains Mono, monospace',
+              fontFamily: 'JetBrains Mono, monospace', transition: 'all 0.15s',
             }}
           >
             🧠 DEEP
@@ -2106,11 +2111,11 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           <button
             onClick={() => setMode('chat')}
             style={{
-              background: mode === 'chat' ? 'rgba(255,255,255,0.07)' : 'transparent',
-              border: `1px solid ${mode === 'chat' ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.07)'}`,
-              borderRadius: 4, color: mode === 'chat' ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.28)',
+              background: mode === 'chat' ? `${T.modeChat}18` : 'transparent',
+              border: `1px solid ${mode === 'chat' ? `${T.modeChat}88` : T.glassBorder}`,
+              borderRadius: 4, color: mode === 'chat' ? T.modeChat : T.textTertiary,
               fontSize: 10, fontWeight: 700, padding: '3px 8px', cursor: 'pointer',
-              fontFamily: 'JetBrains Mono, monospace',
+              fontFamily: 'JetBrains Mono, monospace', transition: 'all 0.15s',
             }}
           >
             💬 CHAT
@@ -2118,11 +2123,11 @@ export default function QuarkAgent({ activeProject, onApplyToEditor, onShowPrevi
           <button
             onClick={() => setMode('auto')}
             style={{
-              background: mode === 'auto' ? 'rgba(255,255,255,0.07)' : 'transparent',
-              border: `1px solid ${mode === 'auto' ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.07)'}`,
-              borderRadius: 4, color: mode === 'auto' ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.28)',
+              background: mode === 'auto' ? `${T.tierDeep}18` : 'transparent',
+              border: `1px solid ${mode === 'auto' ? `${T.tierDeep}88` : T.glassBorder}`,
+              borderRadius: 4, color: mode === 'auto' ? T.tierDeep : T.textTertiary,
               fontSize: 10, fontWeight: 700, padding: '3px 8px', cursor: 'pointer',
-              fontFamily: 'JetBrains Mono, monospace',
+              fontFamily: 'JetBrains Mono, monospace', transition: 'all 0.15s',
             }}
           >
             🤖 AUTO
