@@ -7262,8 +7262,9 @@ async function runChatTurn(
       });
       return;
     }
-    if (!haikuResult.foundFiles) {
-      // Two full search passes found nothing — don't escalate to Sonnet;
+    if (!haikuResult.foundFiles && !haikuResult.resolved) {
+      // Two full search passes found nothing AND Haiku didn't produce a real
+      // answer from existing session context either — don't escalate to Sonnet;
       // ask the user for more precise context instead.
       const noResultMsg =
         'No encontré referencias a esto en el codebase después de buscar con variantes de nombres ' +

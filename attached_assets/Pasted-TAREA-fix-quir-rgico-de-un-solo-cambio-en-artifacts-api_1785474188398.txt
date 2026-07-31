@@ -1,0 +1,62 @@
+TAREA: fix quirúrgico de un solo cambio en `artifacts/api-server/src/routes/autonomous.ts`, dentro de la función `runChatTurn`.
+
+CAUSA RAÍZ (confirmada, no especular):
+El bloque que decide si Haiku "no encontró nada" usa `haikuResult.foundFiles` como única condición. Esa bandera SOLO se pone en `true` cuando Haiku llama a `grep_code`, `read_file` o `list_files` EN ESE TURNO con resultado sustancial. No contempla el caso en que Haiku responde correctamente usando contexto que YA tenía de turnos anteriores de la misma sesión (sin necesitar una tool call nueva) — que es exactamente lo que pasa cuando el usuario pide una modificación justo después de haber discutido el mismo código.
+
+En ese escenario, `haikuResult.resolved` es `true` (Haiku dio una respuesta de texto real, incluyendo el rechazo correcto "eso es trabajo de Sonnet") pero `haikuResult.foundFiles` queda en `false` porque no hubo tool call nueva. El código entonces:
+1. Ignora la respuesta real que Haiku ya envió al usuario.
+2. Dispara el mensaje genérico hardcodeado de "no encontré referencias..." pegado como texto suelto.
+3. Hace `return` ANTES de llegar al handoff hacia Sonnet, cortando la posibilidad de que el patch se proponga.
+
+Esto reproduce el bug reportado: "Haiku se niega a delegar a Sonnet" — en realidad Sonnet nunca se invoca porque el flujo corta antes de llegar ahí.
+
+CAMBIO REQUERIDO:
+En el archivo `artifacts/api-server/src/routes/autonomous.ts`, buscá este bloque dentro de `runChatTurn` (después de la llamada a `runHaikuTier`):
+
+```
+    if (!haikuResult.foundFiles) {
+      // Two full search passes found nothing — don't escalate to Sonnet;
+      // ask the user for more precise context instead.
+      const noResultMsg =
+        'No encontré referencias a esto en el codebase después de buscar con variantes de nombres ' +
+        '(camelCase, snake_case, CONSTANT_CASE y jerga del dominio).\n\n' +
+        'Para que pueda ayudarte mejor, indicame:\n' +
+        '- El nombre exacto del archivo o carpeta donde lo esperás encontrar, o\n' +
+        '- El nombre de la función o variable tal como aparece en el código.';
+      send('chat_message', { text: noResultMsg });
+      haikuResult.messages.push({ role: 'assistant', content: [{ type: 'text', text: noResultMsg }] });
+      await saveChatHistory(sessionId, haikuResult.messages);
+      return;
+    }
+```
+
+Reemplazalo por (único cambio: la condición del `if` ahora exige AMBAS cosas — que no haya encontrado archivos Y que tampoco haya resuelto con una respuesta real):
+
+```
+    if (!haikuResult.foundFiles && !haikuResult.resolved) {
+      // Two full search passes found nothing AND Haiku didn't produce a real
+      // answer from existing session context either — don't escalate to Sonnet;
+      // ask the user for more precise context instead.
+      const noResultMsg =
+        'No encontré referencias a esto en el codebase después de buscar con variantes de nombres ' +
+        '(camelCase, snake_case, CONSTANT_CASE y jerga del dominio).\n\n' +
+        'Para que pueda ayudarte mejor, indicame:\n' +
+        '- El nombre exacto del archivo o carpeta donde lo esperás encontrar, o\n' +
+        '- El nombre de la función o variable tal como aparece en el código.';
+      send('chat_message', { text: noResultMsg });
+      haikuResult.messages.push({ role: 'assistant', content: [{ type: 'text', text: noResultMsg }] });
+      await saveChatHistory(sessionId, haikuResult.messages);
+      return;
+    }
+```
+
+REGLAS ESTRICTAS:
+- Es un cambio de UNA sola línea: la condición del `if` pasa de `!haikuResult.foundFiles` a `!haikuResult.foundFiles && !haikuResult.resolved`. El comentario de arriba y el resto del bloque se actualizan solo para reflejar la nueva condición — no cambies ninguna otra lógica del archivo.
+- No toques `runHaikuTier`, no toques cómo se calcula `foundFiles` ni `resolved` — el fix es exclusivamente en el punto de consumo, en `runChatTurn`.
+- No agregues manejo de casos nuevos, no refactorices nada alrededor.
+- Verificá que `old_str` matchee exactamente antes de aplicar — copiá el bloque tal cual aparece en el archivo real, no lo escribas de memoria.
+
+VALIDACIÓN POST-CAMBIO (para reportarme, con evidencia real, no estimada):
+1. Repetí el Nivel 6c exacto de hoy: pedile a Brous en la misma sesión (después de una pregunta de análisis sobre el mismo código) "Agregá XRP a la lista de símbolos del ML predictor, hacé el cambio."
+2. Pegame el log completo de esa respuesta — necesito ver si ahora aparece la fase de Sonnet 5 (`model_active: Sonnet 5`) y si se genera un `propose_patch` en vez del mensaje genérico de "no encontré referencias".
+3. Confirmá también que el Nivel 4 (búsqueda real desde cero, sin contexto previo) sigue funcionando igual que hoy — no debería haber cambiado nada ahí, pero quiero la evidencia de que no rompimos ese camino.
