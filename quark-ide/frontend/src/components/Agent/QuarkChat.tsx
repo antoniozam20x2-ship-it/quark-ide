@@ -50,6 +50,10 @@ if (typeof document !== 'undefined' && !document.getElementById('quark-chat-anim
       0%   { transform: rotateX(0deg); }
       100% { transform: rotateX(360deg); }
     }
+    @keyframes qk-suggest-pulse {
+      0%, 100% { box-shadow: 0 0 14px rgba(168,85,247,0.35), inset 0 1px 0 rgba(168,85,247,0.25); }
+      50%      { box-shadow: 0 0 22px rgba(168,85,247,0.55), inset 0 1px 0 rgba(168,85,247,0.35); }
+    }
   `;
   document.head.appendChild(s);
 }
@@ -231,6 +235,7 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
   const [forceGroq, setForceGroq] = useState(false);
   const [sessionId, setSessionId] = useState(() => getOrCreateSessionId(repo));
   const [activeModel, setActiveModel] = useState<ActiveModel | null>(null);
+  const [pendingSuggestion, setPendingSuggestion] = useState<{ reason: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -306,16 +311,23 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
     setSessionId(newId);
     setMessages([]);
     setPendingPatch(null);
+    setPendingSuggestion(null);
     setForceGroq(false);
   }
 
   // ── sendMessage ───────────────────────────────────────────────────────────────
-  async function sendMessage() {
-    if (!input.trim() || streaming) return;
-    const userMsg = input;
+  async function sendMessage(overrideText?: string, triggerSonnetFlag = false) {
+    const textToSend = overrideText ?? input;
+    if (!textToSend.trim() || streaming) return;
+    const userMsg = textToSend;
     const useForceGroq = forceGroq;
     setForceGroq(false);
-    setMessages(m => [...m, { role: 'user', text: userMsg }]);
+    setPendingSuggestion(null);
+    if (triggerSonnetFlag) {
+      setMessages(m => [...m, { role: 'action', text: `🪄 Generando corrección con Sonnet 5 — ${userMsg}`, isNew: true }]);
+    } else {
+      setMessages(m => [...m, { role: 'user', text: userMsg }]);
+    }
     setInput('');
     resetTextareaHeight();
     setStreaming(true);
@@ -326,7 +338,7 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
       const res = await fetch(`${API_BASE}/api/agent/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMsg, repo, sessionId, forceGroq: useForceGroq }),
+        body: JSON.stringify({ message: userMsg, repo, sessionId, forceGroq: useForceGroq, triggerSonnet: triggerSonnetFlag }),
         signal: controller.signal,
       });
 
@@ -370,6 +382,9 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
               new_str: evt.new_str,
               reasoning: evt.reasoning,
             });
+          }
+          if (evt.event === 'suggest_sonnet') {
+            setPendingSuggestion({ reason: evt.reason as string });
           }
           if (evt.event === 'error') {
             setMessages(m => [...m, { role: 'action', text: `❌ ${evt.text}`, isNew: true }]);
@@ -611,6 +626,65 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
           </div>
         ))}
 
+        {/* ── Pending Sonnet suggestion — botón resaltado, solo aparece cuando
+             Haiku emitió la señal <<SUGGEST_SONNET:...>> ────────────────────── */}
+        {pendingSuggestion && !pendingPatch && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '10px',
+            padding: '10px 14px',
+            borderRadius: '14px',
+            background: 'rgba(168,85,247,0.10)',
+            backdropFilter: T.glassBlur,
+            WebkitBackdropFilter: T.glassBlur,
+            border: '1px solid rgba(168,85,247,0.45)',
+            animation: 'qk-suggest-pulse 2s ease-in-out infinite',
+          }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+              <span style={{ color: T.tierDeep, fontSize: '12px', fontWeight: 700, letterSpacing: '0.03em' }}>
+                🪄 Haiku encontró algo corregible
+              </span>
+              <span style={{ color: T.textSecondary, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {pendingSuggestion.reason}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+              <button
+                onClick={() => sendMessage(pendingSuggestion.reason, true)}
+                disabled={streaming}
+                style={{
+                  background: `${T.tierDeep}22`,
+                  color: T.tierDeep,
+                  border: `1px solid ${T.tierDeep}88`,
+                  padding: '6px 14px',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  cursor: streaming ? 'not-allowed' : 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                Generar con Sonnet 5
+              </button>
+              <button
+                onClick={() => setPendingSuggestion(null)}
+                style={{
+                  background: 'transparent',
+                  color: T.textTertiary,
+                  border: `1px solid ${T.glassBorder}`,
+                  padding: '6px 10px',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* ── Pending patch proposal ────────────────────────────────────────── */}
         {pendingPatch && (
           <div style={{
@@ -787,7 +861,7 @@ export default function QuarkChat({ repo, activeProject, onProjectChange, initia
             </button>
           ) : (
             <button
-              onClick={sendMessage}
+              onClick={() => sendMessage()}
               disabled={!input.trim()}
               title="Enviar mensaje"
               style={{

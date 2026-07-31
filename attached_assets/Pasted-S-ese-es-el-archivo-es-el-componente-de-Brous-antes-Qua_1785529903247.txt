@@ -1,0 +1,464 @@
+Sí, ese es el archivo — es el componente de Brous (antes "Quark Chat 💬"). Este es un cambio más grande que los anteriores: toca backend Y frontend. Aplicalo en 3 pasos secuenciales, en orden, con su propia validación cada uno antes de seguir al siguiente. No lo hagas todo de una — necesito confirmar cada capa por separado.
+
+DISEÑO GENERAL (para tu contexto, no lo repitas en el código):
+- Haiku, al terminar una síntesis de investigación (intent 'explain'), puede opcionalmente agregar una línea invisible con formato `<<SUGGEST_SONNET: resumen>>` SOLO cuando encontró un problema concreto y verificado — sea el que el usuario preguntó, o uno distinto encontrado de paso.
+- El backend intercepta esa línea antes de mostrarla, la limpia del texto visible, y emite un evento nuevo `suggest_sonnet` con el resumen.
+- El frontend muestra un botón resaltado (violeta, acorde al tier de Sonnet) SOLO cuando llega ese evento — nunca por defecto.
+- Al hacer click, el frontend manda una nueva request con `triggerSonnet: true` — el backend salta Groq/Haiku por completo, reusa el historial de exploración ya guardado, y corre la fase de Sonnet directo.
+- Esto es ADICIONAL al auto-handoff que ya existe para pedidos explícitos de modificación (`intent === 'generate'`, ya arreglado con el fix del regex reflexivo) — no lo reemplaza. El botón cubre el caso de "Haiku encontró algo pero el usuario no lo pidió".
+
+═══════════════════════════════════════════════════════════════
+PASO 1 (backend) — Haiku emite la señal, el backend la intercepta
+═══════════════════════════════════════════════════════════════
+
+Archivo: `artifacts/api-server/src/routes/autonomous.ts`.
+
+1a. Agregá esta función helper justo ANTES de `async function runHaikuTier(`:
+
+```ts
+const SUGGEST_SONNET_RE = /<<SUGGEST_SONNET:\s*(.+?)\s*>>\s*$/s;
+
+/** Extrae la señal invisible <<SUGGEST_SONNET: ...>> del texto de Haiku, si existe.
+ *  Devuelve el texto limpio (sin la línea de señal) y el motivo, o null si no hay señal. */
+function extractSonnetSuggestion(text: string): { cleanText: string; reason: string | null } {
+  const match = text.match(SUGGEST_SONNET_RE);
+  if (!match) return { cleanText: text, reason: null };
+  return { cleanText: text.slice(0, match.index).trimEnd(), reason: match[1].trim() };
+}
+```
+
+1b. En la firma de `runHaikuTier`, cambiá el tipo de retorno de `Promise<{ resolved: boolean; messages: any[]; foundFiles: boolean }>` a `Promise<{ resolved: boolean; messages: any[]; foundFiles: boolean; suggestion?: { reason: string } | null }>` — es un campo OPCIONAL, así que no hace falta tocar los demás `return` de la función, solo el tipo y el que vamos a editar en 1c.
+
+Justo debajo de `let foundFiles = false;` (dentro de `runHaikuTier`), agregá:
+
+```ts
+  let pendingSuggestion: { reason: string } | null = null;
+```
+
+1c. Buscá este bloque exacto dentro de `runHaikuTier` (es único en el archivo — tiene el chequeo de `BÚSQUEDA_SIN_RESULTADOS` al lado):
+
+```
+    const textBlocks = data.content.filter((b: any) => b.type === 'text');
+    for (const t of textBlocks) {
+      send('chat_message', { text: t.text });
+    }
+
+    const toolUses = data.content.filter((b: any) => b.type === 'tool_use');
+    if (toolUses.length === 0) {
+      // Check if Haiku signalled no results via the sentinel text
+      const allText = textBlocks.map((b: any) => b.text as string).join('\n');
+      if (allText.includes('BÚSQUEDA_SIN_RESULTADOS')) {
+        return { resolved: false, messages, foundFiles: false };
+      }
+      return { resolved: true, messages, foundFiles };
+    }
+```
+
+Reemplazalo por:
+
+```
+    const textBlocks = data.content.filter((b: any) => b.type === 'text');
+    for (const t of textBlocks) {
+      const { cleanText, reason } = extractSonnetSuggestion(t.text as string);
+      send('chat_message', { text: cleanText });
+      if (reason) {
+        pendingSuggestion = { reason };
+        send('suggest_sonnet', { reason });
+      }
+    }
+
+    const toolUses = data.content.filter((b: any) => b.type === 'tool_use');
+    if (toolUses.length === 0) {
+      // Check if Haiku signalled no results via the sentinel text
+      const allText = textBlocks.map((b: any) => b.text as string).join('\n');
+      if (allText.includes('BÚSQUEDA_SIN_RESULTADOS')) {
+        return { resolved: false, messages, foundFiles: false, suggestion: null };
+      }
+      return { resolved: true, messages, foundFiles, suggestion: pendingSuggestion };
+    }
+```
+
+1d. En `HAIKU_SEARCH_SYSTEM`, buscá esta línea exacta (dentro del bloque "FORMATO POR DEFECTO"):
+
+```
+    - Al final, agregá SIEMPRE esta línea exacta: \
+      "💬 Pedime 'más detalle' si querés el desglose completo con código y ejemplos."
+```
+
+Reemplazala por (agrega la instrucción de la señal opcional justo después):
+
+```
+    - Al final, agregá SIEMPRE esta línea exacta: \
+      "💬 Pedime 'más detalle' si querés el desglose completo con código y ejemplos."
+    - SEÑAL PARA BOTÓN DE CORRECCIÓN — opcional, solo cuando corresponda: si durante la \
+      investigación encontraste un problema CONCRETO y VERIFICADO en el código (no una mejora \
+      cosmética ni una especulación) — sea el que el usuario preguntó, o uno distinto que \
+      encontraste de paso — agregá una línea nueva DESPUÉS de la línea "💬 Pedime 'más detalle'" \
+      con este formato exacto: "<<SUGGEST_SONNET: resumen de una frase del problema encontrado>>". \
+      Esta línea es invisible para el usuario — el sistema la intercepta y muestra un botón en su \
+      lugar. NUNCA la uses si no encontraste un problema real y verificado — la regla \
+      ANTI-FABRICACIÓN DE CAUSA RAÍZ de más abajo sigue aplicando con la misma severidad: no \
+      inventes un problema solo para tener algo que ofrecer corregir.
+```
+
+VALIDACIÓN DEL PASO 1 (antes de seguir al Paso 2):
+Repetí una investigación donde vos sepas que hay un problema real y verificable en el código (por ejemplo, el `catch {}` vacío de `fetchMlPredictions` que ya identificamos — es un caso real, no fabricado). Pegame el log crudo del backend (no hace falta frontend todavía). Tiene que aparecer el evento `suggest_sonnet` con un `reason` coherente, y el `chat_message` final NO debe contener la línea `<<SUGGEST_SONNET:...>>` — debe estar limpia.
+
+═══════════════════════════════════════════════════════════════
+PASO 2 (backend) — extraer la fase de Sonnet a función reusable +
+endpoint triggerSonnet
+═══════════════════════════════════════════════════════════════
+
+2a. Dentro de `runChatTurn`, ubicá el comentario `// ── Sonnet patch-generation phase ────...` — marca el inicio de la última sección de la función. Todo desde ese comentario hasta el `}` que cierra `runChatTurn` (incluyendo el `await saveChatHistory(sessionId, compressOldToolResults(messages));` final) hay que extraerlo a una función nueva y reusable.
+
+Cortá ese bloque completo (desde el comentario hasta el final del `for` loop de síntesis y el `saveChatHistory` final) y reemplazalo, en el lugar donde estaba, por:
+
+```
+  await runSonnetPhase(messages, repo, send, sessionId, userMessage);
+}
+```
+
+(Ese `}` cierra `runChatTurn`.)
+
+Después, pegá el bloque que cortaste como una función nueva, a nivel de módulo, justo después del cierre de `runChatTurn`, con esta firma (el CONTENIDO interno del bloque —el `systemPrompt`, el `send('model_active', ...)`, el `for (let step = 0; step < maxSynthesisSteps; step++) { ... }`, y el `await saveChatHistory(...)` final— queda EXACTAMENTE IGUAL, solo cambia el envoltorio de función):
+
+```ts
+// ── Sonnet patch-generation phase (reusable) ──────────────────────────────────
+// Se invoca desde dos lugares: el handoff automático de runChatTurn cuando
+// intent === 'generate' (pedido explícito de modificación), y el path de
+// triggerSonnet (confirmación por botón de una sugerencia que hizo Haiku).
+async function runSonnetPhase(
+  messages: any[],
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+  sessionId: string,
+  userMessage: string,
+): Promise<void> {
+  // ← ACÁ VA EL CONTENIDO EXACTO QUE CORTASTE (systemPrompt, model_active,
+  //   el for loop de maxSynthesisSteps, y el saveChatHistory final) —
+  //   sin modificar ni una línea de la lógica interna.
+}
+```
+
+2b. En la firma de `runChatTurn`, agregá un parámetro nuevo al final:
+
+Buscá:
+```
+async function runChatTurn(
+  sessionId: string,
+  userMessage: string,
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+  maxToolSteps = 20,
+  findingId?: string,
+  forceGroq = false,
+): Promise<void> {
+  const history = await loadChatHistory(sessionId);
+```
+
+Reemplazalo por (agrega `triggerSonnet` y el atajo que salta Groq/Haiku cuando el usuario confirmó el botón):
+
+```
+async function runChatTurn(
+  sessionId: string,
+  userMessage: string,
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+  maxToolSteps = 20,
+  findingId?: string,
+  forceGroq = false,
+  triggerSonnet = false,
+): Promise<void> {
+  // ── Botón "Generar con Sonnet" — el usuario confirmó una sugerencia que Haiku
+  // hizo al final de una exploración anterior. Saltamos Groq/Haiku por completo y
+  // reusamos el historial ya guardado (que incluye toda la exploración y evidencia
+  // que Haiku ya leyó) como punto de partida para Sonnet. `userMessage` acá lleva
+  // el texto del "reason" de la sugerencia, no un mensaje tipeado por el usuario.
+  if (triggerSonnet) {
+    const priorMessages = await loadChatHistory(sessionId);
+    const instruction =
+      `[El usuario confirmó que querés que generes el patch para el hallazgo que sugeriste: ` +
+      `"${userMessage}". Basate en la exploración y evidencia ya presentes en el historial de ` +
+      `esta conversación — no vuelvas a buscar desde cero. Generá el patch con propose_patch.]`;
+    const sonnetMessages = [...priorMessages, { role: 'user', content: instruction }];
+    await runSonnetPhase(sonnetMessages, repo, send, sessionId, userMessage);
+    return;
+  }
+
+  const history = await loadChatHistory(sessionId);
+```
+
+2c. En el endpoint `router.post('/chat', ...)`, buscá:
+
+```
+router.post('/chat', async (req, res) => {
+  const { message, repo: bodyRepo, sessionId, findingId, forceGroq } = req.body as {
+    message?: string; repo?: string; sessionId?: string; findingId?: string; forceGroq?: boolean;
+  };
+```
+
+Reemplazalo por:
+
+```
+router.post('/chat', async (req, res) => {
+  const { message, repo: bodyRepo, sessionId, findingId, forceGroq, triggerSonnet } = req.body as {
+    message?: string; repo?: string; sessionId?: string; findingId?: string; forceGroq?: boolean; triggerSonnet?: boolean;
+  };
+```
+
+Y más abajo, buscá:
+
+```
+    await runChatTurn(sessionId, message, repo, send, 20, findingId, forceGroq ?? false);
+```
+
+Reemplazalo por:
+
+```
+    await runChatTurn(sessionId, message, repo, send, 20, findingId, forceGroq ?? false, triggerSonnet ?? false);
+```
+
+VALIDACIÓN DEL PASO 2:
+Con curl o Postman (sin frontend todavía), mandá una request a `/api/agent/chat` con `sessionId` de una conversación donde el Paso 1 ya generó una sugerencia, y `triggerSonnet: true` + `message: "<el reason que viste en el evento suggest_sonnet>"`. Confirmá que el log muestra `model_active: Sonnet 5` directo, SIN pasar por Groq ni Haiku, y que termina en un `propose_patch` coherente con la sugerencia. Pegame ese log.
+
+═══════════════════════════════════════════════════════════════
+PASO 3 (frontend) — el botón en QuarkChat.tsx (Brous)
+═══════════════════════════════════════════════════════════════
+
+Archivo: el componente de Brous que me pasaste (`QuarkChat`).
+
+3a. Agregá el nuevo estado, cerca de los demás `useState`:
+
+Buscá:
+```
+  const [activeModel, setActiveModel] = useState<ActiveModel | null>(null);
+```
+
+Reemplazalo por:
+```
+  const [activeModel, setActiveModel] = useState<ActiveModel | null>(null);
+  const [pendingSuggestion, setPendingSuggestion] = useState<{ reason: string } | null>(null);
+```
+
+3b. Cambiá la firma de `sendMessage` para que acepte un texto y un flag opcionales (así se reusa tanto para el input normal como para el botón):
+
+Buscá:
+```
+  async function sendMessage() {
+    if (!input.trim() || streaming) return;
+    const userMsg = input;
+    const useForceGroq = forceGroq;
+    setForceGroq(false);
+    setMessages(m => [...m, { role: 'user', text: userMsg }]);
+    setInput('');
+    resetTextareaHeight();
+    setStreaming(true);
+
+    try {
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      const res = await fetch(`${API_BASE}/api/agent/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: userMsg, repo, sessionId, forceGroq: useForceGroq }),
+        signal: controller.signal,
+      });
+```
+
+Reemplazalo por:
+```
+  async function sendMessage(overrideText?: string, triggerSonnetFlag = false) {
+    const textToSend = overrideText ?? input;
+    if (!textToSend.trim() || streaming) return;
+    const userMsg = textToSend;
+    const useForceGroq = forceGroq;
+    setForceGroq(false);
+    setPendingSuggestion(null);
+    if (triggerSonnetFlag) {
+      setMessages(m => [...m, { role: 'action', text: `🪄 Generando corrección con Sonnet 5 — ${userMsg}`, isNew: true }]);
+    } else {
+      setMessages(m => [...m, { role: 'user', text: userMsg }]);
+    }
+    setInput('');
+    resetTextareaHeight();
+    setStreaming(true);
+
+    try {
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      const res = await fetch(`${API_BASE}/api/agent/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: userMsg, repo, sessionId, forceGroq: useForceGroq, triggerSonnet: triggerSonnetFlag }),
+        signal: controller.signal,
+      });
+```
+
+3c. Agregá el manejo del evento nuevo `suggest_sonnet` en el loop de parseo del stream. Buscá:
+
+```
+          if (evt.event === 'patch_proposal') {
+            setPendingPatch({
+              path: evt.path,
+              old_str: evt.old_str,
+              new_str: evt.new_str,
+              reasoning: evt.reasoning,
+            });
+          }
+```
+
+Reemplazalo por (agrega el nuevo `if` justo después, sin tocar el existente):
+
+```
+          if (evt.event === 'patch_proposal') {
+            setPendingPatch({
+              path: evt.path,
+              old_str: evt.old_str,
+              new_str: evt.new_str,
+              reasoning: evt.reasoning,
+            });
+          }
+          if (evt.event === 'suggest_sonnet') {
+            setPendingSuggestion({ reason: evt.reason as string });
+          }
+```
+
+3d. Limpiá `pendingSuggestion` al reiniciar la conversación. Buscá:
+
+```
+  function resetConversation() {
+    if (messages.length > 0 && !window.confirm('¿Borrar la conversación actual y empezar de cero?')) return;
+    localStorage.removeItem(uiHistoryKey(sessionId));
+    const newId = createFreshSessionId(repo);
+    setSessionId(newId);
+    setMessages([]);
+    setPendingPatch(null);
+    setForceGroq(false);
+  }
+```
+
+Reemplazalo por:
+
+```
+  function resetConversation() {
+    if (messages.length > 0 && !window.confirm('¿Borrar la conversación actual y empezar de cero?')) return;
+    localStorage.removeItem(uiHistoryKey(sessionId));
+    const newId = createFreshSessionId(repo);
+    setSessionId(newId);
+    setMessages([]);
+    setPendingPatch(null);
+    setPendingSuggestion(null);
+    setForceGroq(false);
+  }
+```
+
+3e. Agregá la animación de pulso al bloque de CSS inyectado. Buscá:
+
+```
+    @keyframes qk-flip-x {
+      0%   { transform: rotateX(0deg); }
+      100% { transform: rotateX(360deg); }
+    }
+  `;
+```
+
+Reemplazalo por:
+
+```
+    @keyframes qk-flip-x {
+      0%   { transform: rotateX(0deg); }
+      100% { transform: rotateX(360deg); }
+    }
+    @keyframes qk-suggest-pulse {
+      0%, 100% { box-shadow: 0 0 14px rgba(168,85,247,0.35), inset 0 1px 0 rgba(168,85,247,0.25); }
+      50%      { box-shadow: 0 0 22px rgba(168,85,247,0.55), inset 0 1px 0 rgba(168,85,247,0.35); }
+    }
+  `;
+```
+
+3f. Agregá el botón, renderizado entre el `messages.map(...)` y el bloque `{pendingPatch && (...)}`. Buscá el inicio exacto del bloque de `pendingPatch`:
+
+```
+        {/* ── Pending patch proposal ────────────────────────────────────────── */}
+        {pendingPatch && (
+```
+
+Reemplazalo por (agrega el nuevo bloque JUSTO ANTES, sin tocar el de `pendingPatch`):
+
+```
+        {/* ── Pending Sonnet suggestion — botón resaltado, solo aparece cuando
+             Haiku emitió la señal <<SUGGEST_SONNET:...>> ────────────────────── */}
+        {pendingSuggestion && !pendingPatch && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '10px',
+            padding: '10px 14px',
+            borderRadius: '14px',
+            background: 'rgba(168,85,247,0.10)',
+            backdropFilter: T.glassBlur,
+            WebkitBackdropFilter: T.glassBlur,
+            border: '1px solid rgba(168,85,247,0.45)',
+            animation: 'qk-suggest-pulse 2s ease-in-out infinite',
+          }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+              <span style={{ color: T.tierDeep, fontSize: '12px', fontWeight: 700, letterSpacing: '0.03em' }}>
+                🪄 Haiku encontró algo corregible
+              </span>
+              <span style={{ color: T.textSecondary, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {pendingSuggestion.reason}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+              <button
+                onClick={() => sendMessage(pendingSuggestion.reason, true)}
+                disabled={streaming}
+                style={{
+                  background: `${T.tierDeep}22`,
+                  color: T.tierDeep,
+                  border: `1px solid ${T.tierDeep}88`,
+                  padding: '6px 14px',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  cursor: streaming ? 'not-allowed' : 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                Generar con Sonnet 5
+              </button>
+              <button
+                onClick={() => setPendingSuggestion(null)}
+                style={{
+                  background: 'transparent',
+                  color: T.textTertiary,
+                  border: `1px solid ${T.glassBorder}`,
+                  padding: '6px 10px',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Pending patch proposal ────────────────────────────────────────── */}
+        {pendingPatch && (
+```
+
+VALIDACIÓN DEL PASO 3 (end-to-end, el test final):
+En Brous, repetí la investigación real del `catch {}` vacío en `fetchMlPredictions` (una pregunta puramente de investigación, sin pedir el fix). Confirmá:
+1. Aparece el botón violeta "🪄 Haiku encontró algo corregible" con el resumen correcto, y NO aparece ningún patch automático de Sonnet.
+2. Al hacer click en "Generar con Sonnet 5", el chat muestra el mensaje de "Generando corrección..." y después el flujo normal de `propose_patch` con los botones ✅/❌ de siempre.
+3. Al hacer click en ✕, el botón desaparece sin activar nada.
+Pegame el log completo de esta prueba de punta a punta.
+
+REGLAS ESTRICTAS PARA LOS 3 PASOS:
+- Cada paso es un commit separado con su propia validación — no avances al siguiente sin confirmar el anterior.
+- No toques `classifyIntent`, el mensaje hardcodeado de handoff automático de Sonnet, ni ninguno de los cambios ya aplicados (Cambio A, B, 1, 2 de prompts anteriores).
+- No agregues manejo de casos nuevos más allá de lo descrito acá.
+- Verificá que cada `old_str` matchee exactamente contra el archivo real antes de aplicar — no lo escribas de memoria.
+- Mostrame el diff de cada paso antes de aplicarlo.

@@ -6377,6 +6377,15 @@ FORMATO POR DEFECTO — obligatorio salvo que el usuario pida explícitamente m�
     Omití el flujo paso a paso, los casos límite y el detalle secundario — eso es para el modo expandido.
   - Al final, agregá SIEMPRE esta línea exacta: \
     "💬 Pedime 'más detalle' si querés el desglose completo con código y ejemplos."
+  - SEÑAL PARA BOTÓN DE CORRECCIÓN — opcional, solo cuando corresponda: si durante la \
+    investigación encontraste un problema CONCRETO y VERIFICADO en el código (no una mejora \
+    cosmética ni una especulación) — sea el que el usuario preguntó, o uno distinto que \
+    encontraste de paso — agregá una línea nueva DESPUÉS de la línea "💬 Pedime 'más detalle'" \
+    con este formato exacto: "<<SUGGEST_SONNET: resumen de una frase del problema encontrado>>". \
+    Esta línea es invisible para el usuario — el sistema la intercepta y muestra un botón en su \
+    lugar. NUNCA la uses si no encontraste un problema real y verificado — la regla \
+    ANTI-FABRICACIÓN DE CAUSA RAÍZ de más abajo sigue aplicando con la misma severidad: no \
+    inventes un problema solo para tener algo que ofrecer corregir.
 
 EXPANSIÓN — solo si el usuario pide explícitamente más detalle, más contexto, código, \
 ejemplos, o dice algo como "explicá más", "dame el detalle", "mostrame el código":
@@ -6568,6 +6577,16 @@ Si una variable corta (\`sa\`, \`sb\`, \`st\`, etc.) no está en la tabla de arr
 // Haiku already gathered all context; Sonnet's job is to write the patch.
 const SONNET_SYNTHESIS_TOOLS = CHAT_TOOLS.filter(t => t.name === 'propose_patch');
 
+const SUGGEST_SONNET_RE = /<<SUGGEST_SONNET:\s*(.+?)\s*>>\s*$/s;
+
+/** Extrae la señal invisible <<SUGGEST_SONNET: ...>> del texto de Haiku, si existe.
+ *  Devuelve el texto limpio (sin la línea de señal) y el motivo, o null si no hay señal. */
+function extractSonnetSuggestion(text: string): { cleanText: string; reason: string | null } {
+  const match = text.match(SUGGEST_SONNET_RE);
+  if (!match) return { cleanText: text, reason: null };
+  return { cleanText: text.slice(0, match.index).trimEnd(), reason: match[1].trim() };
+}
+
 async function runHaikuTier(
   messages: any[],
   repo: string,
@@ -6575,11 +6594,12 @@ async function runHaikuTier(
   sessionId: string,
   maxSteps = 12,
   allowPatch = true,
-): Promise<{ resolved: boolean; messages: any[]; foundFiles: boolean }> {
+): Promise<{ resolved: boolean; messages: any[]; foundFiles: boolean; suggestion?: { reason: string } | null }> {
   send('action', { text: '⚡ Haiku 4.5 — exploración inteligente del codebase' });
   send('model_active', { model: 'Haiku 4.5', tier: 'balanced' });
 
   let foundFiles = false;
+  let pendingSuggestion: { reason: string } | null = null;
   // Cambio 1 — count consecutive shallow searches (grep_code / read_file)
   // without an intervening deep_search call. Reset to 0 whenever deep_search
   // or task_complete is called, or when the forced message is injected.
@@ -6631,7 +6651,12 @@ async function runHaikuTier(
 
     const textBlocks = data.content.filter((b: any) => b.type === 'text');
     for (const t of textBlocks) {
-      send('chat_message', { text: t.text });
+      const { cleanText, reason } = extractSonnetSuggestion(t.text as string);
+      send('chat_message', { text: cleanText });
+      if (reason) {
+        pendingSuggestion = { reason };
+        send('suggest_sonnet', { reason });
+      }
     }
 
     const toolUses = data.content.filter((b: any) => b.type === 'tool_use');
@@ -6639,9 +6664,9 @@ async function runHaikuTier(
       // Check if Haiku signalled no results via the sentinel text
       const allText = textBlocks.map((b: any) => b.text as string).join('\n');
       if (allText.includes('BÚSQUEDA_SIN_RESULTADOS')) {
-        return { resolved: false, messages, foundFiles: false };
+        return { resolved: false, messages, foundFiles: false, suggestion: null };
       }
-      return { resolved: true, messages, foundFiles };
+      return { resolved: true, messages, foundFiles, suggestion: pendingSuggestion };
     }
 
     const toolExecutions = await Promise.all(
@@ -6748,7 +6773,24 @@ async function runChatTurn(
   maxToolSteps = 20,
   findingId?: string,
   forceGroq = false,
+  triggerSonnet = false,
 ): Promise<void> {
+  // ── Botón "Generar con Sonnet" — el usuario confirmó una sugerencia que Haiku
+  // hizo al final de una exploración anterior. Saltamos Groq/Haiku por completo y
+  // reusamos el historial ya guardado (que incluye toda la exploración y evidencia
+  // que Haiku ya leyó) como punto de partida para Sonnet. `userMessage` acá lleva
+  // el texto del "reason" de la sugerencia, no un mensaje tipeado por el usuario.
+  if (triggerSonnet) {
+    const priorMessages = await loadChatHistory(sessionId);
+    const instruction =
+      `[El usuario confirmó que querés que generes el patch para el hallazgo que sugeriste: ` +
+      `"${userMessage}". Basate en la exploración y evidencia ya presentes en el historial de ` +
+      `esta conversación — no vuelvas a buscar desde cero. Generá el patch con propose_patch.]`;
+    const sonnetMessages = [...priorMessages, { role: 'user', content: instruction }];
+    await runSonnetPhase(sonnetMessages, repo, send, sessionId, userMessage);
+    return;
+  }
+
   const history = await loadChatHistory(sessionId);
 
   // ── Detección de investigación profunda (multi-turn sobre el mismo concepto) ──
@@ -7360,10 +7402,20 @@ async function runChatTurn(
     });
   }
 
-  // ── Sonnet patch-generation phase ────────────────────────────────────────────
-  // Only reached for 'generate' intent. Sonnet writes the patch; it cannot search.
-  // SONNET_SYNTHESIS_TOOLS = [propose_patch] only — no read_file, no grep_code.
+  await runSonnetPhase(messages, repo, send, sessionId, userMessage);
+}
 
+// ── Sonnet patch-generation phase (reusable) ──────────────────────────────────
+// Se invoca desde dos lugares: el handoff automático de runChatTurn cuando
+// intent === 'generate' (pedido explícito de modificación), y el path de
+// triggerSonnet (confirmación por botón de una sugerencia que hizo Haiku).
+async function runSonnetPhase(
+  messages: any[],
+  repo: string,
+  send: (event: string, data: Record<string, unknown>) => void,
+  sessionId: string,
+  userMessage: string,
+): Promise<void> {
   const systemPrompt = `Eres QUARK, un asistente de código que actúa como ingeniero senior. \
 Haiku 4.5 ya investigó el codebase y el contexto relevante está en el historial de esta conversación.
 
@@ -7510,8 +7562,8 @@ router.get('/chat/history/:sessionId', async (req, res) => {
 });
 
 router.post('/chat', async (req, res) => {
-  const { message, repo: bodyRepo, sessionId, findingId, forceGroq } = req.body as {
-    message?: string; repo?: string; sessionId?: string; findingId?: string; forceGroq?: boolean;
+  const { message, repo: bodyRepo, sessionId, findingId, forceGroq, triggerSonnet } = req.body as {
+    message?: string; repo?: string; sessionId?: string; findingId?: string; forceGroq?: boolean; triggerSonnet?: boolean;
   };
   const repo = bodyRepo ?? process.env.GITHUB_REPO;
   console.log('[CHAT] incoming →', { message, repo, sessionId });
@@ -7530,7 +7582,7 @@ router.post('/chat', async (req, res) => {
   };
 
   try {
-    await runChatTurn(sessionId, message, repo, send, 20, findingId, forceGroq ?? false);
+    await runChatTurn(sessionId, message, repo, send, 20, findingId, forceGroq ?? false, triggerSonnet ?? false);
     send('done', {});
   } catch (err) {
     const stack = err instanceof Error ? (err.stack ?? err.message) : String(err);
