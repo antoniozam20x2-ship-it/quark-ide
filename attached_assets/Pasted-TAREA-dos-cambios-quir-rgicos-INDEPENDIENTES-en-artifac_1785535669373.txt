@@ -1,0 +1,186 @@
+TAREA: dos cambios quirúrgicos INDEPENDIENTES en `artifacts/api-server/src/routes/autonomous.ts`. No están relacionados entre sí — podés aplicarlos y validarlos en cualquier orden, pero como siempre, uno por vez.
+
+═══════════════════════════════════════════════════════════════
+CAMBIO 1 — el multi-hop se desvía por coincidencias de substring
+sin sentido semántico ("time" conecta "realTime" con "timeout")
+═══════════════════════════════════════════════════════════════
+
+CAUSA RAÍZ (confirmada, no especulación):
+Dentro de `runDeepSearchPipeline`, la función `isRelevant` decide si un símbolo candidato encontrado en una llamada a función vale la pena seguir en el siguiente hop. Lo hace comparando substrings: toma el string más corto (query term o símbolo candidato) y verifica si algún prefijo de ≥4 caracteres aparece dentro del más largo. El problema es que 4 caracteres es demasiado poco para palabras genéricas del inglés: en el caso real de hoy, el query term `realTime` y el símbolo candidato `timeout` no tienen ninguna relación real, pero ambos contienen la substring "time" — eso alcanzó para que `isRelevant` los declarara relacionados, y el multi-hop se fue detrás de `timeout`, terminando en un archivo totalmente ajeno (`mockup-sandbox/src/hooks/use-toast.ts`).
+
+UBICACIÓN: dentro de `runDeepSearchPipeline`, en la sección "── Multi-hop: follow call chains...", donde se define `MIN_OVERLAP` e `isRelevant`.
+
+Buscá este bloque exacto:
+
+```
+    const MIN_OVERLAP = 4;
+    const isRelevant = (symLower: string): boolean => {
+      for (const kw of relevanceSet) {
+        if (kw.length < MIN_OVERLAP || symLower.length < MIN_OVERLAP) continue;
+        const shorter = kw.length <= symLower.length ? kw : symLower;
+        const longer  = kw.length <= symLower.length ? symLower : kw;
+        for (let l = shorter.length; l >= MIN_OVERLAP; l--) {
+          if (longer.includes(shorter.slice(0, l))) return true;
+        }
+      }
+      return false;
+    };
+```
+
+Reemplazalo por (agrega un requisito de proporción mínima — el overlap ahora debe cubrir al menos el 60% del string más corto, no solo un mínimo absoluto de 4 caracteres; esto sigue permitiendo coincidencias legítimas como `markPrice`/`getMarkPrice` —overlap casi total— pero descarta coincidencias cortas y genéricas como "time" entre palabras largas no relacionadas):
+
+```
+    const MIN_OVERLAP = 4;
+    const isRelevant = (symLower: string): boolean => {
+      for (const kw of relevanceSet) {
+        if (kw.length < MIN_OVERLAP || symLower.length < MIN_OVERLAP) continue;
+        const shorter = kw.length <= symLower.length ? kw : symLower;
+        const longer  = kw.length <= symLower.length ? symLower : kw;
+        // El overlap debe cubrir al menos el 60% del string más corto, además
+        // del mínimo absoluto de MIN_OVERLAP. Sin este requisito de proporción,
+        // palabras genéricas cortas compartidas entre identificadores largos no
+        // relacionados (ej. "time" dentro de "realTime" y "timeout") bastaban
+        // para que el multi-hop los tratara como relacionados y se desviara
+        // hacia archivos sin ninguna conexión real con la búsqueda original.
+        const minRequiredOverlap = Math.max(MIN_OVERLAP, Math.ceil(shorter.length * 0.6));
+        for (let l = shorter.length; l >= minRequiredOverlap; l--) {
+          if (longer.includes(shorter.slice(0, l))) return true;
+        }
+      }
+      return false;
+    };
+```
+
+VALIDACIÓN DE CAMBIO 1:
+Repetí el Nivel 4 de control que ya usamos antes (multi-hop real en `ml-predictions`, el que trazaba `getLastScanCache` → `scanAll`) — tiene que seguir encontrando la cadena de llamadas correctamente, sin regresión. Si eso sigue funcionando igual, y además el caso de hoy de Sniper OS (búsqueda de `markPrice|updatePrice|priceWorker|...|realTime|interval`) ya no se desvía hacia `use-toast.ts`, el fix está confirmado. Pegame ambos logs.
+
+═══════════════════════════════════════════════════════════════
+CAMBIO 2 — el detector de patrón FVG da falsos positivos fuera
+del dominio de trading
+═══════════════════════════════════════════════════════════════
+
+CAUSA RAÍZ (confirmada):
+El detector de FVG en `TRADING_PATTERNS` reconoce el patrón por su FORMA estructural pura: cualquier comparación `array[i] > array2[i-N]` (con offset entre índices) se marca como FVG, sin importar de qué arrays se trate. Como es puramente estructural y no verifica el dominio, cualquier código que compare arrays con offset de índice —por ejemplo un array de `status` o de historial de estados, nada relacionado a precios de velas— se marca como FVG igual. Eso fue lo que pasó hoy en `server.ts:1197`, sobre código de `wantsActive`/`status`.
+
+UBICACIÓN: dentro de `TRADING_PATTERNS`, la entrada `{ name: 'FVG', ... detect(...) }`.
+
+Buscá este bloque exacto:
+
+```
+    detect(lines: string[], fragmentStartLine: number): TradingPatternResult | null {
+      // FVG structural signature: a comparison between an array value at the
+      // *current* bar index and an array value N bars *back* (offset index).
+      // This is the universal FVG implementation regardless of naming.
+      //
+      // Canonical form (checkS6Bull in Signal OS): lows[i] > highs[i-2]
+      //   • arr[loopVar]        — current bar's value
+      //   • arr2[loopVar - N]   — value N bars ago (N >= 1)
+      //   • comparison operator between them
+      //
+      // The backreference on the loop variable (group 2) prevents matching
+      // unrelated index comparisons like arr[i] > arr2[j-1].
+      //
+      // Fallback: explicit fvg-named variable (fvgBull, fvgBear, etc.)
+      // which is also structural — it means the repo already computed the gap.
+
+      // word[i]!? OP (?word[i-N]  — tolerates TS non-null assertion and optional open-paren
+      const OFFSET_CMP_FORWARD = /\b\w+\s*\[\s*(\w+)\s*\]!?\s*[><=!]{1,3}\s*\(?\s*\w+\s*\[\s*\1\s*-\s*\d+\s*\]/;
+      // word[i-N]!? OP (?word[i]  — same tolerances for reverse form
+      const OFFSET_CMP_REVERSE = /\b\w+\s*\[\s*(\w+)\s*-\s*\d+\s*\]!?\s*[><=!]{1,3}\s*\(?\s*\w+\s*\[\s*\1\s*\]/;
+      // Explicit fvg variable (named structural result)
+      const FVG_NAMED_VAR = /\bfvg(?:Bull|Bear|bull|bear|Up|Down|Long|Short|[A-Z])/;
+
+      const matchedLines: number[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (OFFSET_CMP_FORWARD.test(line) || OFFSET_CMP_REVERSE.test(line) || FVG_NAMED_VAR.test(line)) {
+          matchedLines.push(fragmentStartLine + i);
+        }
+      }
+
+      if (matchedLines.length === 0) return null;
+
+      const first = matchedLines[0];
+      const last = matchedLines[matchedLines.length - 1];
+      const lineRef = first === last ? `línea ${first}` : `líneas ${first}-${last}`;
+      return {
+        matchedLines,
+        detail: `${lineRef} implementan el patrón FVG (comparación de low/close actual contra high de N velas atrás).`,
+      };
+    },
+```
+
+Reemplazalo por (agrega captura de los nombres de los arrays comparados y exige que al menos uno sugiera datos de precio/vela — `low`, `high`, `close`, `open`, `price`, `candle`, `wick` — antes de aceptar la coincidencia estructural como FVG; la detección por variable nombrada `fvgBull`/`fvgBear` no cambia, sigue aceptándose tal cual):
+
+```
+    detect(lines: string[], fragmentStartLine: number): TradingPatternResult | null {
+      // FVG structural signature: a comparison between an array value at the
+      // *current* bar index and an array value N bars *back* (offset index).
+      // This is the universal FVG implementation regardless of naming.
+      //
+      // Canonical form (checkS6Bull in Signal OS): lows[i] > highs[i-2]
+      //   • arr[loopVar]        — current bar's value
+      //   • arr2[loopVar - N]   — value N bars ago (N >= 1)
+      //   • comparison operator between them
+      //
+      // The backreference on the loop variable (group 2) prevents matching
+      // unrelated index comparisons like arr[i] > arr2[j-1].
+      //
+      // Fallback: explicit fvg-named variable (fvgBull, fvgBear, etc.)
+      // which is also structural — it means the repo already computed the gap.
+      //
+      // DOMAIN ANCHOR (added): the structural comparison alone matches ANY
+      // offset-index array comparison, including unrelated code (status
+      // arrays, history buffers, state machines). Now the array names
+      // involved in the comparison must hint at price/candle data before
+      // the match is accepted — the named-variable fallback is unaffected.
+
+      // word[i]!? OP (?word[i-N]  — tolerates TS non-null assertion and optional open-paren
+      // (capturing groups 1 and 3 = the two array names being compared)
+      const OFFSET_CMP_FORWARD = /\b(\w+)\s*\[\s*(\w+)\s*\]!?\s*[><=!]{1,3}\s*\(?\s*(\w+)\s*\[\s*\2\s*-\s*\d+\s*\]/;
+      // word[i-N]!? OP (?word[i]  — same tolerances for reverse form
+      const OFFSET_CMP_REVERSE = /\b(\w+)\s*\[\s*(\w+)\s*-\s*\d+\s*\]!?\s*[><=!]{1,3}\s*\(?\s*(\w+)\s*\[\s*\2\s*\]/;
+      // Explicit fvg variable (named structural result)
+      const FVG_NAMED_VAR = /\bfvg(?:Bull|Bear|bull|bear|Up|Down|Long|Short|[A-Z])/;
+      // Los arrays comparados deben sugerir datos de precio/vela — sin esto,
+      // cualquier comparación de índice con offset (status, historial, buffers
+      // genéricos) se marcaba como FVG solo por la forma del código.
+      const PRICE_ARRAY_HINT = /\b(low|high|close|open|price|candle|wick)/i;
+
+      const matchedLines: number[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const structuralMatch = line.match(OFFSET_CMP_FORWARD) ?? line.match(OFFSET_CMP_REVERSE);
+        if (structuralMatch) {
+          const arraysInvolved = `${structuralMatch[1]} ${structuralMatch[3]}`;
+          if (PRICE_ARRAY_HINT.test(arraysInvolved)) {
+            matchedLines.push(fragmentStartLine + i);
+          }
+          continue;
+        }
+        if (FVG_NAMED_VAR.test(line)) {
+          matchedLines.push(fragmentStartLine + i);
+        }
+      }
+
+      if (matchedLines.length === 0) return null;
+
+      const first = matchedLines[0];
+      const last = matchedLines[matchedLines.length - 1];
+      const lineRef = first === last ? `línea ${first}` : `líneas ${first}-${last}`;
+      return {
+        matchedLines,
+        detail: `${lineRef} implementan el patrón FVG (comparación de low/close actual contra high de N velas atrás).`,
+      };
+    },
+```
+
+VALIDACIÓN DE CAMBIO 2:
+1. Repetí la misma búsqueda de hoy en Sniper OS que tocó `server.ts:1197` (la relacionada con `wantsActive`/`status`) — ya NO debería aparecer la anotación `🔍 [QUARK PATTERN] FVG detectado`.
+2. Control positivo — necesito confirmar que el detector real de FVG en Signal OS (Ahorar) sigue funcionando: repetí una investigación sobre `checkS6Bull` o el término "FVG" en ese repo y confirmá que la anotación de patrón SIGUE apareciendo ahí, con cita correcta. Si dejó de aparecer en el caso real, el fix quedó demasiado estricto y hay que ajustar la lista `PRICE_ARRAY_HINT`.
+
+REGLAS ESTRICTAS PARA AMBOS CAMBIOS:
+- Cada uno es un commit separado, con su propia validación (incluyendo el control positivo del Cambio 2 — no lo saltees, es el que confirma que no rompimos la detección real).
+- No toques ninguna otra entrada de `TRADING_PATTERNS`, ni la lógica de `runDeepSearchPipeline` fuera de lo señalado.
+- No agregues manejo de casos nuevos más allá de lo descrito acá.
+- Verificá que cada `old_str` matchee exactamente contra el archivo real antes de aplicar — no lo escribas de memoria.

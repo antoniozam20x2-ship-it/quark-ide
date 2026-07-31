@@ -4891,16 +4891,29 @@ const TRADING_PATTERNS: TradingPattern[] = [
       // which is also structural — it means the repo already computed the gap.
 
       // word[i]!? OP (?word[i-N]  — tolerates TS non-null assertion and optional open-paren
-      const OFFSET_CMP_FORWARD = /\b\w+\s*\[\s*(\w+)\s*\]!?\s*[><=!]{1,3}\s*\(?\s*\w+\s*\[\s*\1\s*-\s*\d+\s*\]/;
+      // (capturing groups 1 and 3 = the two array names being compared)
+      const OFFSET_CMP_FORWARD = /\b(\w+)\s*\[\s*(\w+)\s*\]!?\s*[><=!]{1,3}\s*\(?\s*(\w+)\s*\[\s*\2\s*-\s*\d+\s*\]/;
       // word[i-N]!? OP (?word[i]  — same tolerances for reverse form
-      const OFFSET_CMP_REVERSE = /\b\w+\s*\[\s*(\w+)\s*-\s*\d+\s*\]!?\s*[><=!]{1,3}\s*\(?\s*\w+\s*\[\s*\1\s*\]/;
+      const OFFSET_CMP_REVERSE = /\b(\w+)\s*\[\s*(\w+)\s*-\s*\d+\s*\]!?\s*[><=!]{1,3}\s*\(?\s*(\w+)\s*\[\s*\2\s*\]/;
       // Explicit fvg variable (named structural result)
       const FVG_NAMED_VAR = /\bfvg(?:Bull|Bear|bull|bear|Up|Down|Long|Short|[A-Z])/;
+      // Los arrays comparados deben sugerir datos de precio/vela — sin esto,
+      // cualquier comparación de índice con offset (status, historial, buffers
+      // genéricos) se marcaba como FVG solo por la forma del código.
+      const PRICE_ARRAY_HINT = /\b(low|high|close|open|price|candle|wick)/i;
 
       const matchedLines: number[] = [];
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-        if (OFFSET_CMP_FORWARD.test(line) || OFFSET_CMP_REVERSE.test(line) || FVG_NAMED_VAR.test(line)) {
+        const structuralMatch = line.match(OFFSET_CMP_FORWARD) ?? line.match(OFFSET_CMP_REVERSE);
+        if (structuralMatch) {
+          const arraysInvolved = `${structuralMatch[1]} ${structuralMatch[3]}`;
+          if (PRICE_ARRAY_HINT.test(arraysInvolved)) {
+            matchedLines.push(fragmentStartLine + i);
+          }
+          continue;
+        }
+        if (FVG_NAMED_VAR.test(line)) {
           matchedLines.push(fragmentStartLine + i);
         }
       }
@@ -5703,7 +5716,14 @@ async function runDeepSearchPipeline(
         if (kw.length < MIN_OVERLAP || symLower.length < MIN_OVERLAP) continue;
         const shorter = kw.length <= symLower.length ? kw : symLower;
         const longer  = kw.length <= symLower.length ? symLower : kw;
-        for (let l = shorter.length; l >= MIN_OVERLAP; l--) {
+        // El overlap debe cubrir al menos el 60% del string más corto, además
+        // del mínimo absoluto de MIN_OVERLAP. Sin este requisito de proporción,
+        // palabras genéricas cortas compartidas entre identificadores largos no
+        // relacionados (ej. "time" dentro de "realTime" y "timeout") bastaban
+        // para que el multi-hop los tratara como relacionados y se desviara
+        // hacia archivos sin ninguna conexión real con la búsqueda original.
+        const minRequiredOverlap = Math.max(MIN_OVERLAP, Math.ceil(shorter.length * 0.6));
+        for (let l = shorter.length; l >= minRequiredOverlap; l--) {
           if (longer.includes(shorter.slice(0, l))) return true;
         }
       }
