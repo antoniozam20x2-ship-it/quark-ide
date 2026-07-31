@@ -1,0 +1,91 @@
+TAREA: dos cambios quirúrgicos en `artifacts/api-server/src/routes/autonomous.ts` (Parte 1 del plan — el botón de confirmación explícita para invocar Sonnet queda para una Parte 2 aparte, cuando esté el archivo del frontend). Aplicalos en orden, A primero.
+
+CONTEXTO PARA VOS (no es de otro chat — este diagnóstico viene de leer el log real del caso):
+El síntoma reportado (Sonnet generó un patch no solicitado durante una investigación de solo lectura) NO es un problema del system prompt de Haiku empujándolo a "siempre proponer un fix". La causa mecánica exacta es: la pregunta del usuario decía "¿con qué frecuencia **se ejecuta**...?" — una construcción reflexiva puramente descriptiva. La función `classifyIntent` usa una regex por raíces léxicas que no distingue gramática: la raíz `ejecut` matcheó dentro de "se ejecuta" igual que matchearía en una orden real como "ejecutá esto". Eso clasificó el turno como `'generate'` en vez de `'explain'`, lo cual salteó el `return` temprano que existe específicamente para preguntas de investigación y dejó pasar el turno hacia un mensaje HARDCODEADO que le ordena a Sonnet generar un patch sin ninguna condición — Sonnet, al no encontrar ningún problema real, fabricó uno (un `catch {}` vacío) solo para tener algo que reportar.
+
+═══════════════════════════════════════════════════════════════
+CAMBIO A — excluir construcciones reflexivas ("se ejecuta", "se
+aplica", "se corrige") del regex de classifyIntent
+═══════════════════════════════════════════════════════════════
+
+UBICACIÓN: función `classifyIntent`.
+
+Buscá este bloque exacto:
+
+```
+function classifyIntent(message: string): 'explain' | 'generate' {
+  const GENERATE_SIGNALS = /\b(corrig|correg|corrij|arregl|implement|agreg|añad|cre[aá]|refactor|escrib|modific|cambi|propon|ejecut|resolv|resu[eé]lv|remov|remu[eé]v|aplic|elimin|borr|insert|reemplaz|update|fix|patch)[\p{L}\p{N}_]*\b/iu;
+  return GENERATE_SIGNALS.test(message) ? 'generate' : 'explain';
+}
+```
+
+Reemplazalo por (agrega un negative lookbehind que excluye el caso "se <verbo>" — construcción reflexiva/pasiva que en español casi siempre describe comportamiento existente, no una orden; el resto de la regex queda idéntico):
+
+```
+function classifyIntent(message: string): 'explain' | 'generate' {
+  // Negative lookbehind "(?<!se\s)" excluye construcciones reflexivas/pasivas
+  // ("se ejecuta", "se aplica", "se corrige", "cómo se resuelve X") que
+  // describen comportamiento EXISTENTE del código, no una orden de cambio.
+  // Sin esto, "¿con qué frecuencia se ejecuta?" clasificaba como 'generate'
+  // solo por la raíz "ejecut", igual que "ejecutá esto" (orden real).
+  const GENERATE_SIGNALS = /\b(?<!se\s)(corrig|correg|corrij|arregl|implement|agreg|añad|cre[aá]|refactor|escrib|modific|cambi|propon|ejecut|resolv|resu[eé]lv|remov|remu[eé]v|aplic|elimin|borr|insert|reemplaz|update|fix|patch)[\p{L}\p{N}_]*\b/iu;
+  return GENERATE_SIGNALS.test(message) ? 'generate' : 'explain';
+}
+```
+
+VALIDACIÓN DE A:
+Repetí EXACTAMENTE el prompt de hoy que activó el bug ("Perfecto. Ahora buscá el término: fetchMlPredictions... ¿Con qué frecuencia se ejecuta...?"). Pegame el log completo. Tiene que cortar en el `return` temprano después de que Haiku responde — NO debería aparecer el mensaje de handoff a Sonnet ni la fase `model_active: Sonnet 5` en absoluto.
+
+Corré también un caso de control positivo para confirmar que no rompimos la detección real: una pregunta con orden explícita, ej. "Corregí el catch vacío en fetchMlPredictions para que loguee el error." Ese caso SÍ debe seguir activando a Sonnet normalmente.
+
+═══════════════════════════════════════════════════════════════
+CAMBIO B — instrucción anti-fabricación de causa raíz en
+HAIKU_SEARCH_SYSTEM (capa de seguridad adicional, independiente de A)
+═══════════════════════════════════════════════════════════════
+
+Aunque el Cambio A arregla la causa mecánica de este caso puntual, cualquier otra palabra con raíz parecida podría reproducir el síntoma en el futuro. Esta instrucción es una red de seguridad adicional: aunque el routing se equivoque, Haiku no debería inventar una causa raíz solo para tener algo que reportar.
+
+UBICACIÓN: constante `HAIKU_SEARCH_SYSTEM`, dentro de la sección "━━━ ROL DE HAIKU — síntesis y límites ━━━", en el bloque de reglas de EXPANSIÓN.
+
+Buscá este bloque exacto:
+
+```
+  ✓ PERMITIDO: explicar qué hace el código, cómo funciona, cuáles son sus condiciones,
+    describir la causa raíz de un comportamiento, identificar por qué algo sucede.
+  ✓ PERMITIDO: si para resolver el problema habría que cambiar algo, decirlo en prosa
+    y ofrecer evaluarlo — pero NO escribir el cambio.
+  ✗ PROHIBIDO: escribir old_str/new_str, usar propose_patch, o redactar el código del fix.
+    Eso es exclusivamente tarea de Sonnet cuando el usuario pide explícitamente un cambio.
+  ✗ PROHIBIDO: inferir o afirmar lo que no leíste literalmente en el código.
+```
+
+Reemplazalo por (agrega una regla nueva al final; las anteriores quedan intactas):
+
+```
+  ✓ PERMITIDO: explicar qué hace el código, cómo funciona, cuáles son sus condiciones,
+    describir la causa raíz de un comportamiento, identificar por qué algo sucede.
+  ✓ PERMITIDO: si para resolver el problema habría que cambiar algo, decirlo en prosa
+    y ofrecer evaluarlo — pero NO escribir el cambio.
+  ✗ PROHIBIDO: escribir old_str/new_str, usar propose_patch, o redactar el código del fix.
+    Eso es exclusivamente tarea de Sonnet cuando el usuario pide explícitamente un cambio.
+  ✗ PROHIBIDO: inferir o afirmar lo que no leíste literalmente en el código.
+  ✗ PROHIBIDO — ANTI-FABRICACIÓN DE CAUSA RAÍZ: si el usuario no pidió explícitamente un
+    fix, patch o corrección (verbos como "arreglá", "corregí", "aplicá", "implementá"),
+    NUNCA inventes ni fuerces una "causa raíz" solo para tener algo que reportar. Si la
+    investigación no encontró un problema real y verificado en el código, decilo con
+    honestidad — "no encontré un problema concreto en el código revisado" es una respuesta
+    válida y preferible a fabricar un hallazgo. Notar algo mejorable (ej. manejo de errores
+    ausente, un catch vacío) está permitido SOLO como observación en prosa al final de tu
+    respuesta, nunca presentado como "la causa raíz del bug" si no hay evidencia de que algo
+    esté fallando en producción.
+```
+
+VALIDACIÓN DE B:
+No hace falta un caso nuevo — la validación de A ya cubre este caso concreto. Esta regla es preventiva para el futuro; no tiene una prueba directa hoy salvo confirmar que compila y no cambia el comportamiento de las respuestas de investigación normales que ya funcionan bien.
+
+REGLAS ESTRICTAS:
+- No toques el mensaje hardcodeado de handoff a Sonnet (`[Haiku 4.5 ya exploró el codebase...]`) ni la condición `if (haikuResult.resolved && intent === 'explain')` — con el Cambio A corregido, esa lógica ya funciona como está diseñada.
+- No toques `Cambio 1` (Promise.all) ni `Cambio 2` (REINTENTO EN PARALELO) que ya están aplicados.
+- No agregues manejo de casos nuevos más allá de lo descrito acá.
+- Verificá que cada `old_str` matchee exactamente contra el archivo real antes de aplicar — no lo escribas de memoria.
+- Mostrame el diff antes de aplicar, como pediste en el prompt anterior.

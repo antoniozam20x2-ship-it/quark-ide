@@ -3766,7 +3766,12 @@ function classifyEffort(message: string): 'medium' | 'high' | 'xhigh' {
 // Classifies whether the user wants an EXPLANATION (Haiku handles end-to-end)
 // or CODE GENERATION/MODIFICATION (Haiku explores, Sonnet patches).
 function classifyIntent(message: string): 'explain' | 'generate' {
-  const GENERATE_SIGNALS = /\b(corrig|correg|corrij|arregl|implement|agreg|añad|cre[aá]|refactor|escrib|modific|cambi|propon|ejecut|resolv|resu[eé]lv|remov|remu[eé]v|aplic|elimin|borr|insert|reemplaz|update|fix|patch)[\p{L}\p{N}_]*\b/iu;
+  // Negative lookbehind "(?<!se\s)" excluye construcciones reflexivas/pasivas
+  // ("se ejecuta", "se aplica", "se corrige", "cómo se resuelve X") que
+  // describen comportamiento EXISTENTE del código, no una orden de cambio.
+  // Sin esto, "¿con qué frecuencia se ejecuta?" clasificaba como 'generate'
+  // solo por la raíz "ejecut", igual que "ejecutá esto" (orden real).
+  const GENERATE_SIGNALS = /\b(?<!se\s)(corrig|correg|corrij|arregl|implement|agreg|añad|cre[aá]|refactor|escrib|modific|cambi|propon|ejecut|resolv|resu[eé]lv|remov|remu[eé]v|aplic|elimin|borr|insert|reemplaz|update|fix|patch)[\p{L}\p{N}_]*\b/iu;
   return GENERATE_SIGNALS.test(message) ? 'generate' : 'explain';
 }
 
@@ -6388,6 +6393,15 @@ ejemplos, o dice algo como "explicá más", "dame el detalle", "mostrame el cód
   ✗ PROHIBIDO: escribir old_str/new_str, usar propose_patch, o redactar el código del fix.
     Eso es exclusivamente tarea de Sonnet cuando el usuario pide explícitamente un cambio.
   ✗ PROHIBIDO: inferir o afirmar lo que no leíste literalmente en el código.
+  ✗ PROHIBIDO — ANTI-FABRICACIÓN DE CAUSA RAÍZ: si el usuario no pidió explícitamente un
+    fix, patch o corrección (verbos como "arreglá", "corregí", "aplicá", "implementá"),
+    NUNCA inventes ni fuerces una "causa raíz" solo para tener algo que reportar. Si la
+    investigación no encontró un problema real y verificado en el código, decilo con
+    honestidad — "no encontré un problema concreto en el código revisado" es una respuesta
+    válida y preferible a fabricar un hallazgo. Notar algo mejorable (ej. manejo de errores
+    ausente, un catch vacío) está permitido SOLO como observación en prosa al final de tu
+    respuesta, nunca presentado como "la causa raíz del bug" si no hay evidencia de que algo
+    esté fallando en producción.
 
 No inferás lo que no leíste. Citá fragmentos exactos (breves) para respaldar tus afirmaciones, \
 incluso en el modo comprimido.
