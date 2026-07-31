@@ -1,0 +1,128 @@
+TAREA: dos cambios quirúrgicos DEPENDIENTES en `artifacts/api-server/src/routes/autonomous.ts` — el Cambio 1 es la base técnica que el Cambio 2 necesita para tener efecto real. Aplicalos en ese orden y no saltees la validación de 1 antes de aplicar 2.
+
+═══════════════════════════════════════════════════════════════
+CAMBIO 1 — ejecutar las tool calls de Haiku en paralelo, no secuencial
+═══════════════════════════════════════════════════════════════
+
+CAUSA RAÍZ:
+Cuando Claude (Haiku) devuelve varias `tool_use` en un mismo turno — por ejemplo, tres llamadas a `deep_search` con preguntas distintas — el backend las ejecuta con un `for` que hace `await executeChatTool(...)` una por una. Aunque Haiku pida las tres juntas, el servidor las sirve en serie. Esto anula cualquier beneficio de que Haiku decida paralelizar su propia búsqueda: no importa cuántas tool calls pida a la vez, el tiempo total es la suma de todas, no el máximo.
+
+UBICACIÓN: función `runHaikuTier`, dentro del loop principal, justo después de `const toolUses = data.content.filter(...)`.
+
+Buscá este bloque exacto:
+
+```
+    const toolResults: any[] = [];
+    for (const tool of toolUses) {
+      const resultText = await executeChatTool(tool.name, tool.input, repo, send, sessionId);
+      toolResults.push({ type: 'tool_result', tool_use_id: tool.id, content: resultText });
+      // Track whether any tool call returned real content (not an error or empty result)
+      if (
+        (tool.name === 'grep_code' || tool.name === 'read_file' || tool.name === 'list_files') &&
+        !resultText.startsWith('Sin resultados') &&
+        !resultText.startsWith('Error:') &&
+        resultText.trim().length > 50
+      ) {
+        foundFiles = true;
+      }
+      // Cambio 1 — update consecutive-shallow-search counter
+      if (tool.name === 'grep_code' || tool.name === 'read_file') {
+        consecutiveShallowSearches++;
+      } else if (tool.name === 'deep_search' || tool.name === 'task_complete') {
+        consecutiveShallowSearches = 0;
+      }
+    }
+```
+
+Reemplazalo por (ejecuta todas las tool calls del turno con `Promise.all`, y después procesa los resultados en el mismo orden — la lógica de `foundFiles` y `consecutiveShallowSearches` queda idéntica, solo cambia CÓMO se obtienen los `resultText`):
+
+```
+    const toolExecutions = await Promise.all(
+      toolUses.map(async (tool) => ({
+        tool,
+        resultText: await executeChatTool(tool.name, tool.input, repo, send, sessionId),
+      })),
+    );
+
+    const toolResults: any[] = [];
+    for (const { tool, resultText } of toolExecutions) {
+      toolResults.push({ type: 'tool_result', tool_use_id: tool.id, content: resultText });
+      // Track whether any tool call returned real content (not an error or empty result)
+      if (
+        (tool.name === 'grep_code' || tool.name === 'read_file' || tool.name === 'list_files') &&
+        !resultText.startsWith('Sin resultados') &&
+        !resultText.startsWith('Error:') &&
+        resultText.trim().length > 50
+      ) {
+        foundFiles = true;
+      }
+      // Cambio 1 — update consecutive-shallow-search counter
+      if (tool.name === 'grep_code' || tool.name === 'read_file') {
+        consecutiveShallowSearches++;
+      } else if (tool.name === 'deep_search' || tool.name === 'task_complete') {
+        consecutiveShallowSearches = 0;
+      }
+    }
+```
+
+EFECTO SECUNDARIO ESPERADO (no es un bug, avisale al usuario si lo ve):
+Los mensajes `send('action', ...)` que cada `deep_search`/`grep_code` emite mientras busca pueden llegar entreverados en el log — por ejemplo, ver "🔎 Paso 1" de una búsqueda intercalado con "📌 Evidencia leída" de otra. Es cosmético, no afecta el resultado final ni el orden de los `tool_result` que le vuelven a Claude.
+
+VALIDACIÓN DE 1 (antes de aplicar el Cambio 2):
+Esto por sí solo no cambia el comportamiento de Haiku todavía — Haiku hoy no suele pedir varias `deep_search` a la vez porque el prompt no se lo sugiere (eso es el Cambio 2). Para validar que el paralelismo del backend en sí funciona, alcanza con confirmar que el Nivel 4 de hoy (multi-hop) sigue funcionando exactamente igual que antes — no debería haber ninguna diferencia visible todavía. Si compila y el Nivel 4 no rompe, seguí al Cambio 2.
+
+═══════════════════════════════════════════════════════════════
+CAMBIO 2 — Haiku reintenta con múltiples deep_search separados,
+no una sola query combinada
+═══════════════════════════════════════════════════════════════
+
+CAUSA RAÍZ:
+Hoy, cuando Haiku genera variantes de dominio para buscar un concepto, las combina TODAS en una sola llamada a `deep_search` con `|` (ej. `deep_search(query: "trailingStop|TRAILING_STOP|trailing_stop|callbackRatio")`). Eso internamente arma un solo patrón regex — es una búsqueda, no varias. Si esa única búsqueda combinada no encuentra evidencia suficiente, el prompt no le dice a Haiku que separe esas variantes en llamadas independientes — y aunque lo hiciera, antes del Cambio 1 esas llamadas se hubieran ejecutado igual de secuencial.
+
+Con el Cambio 1 ya aplicado, el backend SÍ puede correr varias `deep_search` en paralelo dentro del mismo turno — pero hace falta decírselo a Haiku explícitamente en su prompt, porque hoy no tiene ninguna instrucción que lo empuje a separar variantes en tool calls distintas.
+
+UBICACIÓN: constante `HAIKU_SEARCH_SYSTEM`, en la sección "VARIANTES DE DOMINIO".
+
+Buscá este bloque exacto:
+
+```
+VARIANTES DE DOMINIO — generá 3-5 antes de llamar a deep_search, NO buscás el término literal:
+   - camelCase (ej: "trailing stop" → trailingStop)
+   - CONSTANT_CASE (ej: TRAILING_STOP_ENABLED)
+   - snake_case (ej: trailing_stop)
+   - Jerga del dominio si aplica (en trading: callbackRatio, rangeRate, movingPlan)
+   - Sinónimos funcionales cortos (ej: "SL móvil")
+  Pasalas todas juntas: deep_search(query: "trailingStop|TRAILING_STOP|trailing_stop|callbackRatio")
+```
+
+Reemplazalo por (agrega un párrafo nuevo de instrucción para el caso de reintento; no toca la instrucción original del primer intento):
+
+```
+VARIANTES DE DOMINIO — generá 3-5 antes de llamar a deep_search, NO buscás el término literal:
+   - camelCase (ej: "trailing stop" → trailingStop)
+   - CONSTANT_CASE (ej: TRAILING_STOP_ENABLED)
+   - snake_case (ej: trailing_stop)
+   - Jerga del dominio si aplica (en trading: callbackRatio, rangeRate, movingPlan)
+   - Sinónimos funcionales cortos (ej: "SL móvil")
+  Pasalas todas juntas en tu PRIMER intento: deep_search(query: "trailingStop|TRAILING_STOP|trailing_stop|callbackRatio")
+
+REINTENTO EN PARALELO — si ese primer deep_search (con las variantes combinadas) vuelve con \
+evidencia insuficiente o vacía, NO repitas un segundo deep_search con más variantes combinadas \
+en una sola query. En su lugar, lanzá 2-3 llamadas SEPARADAS a deep_search en la MISMA respuesta \
+(mismo turno, varias tool calls juntas), cada una con un ángulo distinto de la pregunta — por \
+ejemplo una con sinónimos funcionales, otra con el nombre de un módulo/archivo probable, otra con \
+un concepto relacionado del dominio. Estas llamadas se ejecutan en paralelo del lado del servidor, \
+así que separarlas no cuesta tiempo extra. Ejemplo: en vez de un segundo \
+deep_search(query: "a|b|c|d|e|f"), preferí en el mismo turno: \
+deep_search(query: "a|b"), deep_search(query: "c|d"), deep_search(query: "e|f") — tres tool calls \
+distintas, no una combinada.
+```
+
+VALIDACIÓN DE 2:
+Corré 2-3 preguntas donde el primer intento de Haiku probablemente falle (términos ambiguos o poco comunes en el repo). En el log, fijate si en el turno de reintento aparecen varias líneas `🔎 deep_search` o el evento `deep_search` disparándose más de una vez seguida dentro del mismo paso, en vez de una sola con muchas variantes combinadas por `|`. Pegame ese log. Si en tus pruebas Haiku sigue combinando todo en una sola query incluso en el reintento, no es necesariamente un fallo del cambio — puede ser que el modelo no siga la instrucción de forma consistente, y ahí evaluamos si hace falta reforzarla más.
+
+REGLAS ESTRICTAS PARA AMBOS CAMBIOS:
+- Cambio 1 y Cambio 2 van en commits separados, cada uno con su propia validación antes de seguir.
+- No toques `executeChatTool`, `deep_search` (dentro de `executeChatTool`), ni la lógica de `evaluateSearchConfidence` — se reutilizan tal como están.
+- No agregues manejo de casos nuevos más allá de lo descrito, no refactorices nada alrededor.
+- Verificá que cada `old_str` matchee exactamente contra el archivo real antes de aplicar — no lo escribas de memoria.

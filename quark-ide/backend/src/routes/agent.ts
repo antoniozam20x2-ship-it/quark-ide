@@ -6322,7 +6322,18 @@ VARIANTES DE DOMINIO — generá 3-5 antes de llamar a deep_search, NO buscás e
    - snake_case (ej: trailing_stop)
    - Jerga del dominio si aplica (en trading: callbackRatio, rangeRate, movingPlan)
    - Sinónimos funcionales cortos (ej: "SL móvil")
-  Pasalas todas juntas: deep_search(query: "trailingStop|TRAILING_STOP|trailing_stop|callbackRatio")
+  Pasalas todas juntas en tu PRIMER intento: deep_search(query: "trailingStop|TRAILING_STOP|trailing_stop|callbackRatio")
+
+REINTENTO EN PARALELO — si ese primer deep_search (con las variantes combinadas) vuelve con \
+evidencia insuficiente o vacía, NO repitas un segundo deep_search con más variantes combinadas \
+en una sola query. En su lugar, lanzá 2-3 llamadas SEPARADAS a deep_search en la MISMA respuesta \
+(mismo turno, varias tool calls juntas), cada una con un ángulo distinto de la pregunta — por \
+ejemplo una con sinónimos funcionales, otra con el nombre de un módulo/archivo probable, otra con \
+un concepto relacionado del dominio. Estas llamadas se ejecutan en paralelo del lado del servidor, \
+así que separarlas no cuesta tiempo extra. Ejemplo: en vez de un segundo \
+deep_search(query: "a|b|c|d|e|f"), preferí en el mismo turno: \
+deep_search(query: "a|b"), deep_search(query: "c|d"), deep_search(query: "e|f") — tres tool calls \
+distintas, no una combinada.
 
 HERRAMIENTAS DE FALLBACK — grep_code + read_file solo para:
   - Confirmar que un old_str existe literalmente antes de propose_patch
@@ -6619,9 +6630,15 @@ async function runHaikuTier(
       return { resolved: true, messages, foundFiles };
     }
 
+    const toolExecutions = await Promise.all(
+      toolUses.map(async (tool: any) => ({
+        tool,
+        resultText: await executeChatTool(tool.name, tool.input, repo, send, sessionId),
+      })),
+    );
+
     const toolResults: any[] = [];
-    for (const tool of toolUses) {
-      const resultText = await executeChatTool(tool.name, tool.input, repo, send, sessionId);
+    for (const { tool, resultText } of toolExecutions) {
       toolResults.push({ type: 'tool_result', tool_use_id: tool.id, content: resultText });
       // Track whether any tool call returned real content (not an error or empty result)
       if (
