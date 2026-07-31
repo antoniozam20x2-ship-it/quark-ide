@@ -1,0 +1,136 @@
+TAREA: dos cambios quirúrgicos INDEPENDIENTES en `artifacts/api-server/src/routes/autonomous.ts`. Aplicalos uno por uno, en el orden A → B, y verificá cada uno por separado antes de seguir al siguiente.
+
+═══════════════════════════════════════════════════════════════
+CAMBIO A — clasificar preguntas de enumeración como 'complex'
+═══════════════════════════════════════════════════════════════
+
+CAUSA RAÍZ:
+`classifySearchComplexity` decide si una pregunta va por la "ruta rápida" (Groq + un solo fragmento) o por el pipeline completo de DEEP con planificación y búsqueda en paralelo. Hoy solo detecta preguntas de RELACIÓN entre conceptos o con 2+ identificadores técnicos — pero preguntas de ENUMERACIÓN ("en qué archivos aparece X", "dónde se usa X") no matchean ninguna heurística existente y cae a `simple`, aunque necesiten listar TODOS los resultados, no explicar uno solo. Esto es lo que causó que Groq dijera "no pude confirmar otros archivos" cuando ripgrep había encontrado 5.
+
+UBICACIÓN: función `classifySearchComplexity`, justo antes del comentario `// Default: lookup directo`.
+
+Buscá este bloque exacto:
+
+```
+  // Heurística 4 — 2+ identificadores técnicos distintos → complex.
+  // Una query con múltiples símbolos (ej. CAPS_SNAKE_CASE + camelCase) casi
+  // siempre necesita explorar distintos archivos/funciones. No requiere
+  // lenguaje de relación explícito para ser clasificada como compleja.
+  const techIds = [
+    ...(userMessage.match(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g) ?? []),   // CAPS_SNAKE (≥2 partes)
+    ...(userMessage.match(/\b[a-z][a-z0-9]*[A-Z][a-zA-Z0-9]+\b/g) ?? []), // camelCase
+  ];
+  if (new Set(techIds.map(t => t.toLowerCase())).size >= 2) return 'complex';
+
+  // Default: lookup directo
+  return 'simple';
+```
+
+Reemplazalo por (agrega la Heurística 5, sin tocar nada de las anteriores):
+
+```
+  // Heurística 4 — 2+ identificadores técnicos distintos → complex.
+  // Una query con múltiples símbolos (ej. CAPS_SNAKE_CASE + camelCase) casi
+  // siempre necesita explorar distintos archivos/funciones. No requiere
+  // lenguaje de relación explícito para ser clasificada como compleja.
+  const techIds = [
+    ...(userMessage.match(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g) ?? []),   // CAPS_SNAKE (≥2 partes)
+    ...(userMessage.match(/\b[a-z][a-z0-9]*[A-Z][a-zA-Z0-9]+\b/g) ?? []), // camelCase
+  ];
+  if (new Set(techIds.map(t => t.toLowerCase())).size >= 2) return 'complex';
+
+  // Heurística 5 — preguntas de ENUMERACIÓN ("en qué archivos aparece X",
+  // "dónde se usa X", "listame todos los lugares donde...") piden un listado
+  // completo de resultados, no la explicación de un único fragmento. Necesitan
+  // el pipeline de DEEP con búsqueda en paralelo — la ruta rápida solo trae
+  // el primer match y descarta el resto en silencio.
+  const enumerationPatterns = [
+    /en\s+qu[eé]\s+archivos?/i,
+    /d[oó]nde\s+(aparece|se\s+usa|se\s+encuentra|est[aá])/i,
+    /todos?\s+los\s+lugares?\s+donde/i,
+    /list[aá]me?\s+(todos?|los)\s+archivos?/i,
+    /en\s+todos?\s+los\s+archivos?/i,
+  ];
+  if (enumerationPatterns.some(p => p.test(userMessage))) return 'complex';
+
+  // Default: lookup directo
+  return 'simple';
+```
+
+VALIDACIÓN DE A (antes de pasar a B):
+Repetí el Nivel 1 de hoy en Brous: "Buscá el término ml-predictions en el repo Ahorar y decime en qué archivos aparece". Pegame el log — tiene que aparecer el plan de sub-preguntas de Groq (`🗺️ Plan de búsqueda`) en vez de la ruta rápida de un solo fragmento, y la respuesta final debe listar los 5 archivos, no solo 1.
+
+═══════════════════════════════════════════════════════════════
+CAMBIO B — reintentar con reformulación cuando una sub-búsqueda del
+pre-fetch en paralelo vuelve vacía
+═══════════════════════════════════════════════════════════════
+
+CAUSA RAÍZ:
+En el pre-fetch de DEEP (el bloque que ejecuta las sub-preguntas de `planSearchSteps` en paralelo con `Promise.all`), cuando una sub-búsqueda no encuentra nada (`subResult.matches.length === 0`), el código simplemente hace `return` y la descarta en silencio — no reintenta con términos reformulados. Esa reformulación (`reformulateQueryTerms` + reintento) SÍ existe hoy, pero solo dentro de la tool `deep_search` que usa Haiku — no acá, en el pre-fetch de Groq. El resultado: si una sub-pregunta del plan falla en su primer intento, esa pieza de evidencia se pierde para siempre, aunque una reformulación la hubiera encontrado.
+
+UBICACIÓN: dentro de `runChatTurn`, en el bloque `await Promise.all(searchQueries.map(async (subQuery, idx) => { ... }))`, la parte que corre después de chequear `loadRepoKnowledgeVerified`.
+
+Buscá este bloque exacto:
+
+```
+          // ── Sin conocimiento previo — buscar como hasta ahora ──────────────────
+          const allKws = [...subKws, ...reformulateQueryTerms(subKws)];
+          const subPattern = allKws.join('|');
+          if (planSteps.length > 1) {
+            send('action', { text: `🔍 [${idx + 1}/${searchQueries.length}] ${subQuery.slice(0, 60)} — buscando: ${subKws.join(', ')}` });
+          } else {
+            send('action', { text: `🔍 DEEP pre-fetch — keywords: ${subKws.join(', ')}` });
+          }
+
+          const subResult = await searchWithTestFallback(subPattern, repo, send);
+          if (subResult.matches.length === 0) return;
+
+          const subProd = subResult.matches.filter((m) => !isTestMatch(m.path, m.text));
+          const subRanked = subProd.length > 0 ? subProd : subResult.matches;
+          const subEvidence = await runDeepSearchPipeline(subRanked, allKws, repo, send, determineMaxHops(subQuery), false, subQuery);
+```
+
+Reemplazalo por (agrega UN reintento con términos reformulados de segundo orden cuando la primera pasada vuelve vacía; no toca nada más del bloque):
+
+```
+          // ── Sin conocimiento previo — buscar como hasta ahora ──────────────────
+          const allKws = [...subKws, ...reformulateQueryTerms(subKws)];
+          const subPattern = allKws.join('|');
+          if (planSteps.length > 1) {
+            send('action', { text: `🔍 [${idx + 1}/${searchQueries.length}] ${subQuery.slice(0, 60)} — buscando: ${subKws.join(', ')}` });
+          } else {
+            send('action', { text: `🔍 DEEP pre-fetch — keywords: ${subKws.join(', ')}` });
+          }
+
+          let subResult = await searchWithTestFallback(subPattern, repo, send);
+
+          // Reintento con reformulación de segundo orden — mismo mecanismo que ya
+          // usa la tool deep_search para Haiku, aplicado acá al pre-fetch paralelo
+          // de Groq para que una sub-pregunta del plan no se pierda en silencio.
+          if (subResult.matches.length === 0) {
+            const retryKws = reformulateQueryTerms(allKws);
+            if (retryKws.length > 0) {
+              const retryPattern = retryKws.join('|');
+              send('action', { text: `🔄 [${idx + 1}/${searchQueries.length}] Sin resultados — reintentando con: ${retryKws.slice(0, 3).join(', ')}…` });
+              subResult = await searchWithTestFallback(retryPattern, repo, send);
+              if (subResult.matches.length > 0) {
+                allKws.push(...retryKws);
+              }
+            }
+          }
+
+          if (subResult.matches.length === 0) return;
+
+          const subProd = subResult.matches.filter((m) => !isTestMatch(m.path, m.text));
+          const subRanked = subProd.length > 0 ? subProd : subResult.matches;
+          const subEvidence = await runDeepSearchPipeline(subRanked, allKws, repo, send, determineMaxHops(subQuery), false, subQuery);
+```
+
+VALIDACIÓN DE B:
+Necesito un caso real donde una sub-pregunta del plan falle en el primer intento y el reintento la rescate — no lo puedo diseñar de antemano porque depende de qué términos generan `planSearchSteps` para una pregunta compleja real. Corré 3-4 preguntas complejas (multi-concepto) en Brous después de aplicar el fix, y fijate en el log si aparece alguna vez la línea `🔄 [.../...] Sin resultados — reintentando con:`. Si aparece, pegame ese log completo. Si no aparece en ninguna, no es un problema — significa que tus sub-preguntas de prueba no dispararon ese caso, no que el fix esté mal; para confirmar que el código en sí funciona, alcanza con que compile y no rompa el Nivel 4 de hoy (multi-hop, ya validado).
+
+REGLAS ESTRICTAS PARA AMBOS CAMBIOS:
+- Cada uno es un cambio aislado en su propia función — no mezcles A y B en el mismo commit, aplicalos y validalos por separado.
+- No toques `reformulateQueryTerms`, `searchWithTestFallback` ni `runDeepSearchPipeline` — se reutilizan tal como están.
+- No agregues manejo de casos nuevos más allá de lo descrito, no refactorices nada alrededor.
+- Verificá que cada `old_str` matchee exactamente contra el archivo real antes de aplicar — no lo escribas de memoria.

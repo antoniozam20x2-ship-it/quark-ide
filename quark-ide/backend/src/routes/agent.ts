@@ -3862,6 +3862,20 @@ function classifySearchComplexity(
   ];
   if (new Set(techIds.map(t => t.toLowerCase())).size >= 2) return 'complex';
 
+  // Heurística 5 — preguntas de ENUMERACIÓN ("en qué archivos aparece X",
+  // "dónde se usa X", "listame todos los lugares donde...") piden un listado
+  // completo de resultados, no la explicación de un único fragmento. Necesitan
+  // el pipeline de DEEP con búsqueda en paralelo — la ruta rápida solo trae
+  // el primer match y descarta el resto en silencio.
+  const enumerationPatterns = [
+    /en\s+qu[eé]\s+archivos?/i,
+    /d[oó]nde\s+(aparece|se\s+usa|se\s+encuentra|est[aá])/i,
+    /todos?\s+los\s+lugares?\s+donde/i,
+    /list[aá]me?\s+(todos?|los)\s+archivos?/i,
+    /en\s+todos?\s+los\s+archivos?/i,
+  ];
+  if (enumerationPatterns.some(p => p.test(userMessage))) return 'complex';
+
   // Default: lookup directo
   return 'simple';
 }
@@ -7144,7 +7158,23 @@ async function runChatTurn(
             send('action', { text: `🔍 DEEP pre-fetch — keywords: ${subKws.join(', ')}` });
           }
 
-          const subResult = await searchWithTestFallback(subPattern, repo, send);
+          let subResult = await searchWithTestFallback(subPattern, repo, send);
+
+          // Reintento con reformulación de segundo orden — mismo mecanismo que ya
+          // usa la tool deep_search para Haiku, aplicado acá al pre-fetch paralelo
+          // de Groq para que una sub-pregunta del plan no se pierda en silencio.
+          if (subResult.matches.length === 0) {
+            const retryKws = reformulateQueryTerms(allKws);
+            if (retryKws.length > 0) {
+              const retryPattern = retryKws.join('|');
+              send('action', { text: `🔄 [${idx + 1}/${searchQueries.length}] Sin resultados — reintentando con: ${retryKws.slice(0, 3).join(', ')}…` });
+              subResult = await searchWithTestFallback(retryPattern, repo, send);
+              if (subResult.matches.length > 0) {
+                allKws.push(...retryKws);
+              }
+            }
+          }
+
           if (subResult.matches.length === 0) return;
 
           const subProd = subResult.matches.filter((m) => !isTestMatch(m.path, m.text));
