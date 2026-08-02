@@ -1,0 +1,17 @@
+TAREA: seguimiento puntual de la Auditoría 1 (cobertura del symbol_index) — necesito que distingas cuál de las dos causas posibles es la real antes de que diseñemos el fix, porque son problemas distintos con soluciones distintas.
+
+Tu reporte dejó dos hipótesis sin resolver entre sí:
+(A) Desincronización: el índice existe y apunta al repo correcto, pero no se corrió `syncRepo('quark-ide')` después de que se agregó `runHaikuTier`.
+(B) Resolución de ruta: `resolveRepoDir('quark-ide')` no está apuntando al workspace real donde vive el código actual, así que el índice (si corriera) indexaría el lugar equivocado — o directamente no encuentra nada que indexar.
+
+Necesito que confirmes cuál es, con evidencia directa:
+
+1. Corré `resolveRepoDir('quark-ide')` (o el código equivalente que resuelve la ruta) y decime EXACTAMENTE qué path devuelve en este entorno — cuál de las 5 rutas candidatas que listaste (`$REPOS_DIR/quark-ide`, `$ARTIFACTS_DIR/quark-ide`, `<cwd>/artifacts/quark-ide`, `/artifacts/quark-ide`, `/tmp/quark-repos/quark-ide`) es la que efectivamente existe y se usa.
+
+2. Confirmá si esa ruta resuelta contiene el `agent.ts` real y actualizado (el mismo que tiene `runHaikuTier` — podés verificarlo con un `grep runHaikuTier` directo sobre esa ruta en el filesystem, sin pasar por symbol_index).
+
+3. Si la ruta resuelta SÍ contiene el código actualizado: consultá la tabla `repo_sync_log` (columna `synced_at`) para `quark-ide` y decime la fecha/hora del último sync — así confirmamos que es un problema de desincronización simple (Hipótesis A).
+
+4. Si la ruta resuelta NO contiene el código actualizado, o el `grep` no encuentra `runHaikuTier` ahí: es un problema de resolución de ruta (Hipótesis B) — en ese caso decime qué variable de entorno (`REPOS_DIR`, `ARTIFACTS_DIR`) está configurada hoy en este deploy, y a qué debería apuntar para que coincida con dónde vive el código real de `quark-ide`.
+
+No apliques ningún fix todavía — solo necesito la confirmación de cuál hipótesis es la correcta, con la evidencia de los pasos de arriba. Una vez que sepamos si es A o B, seguimos con el diseño del fix correspondiente.
