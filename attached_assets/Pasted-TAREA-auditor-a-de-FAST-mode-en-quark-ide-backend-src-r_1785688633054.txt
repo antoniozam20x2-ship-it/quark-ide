@@ -1,0 +1,62 @@
+TAREA: auditoría de FAST mode en `quark-ide/backend/src/routes/agent.ts` — el endpoint `/generate` con `deepMode: false`. Esto es SOLO INVESTIGACIÓN, no apliques ningún fix todavía. Quiero un reporte con evidencia real (logs, líneas de código citadas) de cada punto antes de decidir qué corregir y cómo.
+
+Contexto: hoy corrimos una batería de pruebas manuales sobre FAST mode y encontramos 3 problemas. Necesito que audites cada uno por separado y me traigas evidencia concreta — no asunciones.
+
+═══════════════════════════════════════════════════════════════
+AUDITORÍA 1 — cobertura del symbol_index
+═══════════════════════════════════════════════════════════════
+
+Al buscar la función `runHaikuTier` (que existe en este mismo archivo, `agent.ts`, usada por el endpoint `/chat`), FAST mode devolvió `⬜ Paso 1 — no en índice` — no la encontró en symbol_index, y cayó a un fallback de ripgrep con palabras genéricas que terminó en resultados completamente irrelevantes.
+
+Necesito que investigues:
+1. ¿Cómo y cuándo se genera/actualiza el symbol_index de este repo? ¿Es parte del proceso de deploy, un cron, o manual?
+2. ¿Cuándo fue la última vez que se regeneró el índice para este repo (`quark-ide`)? Buscá logs, timestamps de la tabla o mecanismo que use symbol_index, o el comando/script que lo dispara.
+3. ¿`runHaikuTier` está genuinamente ausente del índice ahora mismo, o fue una falla puntual de esa consulta? Corré el lookup vos mismo (`lookupSymbol('runHaikuTier', 'quark-ide')` o el equivalente que uses para inspeccionar) y reportá el resultado real.
+4. Si está ausente: ¿hay algún patrón en qué tipo de símbolos faltan (ej. funciones agregadas después de cierta fecha, funciones en archivos específicos), o es aleatorio?
+
+NO regeneres el índice todavía — solo diagnosticá y reportá qué encontraste.
+
+═══════════════════════════════════════════════════════════════
+AUDITORÍA 2 — el grounding de follow-up ignora los términos ya
+resueltos por sesión
+═══════════════════════════════════════════════════════════════
+
+Caso real: pregunté "¿Qué hace la función classifyIntent?" (Haiku encontró `agent.ts:3768` correctamente). Como segunda pregunta en la misma sesión pregunté "¿Y por qué se llama así?" — una referencia clara a lo anterior. El log mostró:
+
+```
+🧠 Paso 1 — buscando en índice de símbolos: [classifyIntent, GENERATE_SIGNALS]
+⚡ Símbolo(s) en índice: agent.ts:3768 ("classifyIntent") | agent.ts:3774 ("GENERATE_SIGNALS")
+💡 Lo que ya vimos no cubre esa parte específica, y no encontré otro archivo relacionado.
+```
+
+O sea: el sistema SÍ resolvió correctamente que la pregunta se refería a `classifyIntent`/`GENERATE_SIGNALS` (probablemente vía `isLikelyFollowUp` o el historial de sesión de Groq) — pero después descartó el fragmento ya cacheado, que literalmente contenía la definición completa de `GENERATE_SIGNALS` dentro del cuerpo de `classifyIntent`, y terminó sin poder responder.
+
+Necesito que audites la función que decide si el fragmento cacheado "cubre" la pregunta de seguimiento (el bloque `_isFollowUp` / `fragmentCovers` dentro del `FAST FOLLOW-UP PATH`, específicamente `isCachedFragmentGrounded` y `fastFollowUpGroundingTerms`). Preguntas concretas:
+
+1. `fastFollowUpGroundingTerms` se calcula con `localKeywordFallback(prompt, 6)` sobre el TEXTO CRUDO de la pregunta actual ("¿Y por qué se llama así?"). Esa función extrae identificadores tipo camelCase/CONSTANT_CASE/snake_case — una pregunta puramente referencial como esa no tiene ninguno. ¿Confirmás que `fastFollowUpGroundingTerms` queda vacío o casi vacío en este caso?
+2. Si queda vacío, `isCachedFragmentGrounded` es `false` por diseño (`fastFollowUpGroundingTerms.length > 0 && ...`) — lo cual fuerza `fragmentCovers = false` sin importar si el fragmento cacheado en realidad sí cubre la pregunta. ¿Es así como lo lee el código?
+3. Este chequeo de grounding ignora los términos que YA fueron resueltos por sesión (`fastKeywords`, que en este caso sí incluían `classifyIntent` y `GENERATE_SIGNALS` correctamente). ¿Confirmás que `isCachedFragmentGrounded` usa `fastFollowUpGroundingTerms` (del texto crudo) en vez de `fastKeywords` (ya resueltos)?
+
+Reportame con certeza cuál de estas hipótesis es la causa real, citando las líneas exactas.
+
+═══════════════════════════════════════════════════════════════
+AUDITORÍA 3 — alucinación por match irrelevante en el fallback hop
+═══════════════════════════════════════════════════════════════
+
+Caso real: pregunté "¿Cómo se actualiza el historial de sesión en runHaikuTier?" — con `runHaikuTier` no indexado (ver Auditoría 1), el sistema cayó a ripgrep con el patrón `runHaikuTier|sesión|historial`. Esto encontró matches en `ClaudeChat.tsx` y `BoardRoom.tsx` (componentes de FRONTEND que no contienen `runHaikuTier`, solo coinciden por las palabras genéricas "sesión"/"historial"). La síntesis final generó una descripción de `runHaikuTier` basada en variables de React (`historyLoading`, `messages`, `savedSession`) que no tienen ninguna relación con la función real del backend.
+
+Necesito que audites:
+1. El fallback hop (`FAST fallback hop`, el bloque que se activa cuando `isFragmentInsufficient` es true) — reintenta con `fastPattern`, que sigue incluyendo las palabras genéricas originales ("sesión", "historial") sin ningún filtro de relevancia. ¿Hay algún chequeo en este flujo (o en `unifiedGrepSearch`) que valide que el archivo encontrado pertenece al dominio esperado (backend vs frontend, por ejemplo) antes de usarlo como evidencia?
+2. La regla anti-alucinación existe en el system prompt de la síntesis de FAST mode ("Solo afirmá lo que está explícitamente en los fragmentos"), pero claramente no impidió esto — el modelo SÍ tomó literalmente lo que estaba en el fragmento (código de React real), solo que el fragmento en sí era del archivo equivocado. ¿Confirmás que el problema es upstream (mala selección de evidencia) y no downstream (el modelo inventando)?
+3. `localKeywordFallback` — la función que genera "sesión" e "historial" como keywords de búsqueda para este prompt — ¿tiene algún filtro que descarte palabras genéricas del dominio de UI en español (sesión, historial, mensaje, usuario, etc.) que casi nunca son identificadores de código reales? Si no lo tiene, ¿qué extensión tendría sentido?
+
+Reportame evidencia de cada punto — qué función exacta permitió que un match de frontend se colara como "evidencia" para una pregunta sobre una función de backend.
+
+═══════════════════════════════════════════════════════════════
+REGLAS PARA ESTA AUDITORÍA
+═══════════════════════════════════════════════════════════════
+
+- NO apliques ningún cambio de código todavía — esto es diagnóstico puro.
+- Para cada uno de los 3 puntos, traé: la línea/función exacta involucrada, y si es posible una prueba real (correr la función con el input real y mostrar el output) en vez de solo leer el código y especular.
+- Si alguna de mis hipótesis está mal fundamentada, decímelo explícitamente en vez de confirmarla por default — preferimos el diagnóstico correcto aunque contradiga lo que yo ya sospechaba.
+- Al final, resumime los 3 hallazgos en un párrafo cada uno, priorizados por severidad (cuál causa peores resultados al usuario), para decidir juntos el orden de los fixes.
