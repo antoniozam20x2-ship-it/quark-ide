@@ -982,7 +982,22 @@ o
       return parsed;
     }
     if (parsed.type === 'search' && Array.isArray(parsed.terms) && parsed.terms.length > 0) {
-      return parsed;
+      // Validar que los términos parezcan identificadores de código reales, no frases
+      // en lenguaje natural que Groq devolvió a pesar de la instrucción del prompt de
+      // extraer camelCase/CONSTANT_CASE/snake_case. Un identificador real NUNCA contiene
+      // espacios — "historial de sesión" llegando como un solo término (en vez de, por
+      // ejemplo, sessionHistory) es la señal inequívoca de que Groq no siguió la regla.
+      const validTerms = parsed.terms.filter(t =>
+        typeof t === 'string' &&
+        !/\s/.test(t.trim()) &&
+        t.trim().length >= 2 &&
+        !KEYWORD_STOPWORDS.has(t.trim().toLowerCase())
+      );
+      if (validTerms.length > 0) {
+        return { type: 'search', terms: validTerms };
+      }
+      console.warn(`[classifyAndRespondFast] Groq devolvió términos no válidos como identificadores: [${parsed.terms.join(', ')}] — usando fallback local`);
+      return { type: 'search', terms: extractSearchKeywords(prompt) };
     }
     throw new Error('shape inesperado');
   } catch {

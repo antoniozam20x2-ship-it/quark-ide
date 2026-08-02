@@ -1,0 +1,55 @@
+TAREA: un cambio quirúrgico en `quark-ide/backend/src/routes/agent.ts` — cierra el hueco real que encontramos en la validación anterior: el Cambio 1 de la Auditoría 3 protegía `localKeywordFallback`, pero la pregunta de hoy nunca pasó por ahí. Los términos vinieron de `classifyAndRespondFast` (la clasificación de Groq), que devolvió `"historial de sesión"` como un término completo en español, en vez de identificadores técnicos como le pide su propio system prompt.
+
+CONTEXTO CONFIRMADO POR EL LOG DE HOY:
+```
+🧠 Paso 1 — buscando en índice de símbolos: [runHaikuTier, historial de sesión]
+```
+`"historial de sesión"` llegó como una sola entrada del array `terms` — una frase de 3 palabras con espacios. Ningún identificador de código real contiene espacios. Esto confirma que Groq ignoró la instrucción de "extraer 1-4 identificadores técnicos (camelCase/CONSTANT_CASE/snake_case)" y devolvió lenguaje natural tal cual, y el código que parsea su respuesta no valida esto antes de usarlo — solo chequea que `parsed.terms` sea un array no vacío de strings, no que esos strings parezcan identificadores reales.
+
+UBICACIÓN: función `classifyAndRespondFast`, en el bloque que parsea la respuesta de Groq.
+
+Buscá este fragmento exacto:
+
+```
+    if (parsed.type === 'search' && Array.isArray(parsed.terms) && parsed.terms.length > 0) {
+      return parsed;
+    }
+    throw new Error('shape inesperado');
+```
+
+Reemplazalo por (agrega un filtro de validación: descarta cualquier término con espacios —nunca es un identificador de código real— y cualquiera que esté en `KEYWORD_STOPWORDS`; si no sobrevive ningún término, cae al mismo fallback local que ya usa el resto de la función ante fallos):
+
+```
+    if (parsed.type === 'search' && Array.isArray(parsed.terms) && parsed.terms.length > 0) {
+      // Validar que los términos parezcan identificadores de código reales, no frases
+      // en lenguaje natural que Groq devolvió a pesar de la instrucción del prompt de
+      // extraer camelCase/CONSTANT_CASE/snake_case. Un identificador real NUNCA contiene
+      // espacios — "historial de sesión" llegando como un solo término (en vez de, por
+      // ejemplo, sessionHistory) es la señal inequívoca de que Groq no siguió la regla.
+      const validTerms = parsed.terms.filter(t =>
+        typeof t === 'string' &&
+        !/\s/.test(t.trim()) &&
+        t.trim().length >= 2 &&
+        !KEYWORD_STOPWORDS.has(t.trim().toLowerCase())
+      );
+      if (validTerms.length > 0) {
+        return { type: 'search', terms: validTerms };
+      }
+      console.warn(`[classifyAndRespondFast] Groq devolvió términos no válidos como identificadores: [${parsed.terms.join(', ')}] — usando fallback local`);
+      return { type: 'search', terms: extractSearchKeywords(prompt) };
+    }
+    throw new Error('shape inesperado');
+```
+
+REGLA IMPORTANTE: `KEYWORD_STOPWORDS` y `extractSearchKeywords` ya existen en este archivo (el primero lo extendimos recién con las palabras de dominio UI) — no los redefinas, solo reusalos. Si `extractSearchKeywords` no está accesible desde el scope de `classifyAndRespondFast`, avisame antes de continuar en vez de improvisar otra función.
+
+VALIDACIÓN:
+1. Repetí EXACTAMENTE la pregunta de hoy: "¿Cómo se actualiza el historial de sesión en runHaikuTier?". El log ya no debería mostrar `[runHaikuTier, historial de sesión]` como términos — debería mostrar solo `[runHaikuTier]` (que sobrevive el filtro) o, si Groq no devuelve nada válido, el fallback local con el warning en consola.
+2. Confirmá que la respuesta final NO alucina con `ClaudeChat.tsx`/`BoardRoom.tsx` — si `runHaikuTier` sigue sin estar en symbol_index de Railway, la respuesta correcta ahora es que no encontró evidencia suficiente, no una síntesis inventada.
+3. Control de regresión — corré una pregunta simple que ya funcionaba bien antes (ej. "¿Qué hace la función classifyIntent?") y confirmá que el filtro no descarta términos legítimos como `classifyIntent` (no tiene espacios, no está en stopwords — debería sobrevivir sin problema).
+4. Pegame los 3 logs.
+
+REGLAS ESTRICTAS:
+- No toques `KEYWORD_STOPWORDS` de nuevo — ya se extendió en el Cambio 1 de la Auditoría 3, este fix solo lo reutiliza.
+- No toques `extractSearchKeywords`, `localKeywordFallback`, ni el resto de `classifyAndRespondFast` fuera de este bloque puntual.
+- Verificá que el `old_str` matchee exactamente contra el archivo real antes de aplicar.
