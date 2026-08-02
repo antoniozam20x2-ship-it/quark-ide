@@ -695,6 +695,13 @@ const KEYWORD_STOPWORDS = new Set([
   'dentro', 'afuera', 'mostrar', 'define', 'definir', 'retorna', 'retornar',
   'devuelve', 'devolver', 'todos', 'todas', 'entre', 'para', 'este', 'esta',
   'desde', 'hasta', 'que', 'qué', 'cual', 'cuál', 'porque', 'porqué',
+  // Sustantivos genéricos de dominio UI — nombres de variable/prop comunísimos en
+  // cualquier componente de frontend (historyLoading, savedSession, etc.). Sin esto,
+  // una pregunta sobre una función de BACKEND que use estas palabras en lenguaje
+  // natural ("historial de sesión") termina buscando también en componentes React
+  // no relacionados, contaminando la evidencia con matches de dominio equivocado.
+  'sesión', 'sesion', 'historial', 'mensaje', 'mensajes', 'usuario', 'usuarios',
+  'pantalla', 'botón', 'boton',
 ]);
 
 /**
@@ -2326,10 +2333,24 @@ Si no alcanza para responder, decilo en una oración y sugerí DEEP mode.`;
           send('action', { text: '🔍 Fragmento inicial incompleto — buscando implementación adicional...' });
           try {
             const { matches: fbMatches } = await searchWithTestFallback(fastPattern, repo, send);
-            // Descartar el archivo ya leído y elegir el primer resultado de producción nuevo
-            const fbBest = fbMatches.find(
+            // Guardia de dominio: si el archivo original es backend, el candidato de
+            // respaldo NO puede ser frontend — evita que palabras genéricas ("sesión",
+            // "historial") arrastren evidencia de un componente React no relacionado
+            // hacia una pregunta sobre código de backend. Si el original YA es frontend,
+            // no restringimos (caso menos común, se mantiene el comportamiento previo).
+            const readPathIsFrontend = FRONTEND_PATTERNS.some(p => p.test(readPath));
+            const fbCandidates = fbMatches.filter(
               m => m.path !== readPath && !isTestMatch(m.path, m.text ?? ''),
             );
+            const fbDomainMismatches = readPathIsFrontend
+              ? []
+              : fbCandidates.filter(m => FRONTEND_PATTERNS.some(p => p.test(m.path)));
+            if (fbDomainMismatches.length > 0 && fbDomainMismatches.length === fbCandidates.length) {
+              send('action', { text: `⚠️ Único resultado adicional (${fbDomainMismatches[0].path}) es de frontend — descartado por no coincidir con el dominio del archivo original (${readPath})` });
+            }
+            const fbBest = readPathIsFrontend
+              ? fbCandidates[0]
+              : fbCandidates.find(m => !FRONTEND_PATTERNS.some(p => p.test(m.path)));
             if (fbBest) {
               send('action', { text: `📍 Fragmento adicional: ${fbBest.path}${fbBest.line ? `:${fbBest.line}` : ''}` });
               const fbContent = await getFileContent(fbBest.path, repo);

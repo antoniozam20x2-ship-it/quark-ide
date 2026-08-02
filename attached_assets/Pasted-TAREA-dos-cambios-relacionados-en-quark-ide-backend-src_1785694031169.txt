@@ -1,0 +1,103 @@
+TAREA: dos cambios relacionados en `quark-ide/backend/src/routes/agent.ts` para el problema de contaminación de frontend en el fallback hop de FAST mode (Auditoría 3, confirmada con evidencia real). Aplicalos juntos porque se refuerzan mutuamente — el primero reduce cuántas palabras genéricas entran al patrón de búsqueda, el segundo bloquea el caso en que igual se cuele una.
+
+CONTEXTO CONFIRMADO POR LA AUDITORÍA:
+Para la pregunta "¿Cómo se actualiza el historial de sesión en runHaikuTier?", el patrón de búsqueda del fallback hop quedó como `runHaikuTier|sesión|historial` — ninguna de esas dos últimas palabras es un identificador de código, son sustantivos genéricos de UI que existen como nombres de variables de React en CUALQUIER componente de frontend (`historyLoading`, `savedSession`, etc.). El fallback hop encontró un match en `ClaudeChat.tsx` (frontend) para una pregunta sobre `runHaikuTier` (backend), y el modelo sintetizó una respuesta coherente pero completamente falsa a partir de ese archivo equivocado — el problema es de selección de evidencia, no de alucinación del modelo (confirmado en la auditoría: el modelo describió con precisión lo que SÍ estaba en el fragmento, solo que el fragmento era del dominio equivocado).
+
+═══════════════════════════════════════════════════════════════
+CAMBIO 1 — agregar sustantivos de dominio UI a KEYWORD_STOPWORDS
+═══════════════════════════════════════════════════════════════
+
+UBICACIÓN: constante `KEYWORD_STOPWORDS`.
+
+Buscá el array actual (verificá el contenido exacto contra el archivo real antes de aplicar — puede diferir levemente de lo que sigue):
+
+```
+const KEYWORD_STOPWORDS = new Set([
+  'mostrame', 'muestra', 'muéstrame', 'busca', 'buscá', 'buscar', 'explica', 'explicá',
+  'completo', 'resumir', 'interpretar', 'donde', 'dónde', 'como', 'cómo',
+  'codigo', 'código', 'archivo', 'funcion', 'función', 'valor', 'analiza', 'analizar',
+  'dentro', 'afuera', 'mostrar', 'define', 'definir', 'retorna', 'retornar',
+  'devuelve', 'devolver', 'todos', 'todas', 'entre', 'para', 'este', 'esta',
+  'desde', 'hasta', 'que', 'qué', 'cual', 'cuál', 'porque', 'porqué',
+]);
+```
+
+Agregále una línea nueva con sustantivos genéricos de dominio UI en español — estos son nombres de variable/prop comunísimos en cualquier componente React y casi nunca son el identificador real que el usuario está buscando (a diferencia de un verbo de instrucción, un sustantivo de dominio UI puede aparecer también en preguntas legítimas, así que la lista es deliberadamente acotada a los términos más genéricos, no exhaustiva):
+
+```
+const KEYWORD_STOPWORDS = new Set([
+  'mostrame', 'muestra', 'muéstrame', 'busca', 'buscá', 'buscar', 'explica', 'explicá',
+  'completo', 'resumir', 'interpretar', 'donde', 'dónde', 'como', 'cómo',
+  'codigo', 'código', 'archivo', 'funcion', 'función', 'valor', 'analiza', 'analizar',
+  'dentro', 'afuera', 'mostrar', 'define', 'definir', 'retorna', 'retornar',
+  'devuelve', 'devolver', 'todos', 'todas', 'entre', 'para', 'este', 'esta',
+  'desde', 'hasta', 'que', 'qué', 'cual', 'cuál', 'porque', 'porqué',
+  // Sustantivos genéricos de dominio UI — nombres de variable/prop comunísimos en
+  // cualquier componente de frontend (historyLoading, savedSession, etc.). Sin esto,
+  // una pregunta sobre una función de BACKEND que use estas palabras en lenguaje
+  // natural ("historial de sesión") termina buscando también en componentes React
+  // no relacionados, contaminando la evidencia con matches de dominio equivocado.
+  'sesión', 'sesion', 'historial', 'mensaje', 'mensajes', 'usuario', 'usuarios',
+  'pantalla', 'botón', 'boton',
+]);
+```
+
+═══════════════════════════════════════════════════════════════
+CAMBIO 2 — filtro de dominio backend/frontend en el fallback hop
+═══════════════════════════════════════════════════════════════
+
+Esto es la red de seguridad para cuando el Cambio 1 no alcanza (identificadores técnicos reales del prompt, como `runHaikuTier`, igual pueden combinarse con ripgrep contra archivos de otro dominio si el patrón es ambiguo).
+
+UBICACIÓN: el bloque "FAST fallback hop", dentro del READ PATH de `!deepMode`.
+
+Buscá este fragmento exacto (confirmado por la auditoría que existe tal cual en este archivo):
+
+```
+        if (sectionText && isFragmentInsufficient(sectionText, fastKeywords)) {
+          send('action', { text: '🔍 Fragmento inicial incompleto — buscando implementación adicional...' });
+          try {
+            const { matches: fbMatches } = await searchWithTestFallback(fastPattern, repo, send);
+            // Descartar el archivo ya leído y elegir el primer resultado de producción nuevo
+            const fbBest = fbMatches.find(
+              m => m.path !== readPath && !isTestMatch(m.path, m.text ?? ''),
+            );
+```
+
+Reemplazalo por (agrega un chequeo de dominio: si el archivo original NO es frontend, el candidato de respaldo tampoco puede serlo — evita que una pregunta de backend termine con evidencia de un componente React):
+
+```
+        if (sectionText && isFragmentInsufficient(sectionText, fastKeywords)) {
+          send('action', { text: '🔍 Fragmento inicial incompleto — buscando implementación adicional...' });
+          try {
+            const { matches: fbMatches } = await searchWithTestFallback(fastPattern, repo, send);
+            // Guardia de dominio: si el archivo original es backend, el candidato de
+            // respaldo NO puede ser frontend — evita que palabras genéricas ("sesión",
+            // "historial") arrastren evidencia de un componente React no relacionado
+            // hacia una pregunta sobre código de backend. Si el original YA es frontend,
+            // no restringimos (caso menos común, se mantiene el comportamiento previo).
+            const readPathIsFrontend = FRONTEND_PATTERNS.some(p => p.test(readPath));
+            const fbCandidates = fbMatches.filter(
+              m => m.path !== readPath && !isTestMatch(m.path, m.text ?? ''),
+            );
+            const fbDomainMismatches = readPathIsFrontend
+              ? []
+              : fbCandidates.filter(m => FRONTEND_PATTERNS.some(p => p.test(m.path)));
+            if (fbDomainMismatches.length > 0 && fbDomainMismatches.length === fbCandidates.length) {
+              send('action', { text: `⚠️ Único resultado adicional (${fbDomainMismatches[0].path}) es de frontend — descartado por no coincidir con el dominio del archivo original (${readPath})` });
+            }
+            const fbBest = readPathIsFrontend
+              ? fbCandidates[0]
+              : fbCandidates.find(m => !FRONTEND_PATTERNS.some(p => p.test(m.path)));
+```
+
+REGLA IMPORTANTE: `FRONTEND_PATTERNS` ya existe en este archivo (se usa para priorizar/clasificar paths en otras partes del código, como `listFilesFiltered`). NO lo redefinas — solo reusalo. Si por algún motivo no existe con ese nombre exacto en `agent.ts`, avisame antes de continuar en vez de inventar una definición nueva.
+
+VALIDACIÓN DE AMBOS CAMBIOS:
+1. Repetí exactamente la pregunta de hoy que disparó el bug: "¿Cómo se actualiza el historial de sesión en runHaikuTier?" — con el Cambio 1 activo, el patrón de búsqueda ya no debería incluir "sesión"/"historial" como keywords sueltas. Si aun así cae al fallback hop, el Cambio 2 debería bloquear cualquier candidato de `ClaudeChat.tsx`/`BoardRoom.tsx` y, si no queda ningún candidato válido de backend, decir explícitamente que no encontró más contexto en vez de alucinar con el archivo equivocado.
+2. Control positivo — confirmá que una pregunta legítima sobre un componente de frontend (ej. "¿cómo funciona el estado de `historyLoading` en ClaudeChat?") sigue funcionando normal — el filtro no debe bloquear preguntas que genuinamente buscan código de frontend.
+3. Pegame el log completo de ambas pruebas.
+
+REGLAS ESTRICTAS:
+- Verificá que cada `old_str` matchee exactamente contra el archivo real antes de aplicar — no lo escribas de memoria, y si difiere de lo que puse arriba, ajustalo vos mismo contra el código real en vez de forzar el match.
+- No toques `isFragmentInsufficient`, `searchWithTestFallback`, ni `isTestMatch` — se reutilizan tal como están.
+- No agregues manejo de casos nuevos más allá de lo descrito acá.
