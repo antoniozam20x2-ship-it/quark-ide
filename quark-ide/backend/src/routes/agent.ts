@@ -2222,7 +2222,50 @@ Si no alcanza para responder, decilo en una oración y sugerí DEEP mode.`;
                 ];
                 await saveFastHistory(sessionId!, updatedFastHistory).catch(() => {});
               } else {
-                send('action', { text: '💡 Lo que ya vimos no cubre esa parte específica, y no encontré otro archivo relacionado. Reformulá con más detalle o probá DEEP mode para una búsqueda más extensiva.' });
+                // ── FAST→DEEP escalation ──────────────────────────────────────────
+                // La búsqueda liviana (symbol_index + ripgrep + "primer match nuevo")
+                // no encontró un candidato válido, pero puede que ripgrep sí haya traído
+                // resultados que el multi-hop real (runDeepSearchPipeline) pueda conectar
+                // siguiendo la cadena de llamadas — eso es justo lo que faltó en el caso
+                // real de "runHaikuTier" (5 resultados de ripgrep, ninguno suficiente por
+                // sí solo). En vez de rendirse y mandar al usuario a cambiar de modo
+                // manualmente, escalamos automáticamente, capado a 2 hops (FAST sigue
+                // siendo la versión liviana, no usa el presupuesto de 4 hops de DEEP).
+                send('action', { text: '🔭 FAST — sin match adicional liviano, escalando al motor de DEEP (multi-hop)...' });
+                try {
+                  const deepEscProd = fuMatches.filter(m => !isTestMatch(m.path, m.text));
+                  const deepEscRanked = deepEscProd.length > 0 ? deepEscProd : fuMatches;
+                  const deepEscEvidence = deepEscRanked.length > 0
+                    ? await runDeepSearchPipeline(deepEscRanked, fastKeywords, repo, send, 2, false, prompt)
+                    : [];
+
+                  if (deepEscEvidence.length > 0) {
+                    const deepEscContext = deepEscEvidence
+                      .map(e => `Evidencia (DEEP) — ${e.path} (líneas ${e.line}-${e.endLine}):\n${e.fragment}`)
+                      .join('\n\n');
+                    const combinedFollowUpContext =
+                      `Fragmento ya conocido — ${alreadyReadPath}:\n${cachedFragment}\n\n${deepEscContext}`;
+
+                    const fuAnalysis = await generateWithFallback(
+                      `El usuario hace una pregunta de seguimiento: "${prompt}"\n\n${combinedFollowUpContext}`,
+                      fuSystemPrompt,
+                    );
+                    const fuLines = fuAnalysis.split('\n').map((l: string) => l.trim()).filter(Boolean);
+                    for (const line of fuLines) send('action', { text: `💡 ${line}` });
+
+                    const updatedFastHistory = [
+                      ...fastHistory,
+                      { role: 'user',      content: prompt,     keywords: fastKeywords },
+                      { role: 'assistant', content: fuAnalysis, fragment: combinedFollowUpContext, path: deepEscEvidence[0].path },
+                    ];
+                    await saveFastHistory(sessionId!, updatedFastHistory).catch(() => {});
+                  } else {
+                    send('action', { text: '💡 Lo que ya vimos no cubre esa parte específica, y ni la búsqueda liviana ni DEEP encontraron más contexto. Reformulá con el nombre exacto de la función o variable.' });
+                  }
+                } catch (deepEscErr) {
+                  console.warn('[agent/fast-followup-deep-escalation] escalación a DEEP falló:', deepEscErr instanceof Error ? deepEscErr.message : deepEscErr);
+                  send('action', { text: '💡 Lo que ya vimos no cubre esa parte específica, y no encontré otro archivo relacionado. Reformulá con más detalle o probá DEEP mode para una búsqueda más extensiva.' });
+                }
               }
             } catch (fuErr) {
               console.warn('[agent/fu-fallback] búsqueda adicional fallida:', fuErr instanceof Error ? fuErr.message : fuErr);

@@ -1,0 +1,145 @@
+TAREA: un cambio en `quark-ide/backend/src/routes/agent.ts` — cuando FAST mode agota su búsqueda liviana (symbol_index + ripgrep + un fragmento) y no encuentra nada útil, en vez de decirte "probá DEEP mode" y rendirse, que escale automáticamente al motor real de DEEP (`runDeepSearchPipeline`, con multi-hop) capado a 2 hops — FAST sigue siendo la versión liviana, no corre el presupuesto completo de 4 hops que usa DEEP para preguntas explícitamente complejas.
+
+CONTEXTO — este es el caso real de hoy que falló:
+Pregunta de seguimiento sobre `runHaikuTier` (no indexado en symbol_index). El log mostró:
+```
+🔍 El contexto ya leído no cubre esta pregunta — buscando en archivos adicionales...
+🧠 Paso 1 — buscando en índice de símbolos: [runHaikuTier]
+⬜ Paso 1 — no en índice
+🔬 Paso 2 — ripgrep local: ...
+✅ Paso 2 — 5 resultado(s) vía ripgrep local
+💡 Lo que ya vimos no cubre esa parte específica, y no encontré otro archivo relacionado. Reformulá con más detalle o probá DEEP mode...
+```
+Ripgrep SÍ encontró 5 resultados — pero el código descarta todo lo que no sea "el primer match nuevo que no sea el mismo archivo ya leído ni test" (`fuNewMatch`), y si ninguno pasa ese filtro simple, se rinde. Nunca llega a intentar el multi-hop real que sí podría haber seguido la cadena de llamadas hasta encontrar `runHaikuTier`.
+
+UBICACIÓN: dentro del bloque `FAST FOLLOW-UP PATH`, en la rama `else` que se ejecuta cuando `fuNewMatch` no se encuentra.
+
+Buscá este fragmento exacto:
+
+```
+              if (fuNewMatch) {
+                send('action', { text: `📍 Fragmento adicional: ${fuNewMatch.path}${fuNewMatch.line ? `:${fuNewMatch.line}` : ''}` });
+                const fuContent = await getFileContent(fuNewMatch.path, repo);
+                const fuSection = fuNewMatch.line
+                  ? (readEnclosingFunction(fuContent, fuNewMatch.line) ?? smartReadSection(fuContent, fuNewMatch.line, 60))
+                  : smartReadSection(fuContent, fuNewMatch.text ?? '', 60);
+
+                const combinedFollowUpContext = fuSection
+                  ? `Fragmento ya conocido — ${alreadyReadPath}:\n${cachedFragment}\n\n` +
+                    `Fragmento adicional (nueva búsqueda) — ${fuNewMatch.path} (líneas ${fuSection.startLine}-${fuSection.endLine}):\n${fuSection.excerpt}`
+                  : `Fragmento ya conocido — ${alreadyReadPath}:\n${cachedFragment}`;
+
+                const fuAnalysis = await generateWithFallback(
+                  `El usuario hace una pregunta de seguimiento: "${prompt}"\n\n${combinedFollowUpContext}`,
+                  fuSystemPrompt,
+                );
+
+                const fuLines = fuAnalysis.split('\n').map((l: string) => l.trim()).filter(Boolean);
+                for (const line of fuLines) {
+                  send('action', { text: `💡 ${line}` });
+                }
+
+                const updatedFastHistory = [
+                  ...fastHistory,
+                  { role: 'user',      content: prompt,     keywords: fastKeywords },
+                  { role: 'assistant', content: fuAnalysis, fragment: combinedFollowUpContext, path: fuNewMatch.path },
+                ];
+                await saveFastHistory(sessionId!, updatedFastHistory).catch(() => {});
+              } else {
+                send('action', { text: '💡 Lo que ya vimos no cubre esa parte específica, y no encontré otro archivo relacionado. Reformulá con más detalle o probá DEEP mode para una búsqueda más extensiva.' });
+              }
+```
+
+Reemplazalo por (el bloque `if (fuNewMatch)` queda EXACTAMENTE IGUAL, no lo toques — solo cambia la rama `else`, que ahora intenta escalar a DEEP antes de rendirse):
+
+```
+              if (fuNewMatch) {
+                send('action', { text: `📍 Fragmento adicional: ${fuNewMatch.path}${fuNewMatch.line ? `:${fuNewMatch.line}` : ''}` });
+                const fuContent = await getFileContent(fuNewMatch.path, repo);
+                const fuSection = fuNewMatch.line
+                  ? (readEnclosingFunction(fuContent, fuNewMatch.line) ?? smartReadSection(fuContent, fuNewMatch.line, 60))
+                  : smartReadSection(fuContent, fuNewMatch.text ?? '', 60);
+
+                const combinedFollowUpContext = fuSection
+                  ? `Fragmento ya conocido — ${alreadyReadPath}:\n${cachedFragment}\n\n` +
+                    `Fragmento adicional (nueva búsqueda) — ${fuNewMatch.path} (líneas ${fuSection.startLine}-${fuSection.endLine}):\n${fuSection.excerpt}`
+                  : `Fragmento ya conocido — ${alreadyReadPath}:\n${cachedFragment}`;
+
+                const fuAnalysis = await generateWithFallback(
+                  `El usuario hace una pregunta de seguimiento: "${prompt}"\n\n${combinedFollowUpContext}`,
+                  fuSystemPrompt,
+                );
+
+                const fuLines = fuAnalysis.split('\n').map((l: string) => l.trim()).filter(Boolean);
+                for (const line of fuLines) {
+                  send('action', { text: `💡 ${line}` });
+                }
+
+                const updatedFastHistory = [
+                  ...fastHistory,
+                  { role: 'user',      content: prompt,     keywords: fastKeywords },
+                  { role: 'assistant', content: fuAnalysis, fragment: combinedFollowUpContext, path: fuNewMatch.path },
+                ];
+                await saveFastHistory(sessionId!, updatedFastHistory).catch(() => {});
+              } else {
+                // ── FAST→DEEP escalation ──────────────────────────────────────────
+                // La búsqueda liviana (symbol_index + ripgrep + "primer match nuevo")
+                // no encontró un candidato válido, pero puede que ripgrep sí haya traído
+                // resultados que el multi-hop real (runDeepSearchPipeline) pueda conectar
+                // siguiendo la cadena de llamadas — eso es justo lo que faltó en el caso
+                // real de "runHaikuTier" (5 resultados de ripgrep, ninguno suficiente por
+                // sí solo). En vez de rendirse y mandar al usuario a cambiar de modo
+                // manualmente, escalamos automáticamente, capado a 2 hops (FAST sigue
+                // siendo la versión liviana, no usa el presupuesto de 4 hops de DEEP).
+                send('action', { text: '🔭 FAST — sin match adicional liviano, escalando al motor de DEEP (multi-hop)...' });
+                try {
+                  const deepEscProd = fuMatches.filter(m => !isTestMatch(m.path, m.text));
+                  const deepEscRanked = deepEscProd.length > 0 ? deepEscProd : fuMatches;
+                  const deepEscEvidence = deepEscRanked.length > 0
+                    ? await runDeepSearchPipeline(deepEscRanked, fastKeywords, repo, send, 2, false, prompt)
+                    : [];
+
+                  if (deepEscEvidence.length > 0) {
+                    const deepEscContext = deepEscEvidence
+                      .map(e => `Evidencia (DEEP) — ${e.path} (líneas ${e.line}-${e.endLine}):\n${e.fragment}`)
+                      .join('\n\n');
+                    const combinedFollowUpContext =
+                      `Fragmento ya conocido — ${alreadyReadPath}:\n${cachedFragment}\n\n${deepEscContext}`;
+
+                    const fuAnalysis = await generateWithFallback(
+                      `El usuario hace una pregunta de seguimiento: "${prompt}"\n\n${combinedFollowUpContext}`,
+                      fuSystemPrompt,
+                    );
+                    const fuLines = fuAnalysis.split('\n').map((l: string) => l.trim()).filter(Boolean);
+                    for (const line of fuLines) send('action', { text: `💡 ${line}` });
+
+                    const updatedFastHistory = [
+                      ...fastHistory,
+                      { role: 'user',      content: prompt,     keywords: fastKeywords },
+                      { role: 'assistant', content: fuAnalysis, fragment: combinedFollowUpContext, path: deepEscEvidence[0].path },
+                    ];
+                    await saveFastHistory(sessionId!, updatedFastHistory).catch(() => {});
+                  } else {
+                    send('action', { text: '💡 Lo que ya vimos no cubre esa parte específica, y ni la búsqueda liviana ni DEEP encontraron más contexto. Reformulá con el nombre exacto de la función o variable.' });
+                  }
+                } catch (deepEscErr) {
+                  console.warn('[agent/fast-followup-deep-escalation] escalación a DEEP falló:', deepEscErr instanceof Error ? deepEscErr.message : deepEscErr);
+                  send('action', { text: '💡 Lo que ya vimos no cubre esa parte específica, y no encontré otro archivo relacionado. Reformulá con más detalle o probá DEEP mode para una búsqueda más extensiva.' });
+                }
+              }
+```
+
+REGLA IMPORTANTE: `runDeepSearchPipeline` y `isTestMatch` ya existen en este archivo — no los redefinas, solo reusalos. `fuMatches` ya está disponible en este scope (es la variable que produce `searchWithTestFallback` unas líneas arriba, la misma que hoy se usa para calcular `fuNewMatch`). Si alguno de estos nombres difiere del que ves en el archivo real, avisame antes de improvisar.
+
+VALIDACIÓN:
+1. Repetí exactamente el caso de hoy: la pregunta de seguimiento sobre `runHaikuTier` que antes terminaba en "no encontré otro archivo relacionado". Ahora debería aparecer `🔭 FAST — sin match adicional liviano, escalando al motor de DEEP...` seguido de los pasos de multi-hop (`🔗 Salto 1...`, etc.).
+2. Si el multi-hop SÍ logra encontrar `runHaikuTier` (siguiendo alguna cadena de llamadas desde los 5 resultados de ripgrep), confirmá que la síntesis final es coherente y no alucina.
+3. Si el multi-hop tampoco encuentra nada (posible si `runHaikuTier` genuinamente no está accesible en este entorno), confirmá que el mensaje final es honesto ("ni la búsqueda liviana ni DEEP encontraron más contexto") — sigue siendo mejor que alucinar, aunque no resuelva el caso puntual.
+4. Pegame el log completo.
+
+NOTA PARA DESPUÉS (no lo hagas en este mismo cambio): el mismo patrón de escalación aplica también al "FAST fallback hop" original (el de la primera búsqueda, no el de seguimiento) — una vez que confirmemos que esto funciona acá, probablemente convenga agregar la misma lógica ahí. Quedará como un segundo prompt aparte.
+
+REGLAS ESTRICTAS:
+- No toques la rama `if (fuNewMatch)` — queda idéntica.
+- No toques `runDeepSearchPipeline` ni `searchWithTestFallback` — se reutilizan tal como están.
+- Verificá que el `old_str` matchee exactamente contra el archivo real antes de aplicar.
