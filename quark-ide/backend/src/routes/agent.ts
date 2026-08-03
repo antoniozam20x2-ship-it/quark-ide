@@ -7742,6 +7742,56 @@ async function runChatTurn(
         }
       }));
 
+      // ── Post-pipeline merge: fusionar fragmentos solapados o próximos (≤15 líneas)
+      // del mismo archivo. Sin esto, sub-preguntas paralelas que leen rangos distintos
+      // del mismo código (ej: 1620-1650 y 1640-1668) llegan a Haiku como fragmentos
+      // separados sin el contexto compartido que los conecta.
+      if (allEvidence.length > 1) {
+        const MERGE_GAP = 15;
+        const sorted = [...allEvidence].sort((a, b) =>
+          a.path !== b.path ? a.path.localeCompare(b.path) : a.line - b.line,
+        );
+        const merged: AnnotatedFragment[] = [];
+        for (const ev of sorted) {
+          const last = merged[merged.length - 1];
+          const lastEnd = last?.endLine ?? last?.line ?? -1;
+          if (last && last.path === ev.path && ev.line <= lastEnd + MERGE_GAP) {
+            // Rangos solapados o a ≤15 líneas — fusionar y releer el rango unificado
+            const mergedStart = Math.min(last.line, ev.line);
+            const mergedEnd   = Math.max(lastEnd, ev.endLine ?? ev.line);
+            try {
+              const fc = await getFileContent(last.path, repo);
+              const fileLines = fc.split('\n');
+              const excerpt = fileLines
+                .slice(mergedStart - 1, mergedEnd)
+                .map((l, i) => `${mergedStart + i}: ${l}`)
+                .join('\n');
+              merged[merged.length - 1] = {
+                ...last,
+                line:       mergedStart,
+                endLine:    mergedEnd,
+                fragment:   excerpt,
+                confidence: (ev.confidence === 'HIGH' || last.confidence === 'HIGH') ? 'HIGH' : 'MEDIUM',
+              };
+              console.log(
+                `[allEvidence] fusión: ${last.path} [${last.line}-${lastEnd}] + ` +
+                `[${ev.line}-${ev.endLine ?? ev.line}] → [${mergedStart}-${mergedEnd}] ` +
+                `(${mergedEnd - mergedStart + 1} líneas)`,
+              );
+            } catch {
+              console.warn(`[allEvidence] fusión: re-read falló para ${last.path}, fragmento descartado`);
+            }
+          } else {
+            merged.push(ev);
+          }
+        }
+        if (merged.length !== allEvidence.length) {
+          console.log(`[allEvidence] merge pass: ${allEvidence.length} fragmentos → ${merged.length} tras fusión`);
+          allEvidence.length = 0;
+          allEvidence.push(...merged);
+        }
+      }
+
       if (allEvidence.length > 0) {
         const evidenceSummary = formatDeepEvidenceForHaiku(allEvidence, userMessage, repo);
         const evidencePlain = allEvidence.map(e => `${e.path}:${e.line}\n${e.fragment}`).join('\n\n---\n\n');
