@@ -1,0 +1,26 @@
+Investigación pura, no toques nada. Tengo una regresión real: la misma pregunta, en el mismo repo, con el narrowing ya funcionando (confirmado por logs [deep-dynamic-range] mostrando recortes reales), dio una respuesta PEOR que antes del fix del bug de JSON, y el prompt total creció de ~53k chars a ~119k chars.
+
+Log clave de la corrida con narrowing activo:
+
+[deep-dynamic-range] fragmento inicial: 201 líneas → recortado a 76 líneas tras 3 iteración(es)
+[runHaikuTier] step 0/12 — prompt ~117042 chars (~29261 tokens est.)
+[deep-dynamic-range] fragmento inicial: 201 líneas → recortado a 95 líneas tras 1 iteración(es)
+[deep-dynamic-range] fragmento inicial: 201 líneas → recortado a 77 líneas tras 1 iteración(es)
+[DEEP hop] fuente=grafo hop=1 strategy=2 sym="getAgentConfig"
+[deep-dynamic-range] fragmento inicial: 169 líneas → recortado a 24 líneas tras 2 iteración(es)
+[DEEP confidence] hop 1: sufficient=false — Falta evidencia directa que relacione adjustRiskPct y saveAgentConfig en el mismo contexto
+[DEEP hop] fuente=ripgrep-fallback hop=2 strategy=2 sym="result"
+
+En una corrida ANTERIOR de la misma pregunta exacta (antes del fix de JSON, sin narrowing funcionando), Haiku SÍ había encontrado correctamente la evidencia: saveAgentConfig() llamado en autonomousAgent.ts:1645, dentro de un if (newRisk !== null) inmediatamente después de que adjustRiskPct() retorna. En esta corrida nueva, Haiku respondió "no confirmado" y no encontró esa línea.
+
+Necesito que investigues, citando línea exacta:
+
+1. ¿Qué es "sym=result" en el hop de fuente=ripgrep-fallback strategy=2? Buscá la lógica de extracción de símbolo para esa rama específica (distinta de la rama "fuente=grafo strategy=2" que ya arreglamos con el regex de prioridad de Strategy 2 — esta es ripgrep-fallback, puede ser una función de extracción totalmente distinta). ¿Tiene el mismo tipo de bug de captura genérica que "repo" tenía?
+
+2. El "Plan de búsqueda — 3 sub-pregunta(s) identificadas" que corre en modo Groq/FAST antes de escalar a Haiku — ¿cada sub-pregunta dispara su propia búsqueda independiente que termina agregando fragmentos al pool de evidencia sin deduplicar contra lo que ya encontraron las otras sub-preguntas? Buscá si hay algún paso de deduplicación de fragmentos antes de pasarlos a runHaikuTier.
+
+3. En la corrida anterior exitosa, el fragmento que contenía la línea 1645 (el if (newRisk !== null) { ... saveAgentConfig() }) — ¿en esta corrida nueva ese mismo fragmento fue leído pero luego recortado (por readAndNarrowFragment) de forma que perdió la línea 1645, o directamente nunca se leyó ese archivo/rango en este intento?
+
+4. ¿Por qué el prompt total casi se triplicó (53k → 119k chars) si cada fragmento individual se está recortando correctamente? ¿Hay más fragmentos en total esta vez, o los fragmentos recortados siguen siendo más grandes de lo esperado?
+
+No apliques ningún fix todavía — solo necesito entender qué causó que más búsqueda (con narrowing activo) haya dado peor resultado y mayor costo que menos búsqueda (con narrowing roto).
