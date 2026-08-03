@@ -1,0 +1,43 @@
+TAREA: un cambio en `quark-ide/backend/src/routes/agent.ts` — la continuación pendiente del fix anterior. Ya agregamos la regla de citas de línea a `fuSystemPrompt` (el prompt de FAST mode para preguntas de seguimiento). Este es el mismo fix, aplicado al OTRO system prompt de síntesis de FAST mode: el que se usa en la PRIMERA búsqueda (no follow-up), el que tiene las secciones "REGLA DE VOCABULARIO", "REGLA DE FORMATO", "REGLA DE SCOPE", "REGLA DE DOS FRAGMENTOS", "REGLA ANTI-ALUCINACIÓN" y "REGLA DE FIDELIDAD PARCIAL".
+
+Es el mismo problema potencial: este prompt también puede recibir "Fragmento principal" + "Fragmento adicional" (dos archivos distintos, ver "REGLA DE DOS FRAGMENTOS" ya existente ahí) — la misma condición que causó los números de línea inventados en el caso de `runHaikuTier`.
+
+UBICACIÓN: el system prompt inline pasado a `generateWithFallback` junto con `fastAnalysis`, dentro del READ PATH principal de FAST mode (no el de follow-up).
+
+Buscá este fragmento exacto — el final de ese system prompt, el punto 3 de "REGLA DE FIDELIDAD PARCIAL" justo antes del cierre del template string:
+
+```
+  3. PROHIBIDO usar "se puede inferir", "podría ser", "sería necesario examinar" para describir \
+lo que el fragmento YA MUESTRA con certeza. Esas frases solo son válidas para afirmaciones \
+sobre código que NO está en el fragmento — no para lo que sí está visible.`,
+          );
+```
+
+Reemplazalo por (agrega la regla de citas de línea justo antes del cierre, sin tocar nada de lo anterior):
+
+```
+  3. PROHIBIDO usar "se puede inferir", "podría ser", "sería necesario examinar" para describir \
+lo que el fragmento YA MUESTRA con certeza. Esas frases solo son válidas para afirmaciones \
+sobre código que NO está en el fragmento — no para lo que sí está visible.
+
+REGLA DE CITAS DE LÍNEA: si mencionás un número de línea específico (ej. "línea 6814"), ese \
+número DEBE aparecer literalmente como prefijo en el fragmento que tenés delante (ej. el texto \
+"6814: " al inicio de una línea del fragmento). Nunca inventes ni recuerdes de memoria un número \
+de línea — es especialmente riesgoso cuando recibís "Fragmento principal" + "Fragmento \
+adicional" de dos archivos distintos, donde es fácil confundir la numeración de uno con la del \
+otro. Si sabés en qué función o bloque está algo pero no tenés el número exacto en el fragmento \
+que estás citando, describí la ubicación SIN número en vez de inventar uno.`,
+          );
+```
+
+REGLA IMPORTANTE: verificá primero que este system prompt en el archivo real termine efectivamente con el punto 3 de "REGLA DE FIDELIDAD PARCIAL" como última sección antes del backtick de cierre — si el contenido difiere de lo que tengo acá (por ejemplo si hay algo más después), ajustá el `old_str` contra el código real en vez de forzar el match. Esta es una constante DISTINTA de `fuSystemPrompt` — asegurate de editar el system prompt de la búsqueda PRIMARIA, no el de follow-up que ya quedó aplicado.
+
+VALIDACIÓN — vamos a probarlo en la próxima sesión, no hace falta correrlo ahora mismo. Cuando lo pruebe:
+1. Una pregunta NUEVA (no follow-up) que dispare el fallback hop con dos fragmentos de archivos distintos (el escenario "REGLA DE DOS FRAGMENTOS").
+2. Una pregunta simple de un solo fragmento, como control de regresión.
+
+REGLAS ESTRICTAS:
+- No toques `fuSystemPrompt` — ya tiene el fix aplicado en el paso anterior.
+- No toques `HAIKU_SEARCH_SYSTEM` — no está relacionado con FAST mode.
+- No toques ninguna otra parte de este system prompt — todo el contenido anterior queda exactamente igual.
+- Verificá que el `old_str` matchee exactamente contra el archivo real antes de aplicar.

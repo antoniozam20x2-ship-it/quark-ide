@@ -2490,7 +2490,15 @@ SÍ muestra con certeza: parámetros reales, valores concretos, flujo visible, c
 Aplicá las mismas reglas de vocabulario, **negrita** y detalle numérico — no diluyas la descripción.
   3. PROHIBIDO usar "se puede inferir", "podría ser", "sería necesario examinar" para describir \
 lo que el fragmento YA MUESTRA con certeza. Esas frases solo son válidas para afirmaciones \
-sobre código que NO está en el fragmento — no para lo que sí está visible.`,
+sobre código que NO está en el fragmento — no para lo que sí está visible.
+
+REGLA DE CITAS DE LÍNEA: si mencionás un número de línea específico (ej. "línea 6814"), ese \
+número DEBE aparecer literalmente como prefijo en el fragmento que tenés delante (ej. el texto \
+"6814: " al inicio de una línea del fragmento). Nunca inventes ni recuerdes de memoria un número \
+de línea — es especialmente riesgoso cuando recibís "Fragmento principal" + "Fragmento \
+adicional" de dos archivos distintos, donde es fácil confundir la numeración de uno con la del \
+otro. Si sabés en qué función o bloque está algo pero no tenés el número exacto en el fragmento \
+que estás citando, describí la ubicación SIN número en vez de inventar uno.`,
           );
 
           const fastLines = fastAnalysis.split('\n').map(l => l.trim()).filter(Boolean);
