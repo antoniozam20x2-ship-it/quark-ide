@@ -1,0 +1,27 @@
+Necesito que investigues algo puntual en el backend, SOLO LECTURA — no modifiques ni "arregles" nada todavía, esto es diagnóstico.
+
+Contexto: en quark-ide/backend/src/routes/agent.ts hay un pipeline DEEP que evalúa confianza de contexto (logs tipo "[DEEP confidence] hop N: sufficient=false") y que al no tener suficiente info intenta llamar a un provider externo para seguir buscando o para sintetizar. En un caso real vi esta secuencia exacta en los logs de Railway:
+
+[DEEP confidence] hop 2: sufficient=false — Falta información sobre la actualización del historial de sesión
+[agent] Groq key failed (prompt: ~28795 chars): Groq error: 413
+[agent] Groq key failed (prompt: ~28795 chars): Groq error: 413
+[agent] Groq key failed (prompt: ~28795 chars): Groq error: 413
+[agent] DeepSeek failed: DeepSeek error: 402
+
+Después de esa cuarta falla (DeepSeek 402), el mensaje terminó siendo respondido/continuado con Sonnet 5, a pesar de que la tarea original era de solo lectura (`resolvedIntent="read" forceModify=false` — esto ya lo confirmé en los logs, así que no es un problema de clasificación de intención).
+
+Necesito que respondas estas preguntas citando línea exacta de agent.ts para cada una:
+
+1. Buscá todas las ocurrencias de "DeepSeek failed" en agent.ts. ¿En qué función están? Pegame las 20-25 líneas siguientes a cada una (el bloque catch/fallback completo).
+
+2. ¿Existe una cadena de fallback de providers para el paso de "DEEP confidence" (Groq → DeepSeek → algo más)? Si es así, listame TODOS los providers en el orden exacto en que se intentan, citando línea de cada intento.
+
+3. ¿El último eslabón de esa cadena de fallback es Sonnet/Claude? Si es así, ¿está hardcodeado (ej. `model: "claude-sonnet-..."` fijo) o depende de alguna variable/config? Citá la línea exacta donde se define el modelo en ese fallback final.
+
+4. ¿Este fallback a Sonnet ocurre SOLO para el paso de "confidence scoring" del DEEP hop, o también se usa el mismo fallback para el paso de síntesis/respuesta final al usuario? Es decir: cuando todos los providers baratos fallan, ¿Sonnet solo evalúa confianza internamente, o termina generando la respuesta completa que ve el usuario?
+
+5. Buscá también "Groq error: 413" — ¿hay algún lugar donde el tamaño del prompt (~28795 chars en este caso) debería haber sido truncado o comprimido con `compressOldToolResults` u otra función similar ANTES de enviarse a Groq, y no se está aplicando en este pipeline DEEP? Citá la línea donde se arma el prompt que se envía a Groq en este paso.
+
+6. ¿Hay algún log o variable que registre explícitamente "modelo usado: sonnet" cuando se llega a este fallback? Si no existe, decilo — necesito saber si hay forma de confirmar en logs futuros que fue este camino el que se activó.
+
+Importante: no me des un resumen genérico de "cómo funciona el fallback" — necesito las líneas literales del código, tal cual están, citando número de línea. Si algún punto no aplica o no existe en el código, decilo explícitamente en vez de asumir que sí existe.
