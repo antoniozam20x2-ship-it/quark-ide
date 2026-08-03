@@ -1,0 +1,39 @@
+Tarea con dos partes — primero AUDITORÍA (solo lectura, no toques nada todavía), después te aviso si aplicás el fix.
+
+═══════════════════════════════════
+PARTE 1 — AUDITORÍA: estructuración de evidencia en Brous (DEEP → síntesis Haiku)
+═══════════════════════════════════
+
+Necesito confirmar si la evidencia que recolecta el pipeline DEEP en Brous (runChatTurn) llega bien estructurada al prompt de síntesis de Haiku, o si tiene el mismo riesgo que encontramos en Fast Mode (prompt crudo sin comprimir que agotó las 3 keys de Groq con 413 y falló DeepSeek con 402).
+
+Respondé, citando línea exacta de cada punto:
+
+1. Cuando los hops de DEEP van encontrando fragmentos de código (grafo, ripgrep-fallback, etc.), ¿cada fragmento se etiqueta con su origen (archivo, línea, número de hop) antes de agregarse al array/string que luego lee Haiku? Mostrame cómo se arma esa estructura.
+
+2. ¿Hay algún límite de tamaño (caracteres o tokens) por fragmento individual, o por el total acumulado de evidencia, antes de pasarlo al prompt de síntesis de Haiku? Si existe, citá la línea. Si no existe, decilo explícitamente.
+
+3. ¿compressOldToolResults (línea ~4035) se aplica a la evidencia de DEEP antes de la síntesis, o solo al historial de mensajes previos de la conversación? Sé específico sobre qué contenido comprime y cuál no toca.
+
+4. Estimá: si una investigación de Brous acumula evidencia de 4-5 hops con fragmentos largos, ¿el tamaño total del prompt final que recibe Haiku podría acercarse a los ~28795 chars que rompieron Groq en Fast Mode? Si podés, calculá con un caso real de tus logs recientes.
+
+5. ¿Existe algún log que registre el tamaño del prompt final antes de enviarlo a Haiku en runHaikuTier (similar al promptLen que vimos en callGroqAgent línea 609)? Si no existe, decilo — sería útil agregarlo para monitoreo futuro.
+
+No propongas fix todavía para esta parte, solo diagnóstico.
+
+═══════════════════════════════════
+PARTE 2 — FIX: conectar hops de DEEP a Fast Mode, con tope de 2 hops máximo pero alta calidad
+═══════════════════════════════════
+
+Fast Mode es la versión lite de Brous (solo lectura/explicación, nunca genera código), y le estoy conectando el motor de búsqueda por hops que ya usa DEEP en Brous — esto es lo que causó el bug de los 28795 chars, porque generateWithFallback nunca tuvo compresión de evidencia acumulada.
+
+Requisitos:
+
+1. Aplicá compresión/estructuración de evidencia (mismo criterio que confirmes en la Parte 1 para Brous, o compressOldToolResults adaptada) al prompt que arma el FAST FOLLOW-UP PATH antes de enviarlo a generateWithFallback — para que no se repita el 413/402.
+
+2. Limitá los hops de DEEP en Fast Mode a un MÁXIMO de 2 (a diferencia de Brous que puede seguir iterando según evaluateSearchConfidence). Con esos 2 hops, priorizá que cada uno traiga la evidencia más directa/relevante posible — por ejemplo, si el símbolo buscado tiene múltiples matches, priorizá el grafo de símbolos (más preciso) sobre ripgrep-fallback (más ruidoso) para no desperdiciar los 2 hops en evidencia poco útil.
+
+3. Importante — estamos usando APIs gratuitas/trial (Groq free tier, Gemini free tier, DeepSeek trial): el fix debe reducir el riesgo de agotar cuota por prompts grandes, sin sacrificar la calidad de la respuesta final. Priorizá comprimir/filtrar evidencia redundante antes que truncar evidencia relevante a la fuerza.
+
+4. Fast Mode sigue sin generar código bajo ninguna circunstancia — confirmá que este cambio no toca esa restricción.
+
+Antes de aplicar, mostrame: (a) dónde está hoy el límite de hops en Fast Mode si existe alguno, (b) tu propuesta de dónde insertar la compresión y el tope de 2 hops. Aplicá, corré tsc --noEmit, y probá con una consulta real en Fast Mode que antes de este cambio hubiera necesitado varios hops — pegame los logs mostrando cuántos hops usó, el tamaño final del prompt enviado a Groq, y la respuesta.
