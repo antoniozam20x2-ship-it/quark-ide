@@ -5629,7 +5629,11 @@ async function readAndNarrowFragment(
       const dir = parsed.needsExpansion ?? 'both';
       if (dir === 'up'   || dir === 'both') winStart = Math.max(0, winStart - EXPANSION_STEP);
       if (dir === 'down' || dir === 'both') winEnd   = Math.min(totalFileLines - 1, winEnd + EXPANSION_STEP);
-    } catch {
+    } catch (groqErr) {
+      console.warn(
+        `[deep-dynamic-range] Groq falló en iteración ${iter + 1}: ` +
+        (groqErr instanceof Error ? groqErr.message : String(groqErr)),
+      );
       break; // Groq failed — stop, fall through to old logic below
     }
   }
@@ -5927,7 +5931,7 @@ async function runDeepSearchPipeline(
         : null;
       let section = narrowResult0
         ?? (match.line
-          ? (readEnclosingFunction(fc, match.line) ?? smartReadSection(fc, match.line, 60))
+          ? (smartReadSection(fc, match.line, 60) ?? readEnclosingFunction(fc, match.line))
           : (match.text ? smartReadSection(fc, match.text, 60) : null));
       if (!section) continue;
 
@@ -6053,10 +6057,19 @@ async function runDeepSearchPipeline(
         // Strategy 2: caller search
         let callerFound = false;
         for (const ev of scanSlice) {
-          const defM = ev.fragment.match(
-            /(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(|(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:const|let|var)\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*=/
+          // Priority: real function declarations first, then arrow functions,
+          // then generic const/let/var — prevents parameter extractions like
+          // "const repo = params.repo" from winning over "function triggerSonnet(".
+          const defMFunc  = ev.fragment.match(
+            /(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*\(/,
           );
-          const defSym = defM ? (defM[1] ?? defM[2]) : null;
+          const defMArrow = ev.fragment.match(
+            /(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:const|let)\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*=\s*(?:async\s*)?\(/,
+          );
+          const defMVar   = ev.fragment.match(
+            /(?:^|\n)\s*(?:\d+:\s*)?(?:export\s+)?(?:const|let|var)\s+([a-zA-Z_][a-zA-Z0-9_]{3,})\s*=/,
+          );
+          const defSym = defMFunc?.[1] ?? defMArrow?.[1] ?? defMVar?.[1] ?? null;
           if (!defSym) continue;
           const defSymLower = defSym.toLowerCase();
           if (triedSymbols.has(defSymLower)) continue;
@@ -6095,8 +6108,8 @@ async function runDeepSearchPipeline(
             // Dynamic range narrowing — Strategy 2 / CALL_SITE
             const narrowedS2 = await readAndNarrowFragment(fc, callerMatch.line, userQuery ?? '', [defSym]);
             let section = narrowedS2
-              ?? readEnclosingFunction(fc, callerMatch.line)
-              ?? smartReadSection(fc, callerMatch.line, 60);
+              ?? smartReadSection(fc, callerMatch.line, 60)
+              ?? readEnclosingFunction(fc, callerMatch.line);
             if (!section) continue;
 
             if (!section.excerpt.toLowerCase().includes(defSymLower)) {
@@ -6175,8 +6188,8 @@ async function runDeepSearchPipeline(
             // Dynamic range narrowing — Strategy 1 / grafo / CALL_SITE
             const narrowedG1 = await readAndNarrowFragment(fc, g1hit.caller_line, userQuery ?? '', [bestSym]);
             let section = narrowedG1
-              ?? readEnclosingFunction(fc, g1hit.caller_line)
-              ?? smartReadSection(fc, g1hit.caller_line, 60);
+              ?? smartReadSection(fc, g1hit.caller_line, 60)
+              ?? readEnclosingFunction(fc, g1hit.caller_line);
             if (section?.excerpt.toLowerCase().includes(bestSymLower)) {
               relevanceSet.add(bestSymLower);
               const { annotatedFragment, notes: hopNotes } = annotateTradingPatterns(
@@ -6219,7 +6232,7 @@ async function runDeepSearchPipeline(
               : null;
             let section = narrowedRg
               ?? (bestMatch.line
-                ? (readEnclosingFunction(fc, bestMatch.line) ?? smartReadSection(fc, bestMatch.line, 60))
+                ? (smartReadSection(fc, bestMatch.line, 60) ?? readEnclosingFunction(fc, bestMatch.line))
                 : null);
             if (section) {
               if (!section.excerpt.toLowerCase().includes(bestSymLower)) {

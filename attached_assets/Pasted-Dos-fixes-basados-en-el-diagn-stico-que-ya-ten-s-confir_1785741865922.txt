@@ -1,0 +1,19 @@
+Dos fixes, basados en el diagnóstico que ya tenés confirmado. Aplicá ambos.
+
+FIX A — Fallback más seguro cuando Groq falla en readAndNarrowFragment
+
+Hoy, si Groq falla en las 3 iteraciones (catch { break } en línea ~5632-5638), la función retorna null y el llamador cae a readEnclosingFunction (hasta 300 líneas) — el peor caso en tamaño, justo lo que el narrowing existe para evitar.
+
+Cambiá el orden de fallback en los 4 call-sites (líneas 5925, 6096, 6176, 6217): que sea narrowedX ?? smartReadSection(fc, anchorLine, 60) ?? readEnclosingFunction(...) — priorizando el cap más chico (±60 líneas, 121 máx) antes que la lectura de función completa. Mantené readEnclosingFunction como último recurso si smartReadSection tampoco encuentra el símbolo (igual que ya hace el BUG-2 fallback existente).
+
+Además, en el catch { break } de línea ~5632, agregá console.warn('[deep-dynamic-range] Groq falló en iteración N: ' + error.message) para saber la causa real la próxima vez que pase (timeout, rate limit, JSON inválido, etc.) — hoy falla en silencio total.
+
+FIX B — Regex de Strategy 2 captura símbolo equivocado
+
+En línea ~6056-6059, el regex que extrae defSym matchea la PRIMERA ocurrencia de "const/let/var NOMBRE =" en el fragmento — lo cual frecuentemente es una extracción de parámetro (const repo = params.repo) en vez de la función principal que el fragmento realmente define.
+
+Corregí para que priorice patrones de declaración de función real: function NOMBRE(, const NOMBRE = (...) =>, const NOMBRE = async (, export function NOMBRE, antes que cualquier const/let/var genérico. Si hay múltiples matches, preferí el que aparece en la primera línea no-vacía del fragmento (más probable que sea la declaración principal) sobre matches en medio del cuerpo.
+
+Agregá un test rápido: pasale un fragmento que empiece con "const repo = params.repo;\nfunction triggerSonnet(...) {" y confirmá que defSym da "triggerSonnet", no "repo".
+
+Corré tsc --noEmit, y probá de nuevo la misma pregunta que usamos antes ("¿Qué pasa exactamente entre el momento en que Haiku termina su investigación y el momento en que se emite el evento suggest_sonnet?") — pegame el log completo de Railway para confirmar: (a) que ahora sym= es un símbolo real, no "repo", y (b) que si Groq llega a fallar, el fallback usa smartReadSection en vez de la función completa.
