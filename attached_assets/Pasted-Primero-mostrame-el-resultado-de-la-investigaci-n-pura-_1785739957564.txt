@@ -1,0 +1,22 @@
+Primero mostrame el resultado de la investigación pura que pedí antes (los 5 puntos sobre AnnotatedFragment/purpose, readEnclosingFunction, y si existe alguna función de "narrow range"). Con eso confirmado, aplicá este fix:
+
+OBJETIVO: DEEP debe leer fragmentos con rango dinámico usando sus propias llamadas gratuitas (Groq/Gemini), y solo mandar a Haiku (Brous) el fragmento ya recortado y bien estructurado — minimizando lo que le llega al tramo caro (Anthropic).
+
+MECÁNICA:
+
+1. Cuando DEEP encuentra un match (ripgrep o grafo de símbolos), leé un rango inicial razonable alrededor del match (ej: ±100 líneas, no 300 fijas) usando el match como ancla, no la función completa desde su declaración.
+
+2. Con ese fragmento inicial, hacé una llamada barata a Groq (reutilizá el patrón de evaluateSearchConfidence, línea 5473) que reciba: la pregunta original del usuario + el fragmento leído, y devuelva JSON con:
+   - sufficient: boolean (¿el fragmento ya contiene todo lo necesario para responder la pregunta?)
+   - relevantRange: { start, end } (el sub-rango de líneas dentro del fragmento que realmente responde la pregunta — puede ser más angosto que lo leído)
+   - needsExpansion: 'up' | 'down' | 'both' | null (si sufficient=false, hacia dónde expandir)
+
+3. Si sufficient=false, expandí el rango de lectura en la dirección indicada (ej: +100 líneas más) y repetí el paso 2. Máximo 3 iteraciones por fragmento — si a la tercera sigue sin ser sufficient, mandá lo que tengas con un flag de baja confianza en vez de seguir iterando indefinidamente (para no generar demasiada latencia aunque el costo de API sea gratis).
+
+4. Una vez sufficient=true, recortá el fragmento final a relevantRange + un margen fijo de contexto (ej: ±10 líneas) antes de construir el AnnotatedFragment que se manda a Haiku — no mandes el rango completo leído (100-300 líneas), mandá solo la porción relevante ya identificada.
+
+5. Mantené intacta la estructura actual de AnnotatedFragment (path, line, endLine, hopLevel, fragmentType, confidence, purpose, relatedSymbols) — el purpose ahora puede poblarse directamente con la razón que dio Groq en el paso 2.
+
+6. Agregá logging: console.log('[deep-dynamic-range] fragmento inicial: N líneas → recortado a M líneas tras K iteraciones') por cada fragmento procesado, para que podamos confirmar el ahorro real.
+
+Aplicá esto en el pipeline DEEP compartido por Brous (no en Fast Mode, que ya tiene su propio fix de compresión distinto). Corré tsc --noEmit, y probá con una consulta real en Brous que antes hubiera traído un fragmento de función completa (200+ líneas) — pegame el log mostrando líneas antes/después y cuántas iteraciones usó, más la respuesta final para confirmar que la calidad no bajó.

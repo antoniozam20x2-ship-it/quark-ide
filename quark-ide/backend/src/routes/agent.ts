@@ -5537,6 +5537,142 @@ async function evaluateSearchConfidence(
   }
 }
 
+// ── Dynamic fragment narrowing (DEEP pipeline) ────────────────────────────────
+// Replaces the fixed readEnclosingFunction(300 lines) + smartReadSection(±60)
+// pattern with an iterative Groq-guided read that starts at ±100 lines and
+// trims to the relevant sub-range, minimising what eventually reaches Haiku.
+
+const NARROW_FRAGMENT_SYSTEM =
+  'Eres un analizador de código. Responde ÚNICAMENTE con JSON válido, sin texto extra.';
+
+interface NarrowFragmentResult {
+  excerpt: string;
+  startLine: number;
+  endLine: number;
+  purpose: string;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  initialLineCount: number;
+  finalLineCount: number;
+  iterations: number;
+}
+
+/**
+ * Reads a code fragment dynamically around anchorLine using iterative Groq
+ * refinement. Starts with ±100 lines (vs the former fixed 300-line function
+ * read), then expands in the indicated direction if Groq says the window is
+ * insufficient. Finally trims to the relevant sub-range ± 10 lines.
+ *
+ * Returns null on any failure (network, bad JSON, empty file) so the caller
+ * falls back to the existing readEnclosingFunction / smartReadSection logic —
+ * no behavioral regression on Groq outage.
+ */
+async function readAndNarrowFragment(
+  content: string,
+  anchorLine: number,        // 1-indexed
+  userQuery: string,
+  symbolTerms: string[],
+): Promise<NarrowFragmentResult | null> {
+  const INITIAL_CONTEXT = 100;   // ±100 lines initial window (200 lines total)
+  const EXPANSION_STEP  = 100;   // lines to add per expansion step
+  const MAX_ITERATIONS  = 3;     // max Groq calls per fragment
+  const MARGIN          = 10;    // extra context lines around relevantRange
+
+  const fileLines = content.split('\n');
+  const totalFileLines = fileLines.length;
+  if (totalFileLines === 0 || anchorLine < 1) return null;
+
+  const buildExcerpt = (s: number, e: number): string =>
+    fileLines.slice(s, e + 1).map((l, i) => `${s + i + 1}: ${l}`).join('\n');
+
+  // 0-indexed boundaries
+  let winStart = Math.max(0, anchorLine - 1 - INITIAL_CONTEXT);
+  let winEnd   = Math.min(totalFileLines - 1, anchorLine - 1 + INITIAL_CONTEXT);
+
+  const initialLineCount = winEnd - winStart + 1;
+  const queryShort  = userQuery.slice(0, 200);
+  const symbolHint  = symbolTerms.slice(0, 2).join(', ');
+
+  type GroqNarrow = {
+    sufficient: boolean;
+    relevantRange: { start: number; end: number };
+    needsExpansion: 'up' | 'down' | 'both' | null;
+    purpose: string;
+  };
+  let lastParsed: GroqNarrow | null = null;
+  let iterations = 0;
+
+  for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+    iterations = iter + 1;
+    const excerpt = buildExcerpt(winStart, winEnd);
+    const prompt =
+      `Pregunta: "${queryShort}"\n` +
+      `Símbolo buscado: "${symbolHint}"\n\n` +
+      `Fragmento de código (líneas ${winStart + 1}–${winEnd + 1}):\n${excerpt}\n\n` +
+      `Devolvé JSON:\n{\n` +
+      `  "sufficient": true|false,\n` +
+      `  "relevantRange": {"start": N, "end": M},\n` +
+      `  "needsExpansion": "up"|"down"|"both"|null,\n` +
+      `  "purpose": "qué hace este fragmento respecto a la pregunta"\n` +
+      `}\n` +
+      `sufficient=true si el fragmento ya contiene lo necesario para responder. ` +
+      `relevantRange debe ser el sub-rango más angosto que aún responde la pregunta ` +
+      `(usá los números de línea del prefijo "N: código"). ` +
+      `Si sufficient=false, needsExpansion indica hacia dónde expandir.`;
+
+    try {
+      const raw = await callGroqAgent(prompt, NARROW_FRAGMENT_SYSTEM, 200);
+      const parsed = JSON.parse(raw.trim()) as GroqNarrow;
+      if (!parsed || typeof parsed.sufficient !== 'boolean') throw new Error('invalid shape');
+      lastParsed = parsed;
+      if (parsed.sufficient) break;
+
+      const dir = parsed.needsExpansion ?? 'both';
+      if (dir === 'up'   || dir === 'both') winStart = Math.max(0, winStart - EXPANSION_STEP);
+      if (dir === 'down' || dir === 'both') winEnd   = Math.min(totalFileLines - 1, winEnd + EXPANSION_STEP);
+    } catch {
+      break; // Groq failed — stop, fall through to old logic below
+    }
+  }
+
+  // All Groq calls failed → return null so caller uses old readEnclosingFunction
+  if (!lastParsed) return null;
+
+  // ── Trim to relevantRange ± MARGIN ───────────────────────────────────────────
+  let finalStart = winStart;
+  let finalEnd   = winEnd;
+  const rr = lastParsed.relevantRange;
+  if (rr && typeof rr.start === 'number' && typeof rr.end === 'number') {
+    // rr values are 1-indexed line numbers (from the "N: code" prefixes)
+    finalStart = Math.max(winStart, Math.max(0, rr.start - 1 - MARGIN));
+    finalEnd   = Math.min(winEnd,   Math.min(totalFileLines - 1, rr.end - 1 + MARGIN));
+  }
+  // Safety: ensure the anchor line is never outside the final window
+  finalStart = Math.min(finalStart, Math.max(0, anchorLine - 1));
+  finalEnd   = Math.max(finalEnd,   Math.min(totalFileLines - 1, anchorLine - 1));
+
+  const finalLineCount = finalEnd - finalStart + 1;
+  const finalExcerpt   = buildExcerpt(finalStart, finalEnd);
+  const purpose        = (lastParsed.purpose ?? '').trim()
+    || `Fragmento relacionado con ${symbolHint || 'símbolo'}`;
+  const confidence: 'HIGH' | 'MEDIUM' | 'LOW' = lastParsed.sufficient ? 'HIGH' : 'MEDIUM';
+
+  console.log(
+    `[deep-dynamic-range] fragmento inicial: ${initialLineCount} líneas → ` +
+    `recortado a ${finalLineCount} líneas tras ${iterations} iteración(es)`,
+  );
+
+  return {
+    excerpt: finalExcerpt,
+    startLine: finalStart + 1,
+    endLine: finalEnd + 1,
+    purpose,
+    confidence,
+    initialLineCount,
+    finalLineCount,
+    iterations,
+  };
+}
+
 // ── repo_knowledge — memoria persistente indexada por concepto ────────────────
 
 /** Normaliza una keyword técnica a un slug de concepto para indexar en repo_knowledge. */
@@ -5783,9 +5919,16 @@ async function runDeepSearchPipeline(
   for (const match of matches.slice(0, 5)) {
     try {
       const fc = await getFileContent(match.path, repo);
-      let section = match.line
-        ? (readEnclosingFunction(fc, match.line) ?? smartReadSection(fc, match.line, 60))
-        : (match.text ? smartReadSection(fc, match.text, 60) : null);
+      // ── Dynamic range narrowing — hop 0 / DEFINITION ─────────────────────────
+      // Reads ±100 lines initially (vs. fixed 300-line readEnclosingFunction),
+      // then Groq identifies the relevant sub-range to trim before Haiku sees it.
+      const narrowResult0 = match.line
+        ? await readAndNarrowFragment(fc, match.line, userQuery ?? '', queryTerms)
+        : null;
+      let section = narrowResult0
+        ?? (match.line
+          ? (readEnclosingFunction(fc, match.line) ?? smartReadSection(fc, match.line, 60))
+          : (match.text ? smartReadSection(fc, match.text, 60) : null));
       if (!section) continue;
 
       const symbolTerms = queryTerms.length > 0 ? queryTerms : [];
@@ -5820,8 +5963,9 @@ async function runDeepSearchPipeline(
         fragment: annotatedFragment,
         // ── Annotation fields ──
         fragmentType: isPattern ? 'PATTERN' : 'DEFINITION',
-        confidence: 'HIGH',
-        purpose: `Define ${match.text?.slice(0, 60) ?? match.path.split('/').pop() ?? 'símbolo'}`,
+        confidence: narrowResult0?.confidence ?? 'HIGH',
+        purpose: narrowResult0?.purpose
+          ?? `Define ${match.text?.slice(0, 60) ?? match.path.split('/').pop() ?? 'símbolo'}`,
         relatedSymbols: extractRelatedSymbols(annotatedFragment),
         hopLevel: 0,
       });
@@ -5948,7 +6092,10 @@ async function runDeepSearchPipeline(
             if (!callerMatch?.line) continue;
 
             const fc = await getFileContent(callerMatch.path, repo);
-            let section = readEnclosingFunction(fc, callerMatch.line)
+            // Dynamic range narrowing — Strategy 2 / CALL_SITE
+            const narrowedS2 = await readAndNarrowFragment(fc, callerMatch.line, userQuery ?? '', [defSym]);
+            let section = narrowedS2
+              ?? readEnclosingFunction(fc, callerMatch.line)
               ?? smartReadSection(fc, callerMatch.line, 60);
             if (!section) continue;
 
@@ -5972,8 +6119,8 @@ async function runDeepSearchPipeline(
               endLine: section.endLine,
               fragment: annotatedFragment,
               fragmentType: 'CALL_SITE',
-              confidence: 'HIGH',
-              purpose: `Invoca ${defSym}; contexto de uso`,
+              confidence: narrowedS2?.confidence ?? 'HIGH',
+              purpose: narrowedS2?.purpose ?? `Invoca ${defSym}; contexto de uso`,
               relatedSymbols: extractRelatedSymbols(annotatedFragment),
               hopLevel: hop + 1,
             });
@@ -6025,7 +6172,10 @@ async function runDeepSearchPipeline(
           if (g1hit) {
             s1Source = 'grafo';
             const fc = await getFileContent(g1hit.caller_file, repo);
-            let section = readEnclosingFunction(fc, g1hit.caller_line)
+            // Dynamic range narrowing — Strategy 1 / grafo / CALL_SITE
+            const narrowedG1 = await readAndNarrowFragment(fc, g1hit.caller_line, userQuery ?? '', [bestSym]);
+            let section = narrowedG1
+              ?? readEnclosingFunction(fc, g1hit.caller_line)
               ?? smartReadSection(fc, g1hit.caller_line, 60);
             if (section?.excerpt.toLowerCase().includes(bestSymLower)) {
               relevanceSet.add(bestSymLower);
@@ -6039,8 +6189,8 @@ async function runDeepSearchPipeline(
                 endLine: section.endLine,
                 fragment: annotatedFragment,
                 fragmentType: 'CALL_SITE',
-                confidence: 'HIGH',
-                purpose: `Invoca o define ${bestSym}`,
+                confidence: narrowedG1?.confidence ?? 'HIGH',
+                purpose: narrowedG1?.purpose ?? `Invoca o define ${bestSym}`,
                 relatedSymbols: extractRelatedSymbols(annotatedFragment),
                 hopLevel: hop + 1,
               });
@@ -6063,9 +6213,14 @@ async function runDeepSearchPipeline(
           const bestMatch = (prodMatches.length > 0 ? prodMatches : hopMatches)[0];
           if (bestMatch) {
             const fc = await getFileContent(bestMatch.path, repo);
-            let section = bestMatch.line
-              ? (readEnclosingFunction(fc, bestMatch.line) ?? smartReadSection(fc, bestMatch.line, 60))
+            // Dynamic range narrowing — Strategy 1 / ripgrep / CALL_SITE
+            const narrowedRg = bestMatch.line
+              ? await readAndNarrowFragment(fc, bestMatch.line, userQuery ?? '', [bestSym])
               : null;
+            let section = narrowedRg
+              ?? (bestMatch.line
+                ? (readEnclosingFunction(fc, bestMatch.line) ?? smartReadSection(fc, bestMatch.line, 60))
+                : null);
             if (section) {
               if (!section.excerpt.toLowerCase().includes(bestSymLower)) {
                 const fallback = bestMatch.line ? smartReadSection(fc, bestMatch.line, 50) : null;
@@ -6088,8 +6243,8 @@ async function runDeepSearchPipeline(
                   endLine: section.endLine,
                   fragment: annotatedFragment,
                   fragmentType: 'CALL_SITE',
-                  confidence: 'HIGH',
-                  purpose: `Invoca o define ${bestSym}`,
+                  confidence: narrowedRg?.confidence ?? 'HIGH',
+                  purpose: narrowedRg?.purpose ?? `Invoca o define ${bestSym}`,
                   relatedSymbols: extractRelatedSymbols(annotatedFragment),
                   hopLevel: hop + 1,
                 });
