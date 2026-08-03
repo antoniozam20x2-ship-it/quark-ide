@@ -1,0 +1,24 @@
+Aplicá dos fixes en agent.ts. Hacé los dos cambios, deployá, y después mostrame un resumen de qué tocaste con números de línea (antes/después) para que yo verifique en producción — no hace falta que me muestres el patch antes de aplicarlo, quiero ahorrar tokens.
+
+FIX 1 — Regex de clasificación de intención (línea 3870, función classifyIntent)
+
+El regex GENERATE_SIGNALS matcheó la palabra "agregando" dentro de una pregunta descriptiva ("el historial se actualiza agregando el resultado de cada tool call"), clasificándola como 'generate' cuando debía ser 'explain'. El lookbehind actual (?<!se\s) solo excluye la palabra inmediatamente pegada a "se ", pero no cubre casos donde "se" está más lejos en la cláusula (ej: "se actualiza agregando", "se resuelve aplicando", "se corrige cambiando").
+
+Corregí el regex para que detecte y excluya cláusulas reflexivas/descriptivas en español donde "se" precede al verbo principal de la oración (no necesariamente pegado al gerundio/verbo que matchea). Priorizá no romper la detección de instrucciones reales de modificación (ej: "corregí el bug", "agregá un try/catch", "cambiá el timeout" deben seguir dando 'generate').
+
+Después de aplicar, corré al menos estos casos de prueba y pegame el resultado de classifyIntent para cada uno:
+- "¿cómo se actualiza el historial agregando resultados?" → debe dar 'explain'
+- "el sistema se resuelve aplicando un fallback" → debe dar 'explain'
+- "corregí el bug en runHaikuTier" → debe dar 'generate'
+- "agregá un catch para el error 413" → debe dar 'generate'
+
+FIX 2 — Sonnet NO debe invocarse automáticamente, requiere confirmación explícita del usuario
+
+En runChatTurn, actualmente cuando el flujo llega al bloque de línea 7509-7521 (todo lo que no retornó en los guards de 'explain'), se llama a runSonnetPhase directamente en línea 7521 sin pedir autorización. Esto bypasea el botón de confirmación que el frontend ya ofrece via triggerSonnet=true (línea 6906).
+
+Necesito que ese comportamiento automático desaparezca. El flujo correcto debe ser:
+1. Cuando el código llegue a ese punto (candidato a 'generate'), en vez de llamar a runSonnetPhase directamente, debe devolver al usuario una respuesta de Haiku con la evidencia encontrada + un botón/opción ofreciendo "invocar a Sonnet para aplicar el fix" — igual al patrón que ya existe para el botón manual.
+2. runSonnetPhase solo debe ejecutarse cuando el usuario confirme explícitamente (triggerSonnet=true en un mensaje posterior), nunca como continuación automática del mismo turno.
+3. Buscá si hay OTROS puntos en el código (no solo línea 7521) donde se llame a runSonnetPhase sin pasar por ese gate de confirmación, y aplicá el mismo criterio ahí también.
+
+Después de aplicar, mostrame: (a) todas las líneas donde se invoca runSonnetPhase después del fix, y (b) confirmá con una prueba real en el chat que una pregunta que antes escalaba automáticamente ahora se detiene y ofrece el botón en vez de ejecutar Sonnet directamente.

@@ -3863,12 +3863,25 @@ function classifyEffort(message: string): 'medium' | 'high' | 'xhigh' {
 // or CODE GENERATION/MODIFICATION (Haiku explores, Sonnet patches).
 function classifyIntent(message: string): 'explain' | 'generate' {
   // Negative lookbehind "(?<!se\s)" excluye construcciones reflexivas/pasivas
-  // ("se ejecuta", "se aplica", "se corrige", "cómo se resuelve X") que
-  // describen comportamiento EXISTENTE del código, no una orden de cambio.
-  // Sin esto, "¿con qué frecuencia se ejecuta?" clasificaba como 'generate'
-  // solo por la raíz "ejecut", igual que "ejecutá esto" (orden real).
+  // donde "se" precede DIRECTAMENTE al verbo ("se ejecuta", "se aplica", etc.).
+  // Para cubrir casos donde "se" precede al verbo principal pero el gerundio
+  // aparece más adelante en la misma cláusula ("se actualiza agregando resultados",
+  // "se resuelve aplicando un fallback"), se agrega un segundo chequeo post-match:
+  // si el término que matcheó es un gerundio (-ando/-iendo/-yendo) Y hay un "se"
+  // antes de él en la misma cláusula (sin punto/signo de interrogación entre medio),
+  // la oración es descriptiva → 'explain'.
   const GENERATE_SIGNALS = /\b(?<!se\s)(corrig|correg|corrij|arregl|implement|agreg|añad|cre[aá]|refactor|escrib|modific|cambi|propon|ejecut|resolv|resu[eé]lv|remov|remu[eé]v|aplic|elimin|borr|insert|reemplaz|update|fix|patch)[\p{L}\p{N}_]*\b/iu;
-  return GENERATE_SIGNALS.test(message) ? 'generate' : 'explain';
+  const match = GENERATE_SIGNALS.exec(message);
+  if (!match) return 'explain';
+  // Gerundio en cláusula reflexiva → descriptivo, no imperativo
+  if (/(?:ando|iendo|yendo)$/i.test(match[0])) {
+    // Tomar el texto antes del match, dentro de la misma cláusula (hasta el último
+    // separador oracional: punto, signo de interrogación, exclamación o punto y coma)
+    const beforeMatch = message.slice(0, match.index);
+    const sameClause = beforeMatch.split(/[.!?;¿¡]/).pop() ?? '';
+    if (/\bse\b/i.test(sameClause)) return 'explain';
+  }
+  return 'generate';
 }
 
 // Detecta mensajes puramente sociales/triviales: saludos, agradecimientos,
@@ -7506,19 +7519,19 @@ async function runChatTurn(
       return;
     }
 
-    // intent === 'generate': Haiku explored and found the relevant files.
-    // Hand off to Sonnet with a code-generation-only instruction.
-    // Sonnet receives ONLY propose_patch — no search, no read_file re-exploration.
-    messages.push({
-      role: 'user',
-      content: '[Haiku 4.5 ya exploró el codebase y encontró los archivos relevantes (ver mensajes anteriores). ' +
-        'Tu tarea es ÚNICAMENTE generar el patch de código requerido usando propose_patch. ' +
-        'NO uses grep_code, list_files ni read_file — todo el contexto ya está cargado en la conversación. ' +
-        'Basate en los fragmentos de código que Haiku ya leyó y proponé el cambio concreto con propose_patch.]',
+    // intent === 'generate': Haiku exploró y encontró los archivos relevantes.
+    // En lugar de invocar a Sonnet automáticamente — lo que bypasea el gate de
+    // confirmación del usuario — emitimos suggest_sonnet para que el frontend
+    // muestre el botón de confirmación. Sonnet solo corre cuando el usuario
+    // confirma explícitamente (triggerSonnet=true en un mensaje posterior,
+    // manejado en línea ~6906). Esto elimina el riesgo de modificaciones no
+    // autorizadas ante una clasificación de intención incorrecta (ej: una pregunta
+    // descriptiva que matcheó 'generate' por un gerundio en cláusula reflexiva).
+    send('suggest_sonnet', {
+      reason: 'Haiku encontró los archivos relevantes. ¿Querés que Sonnet 5 aplique el cambio?',
     });
+    await saveChatHistory(sessionId, haikuResult.messages);
   }
-
-  await runSonnetPhase(messages, repo, send, sessionId, userMessage);
 }
 
 // ── Sonnet patch-generation phase (reusable) ──────────────────────────────────
