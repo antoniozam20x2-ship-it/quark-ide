@@ -5998,6 +5998,21 @@ async function runDeepSearchPipeline(
       'String','Number','Boolean','Date','Set','Map','Error','Symbol','fetch',
       'setTimeout','setInterval','clearTimeout','clearInterval','require',
     ]);
+    // Generic variable names that Strategy 2 must never use as hop targets.
+    // BUG-2 validation passes them trivially (they appear in any TypeScript fragment),
+    // so they produce meaningless hops against the symbol_calls graph.
+    const STRAT2_GENERIC_BLOCKLIST = new Set([
+      'result','data','config','response','error','value','output','input',
+      'params','options','settings','state','info','args','props','ctx',
+      'req','res','msg','item','items','list','payload','body','query',
+      'event','node','text','type','key','name','path','file','files',
+      'content','token','repo','hash','index','count','size','time','date',
+      'user','client','server','request','reply','next','prev','temp','tmp',
+      'obj','ret','val','str','num','arr','buf','raw','out','err',
+      'flag','mode','kind','role','code','status','record','row','entry',
+      'match','found','ref','cache','store','source','target','dest',
+      'orig','copy','base','root','wrap','handler','helper','util',
+    ]);
     const relevanceSet = new Set<string>(queryTerms.map(t => t.toLowerCase()));
     const triedSymbols = new Set<string>(relevanceSet);
 
@@ -6076,6 +6091,7 @@ async function runDeepSearchPipeline(
           const defSym = defMFunc?.[1] ?? defMArrow?.[1] ?? defMVar?.[1] ?? null;
           if (!defSym) continue;
           const defSymLower = defSym.toLowerCase();
+          if (STRAT2_GENERIC_BLOCKLIST.has(defSymLower)) continue;
           if (triedSymbols.has(defSymLower)) continue;
           triedSymbols.add(defSymLower);
 
@@ -7720,7 +7736,14 @@ async function runChatTurn(
 
           const subProd = subResult.matches.filter((m) => !isTestMatch(m.path, m.text));
           const subRanked = subProd.length > 0 ? subProd : subResult.matches;
-          const subEvidence = await runDeepSearchPipeline(subRanked, allKws, repo, send, determineMaxHops(subQuery), false, subQuery, auditMode);
+          // Cuando hay múltiples sub-preguntas, le pasamos el mensaje original como
+          // contexto de narrowing para que readAndNarrowFragment y evaluateSearchConfidence
+          // vean el objetivo completo ("adjustRiskPct Y saveAgentConfig") y no recorten
+          // la ventana dejando afuera símbolos cubiertos por otras sub-preguntas.
+          const narrowingQuery = planSteps.length > 1
+            ? `${subQuery} [Objetivo completo: ${userMessage.slice(0, 200)}]`
+            : subQuery;
+          const subEvidence = await runDeepSearchPipeline(subRanked, allKws, repo, send, determineMaxHops(subQuery), false, narrowingQuery, auditMode);
 
           for (const ev of subEvidence) {
             const key = `${ev.path}:${ev.line}`;
