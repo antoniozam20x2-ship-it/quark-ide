@@ -1,0 +1,27 @@
+Necesito agregar un "modo auditoría" a Brous (runHaikuTier / runChatTurn), sin tocar el comportamiento normal para consultas rápidas.
+
+CONTEXTO: hoy Haiku comprime sus respuestas a máx 4-5 líneas, sin headers, sin listas numeradas, máx 2 citas. También hay un pipeline DEEP con evaluateSearchConfidence que corta la búsqueda apenas sufficient=true, para ahorrar tokens. Ambos comportamientos están bien para consultas normales, pero cuando el usuario pide una VERIFICACIÓN puntual tipo auditoría (preguntas numeradas, "citando línea exacta", "confirmá o corregí cada punto"), necesito que Brous priorice calidad y completitud sobre velocidad — sin que eso implique nunca escalar a Sonnet (la investigación y síntesis siguen siendo 100% Groq/Gemini/Haiku, eso es lo que mantiene el ahorro real de costo).
+
+CAMBIO 1 — Detección de modo auditoría
+
+Agregá una función que detecte si el mensaje del usuario es una "consulta de auditoría", activándose si se cumple CUALQUIERA de:
+- El mensaje tiene 2+ preguntas numeradas (patrones tipo "1." "2." seguidos de "?")
+- Contiene alguna de estas frases (case-insensitive): "citando línea", "línea exacta", "confirmá o corrig", "verificá si es cierto", "no asumas", "punto por punto", "cita la línea"
+
+CAMBIO 2 — Profundidad de búsqueda adaptativa (no fija) en modo auditoría
+
+Buscá evaluateSearchConfidence (línea ~5473) y el mecanismo de corte de hops en el DEEP pipeline. En modo auditoría, el criterio de "sufficient=true" debe ser más estricto — Haiku/el evaluador de confianza debe seguir haciendo hops adicionales si detecta que falta evidencia directa para CUALQUIERA de los puntos numerados que preguntó el usuario, no solo hasta que el tema general "parezca" cubierto. No pongas un número fijo de hops mínimos — que siga siendo el modelo el que decida cuándo realmente tiene evidencia suficiente para cada punto, pero con un criterio de suficiencia más exigente que el modo normal.
+
+Importante: esto NO debe habilitar ningún camino nuevo hacia Sonnet. Solo debe permitir más iteraciones dentro del pipeline Groq/Gemini/DEEP existente.
+
+CAMBIO 3 — Síntesis final en modo auditoría
+
+Cuando se detecta modo auditoría, desactivá el límite de compresión (4-5 líneas / sin headers / máx 2 citas) para esa respuesta específica. En su lugar, instruí a Haiku a:
+- Responder cada punto por separado, en el orden en que fueron preguntados
+- Citar el fragmento de código real leído (línea + contenido exacto) para cada afirmación
+- Marcar explícitamente si algo no pudo confirmarse, o si el dato no coincide con lo que preguntó el usuario
+- Terminar con una conclusión breve
+
+Para consultas normales (sin ningún trigger de auditoría), TODO debe quedar exactamente igual que hoy — ni la profundidad de búsqueda ni el formato de síntesis deben cambiar.
+
+Antes de tocar nada, mostrame dónde están: (a) el prompt/reglas de compresión actual de Haiku, (b) la lógica de corte de evaluateSearchConfidence — con número de línea de cada uno. Aplicá los 3 cambios, corré tsc --noEmit, y probá con dos mensajes: uno normal (debe seguir dando respuesta corta con búsqueda normal) y uno en formato auditoría (debe dar respuesta punto por punto con citas, y logs mostrando que hizo más hops si el caso lo ameritaba). Pegame ambos resultados y los logs de hops de cada uno.

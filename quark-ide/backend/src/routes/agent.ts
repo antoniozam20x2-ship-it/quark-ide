@@ -3884,6 +3884,19 @@ function classifyIntent(message: string): 'explain' | 'generate' {
   return 'generate';
 }
 
+/**
+ * Detecta si el mensaje del usuario es una consulta de auditoría que requiere
+ * respuesta punto por punto con citas directas de código. Se activa si:
+ *   - Hay 2+ preguntas numeradas (ej. "1. ¿...? 2. ¿...?")
+ *   - O el mensaje contiene frases de auditoría explícitas
+ */
+function isAuditQuery(message: string): boolean {
+  // 2+ preguntas numeradas: "1. ...? 2. ...?"
+  const numberedQs = (message.match(/\b\d+[.)]\s+[^?]+\?/g) ?? []).length;
+  if (numberedQs >= 2) return true;
+  return /citando l[ií]nea|l[ií]nea exacta|confirm[aá]\s*o\s*corrig|verific[aá]\s*si es cierto|no asumas|punto por punto|cita la l[ií]nea/i.test(message);
+}
+
 // Detecta mensajes puramente sociales/triviales: saludos, agradecimientos,
 // confirmaciones vacías, charla genérica. Estos nunca deben disparar NEEDS_TOOLS
 // ni escalar a DEEP/Haiku — se responden con un prompt conversacional minimalista.
@@ -5487,14 +5500,26 @@ async function evaluateSearchConfidence(
   userQuery: string,
   fragmentsSoFar: AnnotatedFragment[],
   hopLevel: number,
+  auditMode = false,
 ): Promise<{ sufficient: boolean; reason: string }> {
   const summary = fragmentsSoFar.map(f =>
     `- [${f.fragmentType}] ${f.purpose} (${f.path}:${f.line})`,
   ).join('\n');
 
+  // En modo auditoría el criterio es más estricto: sufficient=true solo si
+  // hay evidencia directa para CADA punto numerado, no solo cobertura general
+  // del tema. Esto evita el corte temprano de hops ante preguntas multi-punto.
+  const auditCriteria = auditMode
+    ? `MODO AUDITORÍA — el usuario hizo preguntas numeradas específicas. ` +
+      `Solo devolvé sufficient=true si la evidencia cubre DIRECTAMENTE CADA UNO ` +
+      `de los puntos numerados con código real leído (no solo el tema general). ` +
+      `Si falta evidencia directa para aunque sea uno solo de los puntos, ` +
+      `devolvé sufficient=false.\n\n`
+    : '';
   const prompt =
     `Pregunta del usuario: "${userQuery}"\n\n` +
     `Evidencia encontrada hasta el hop ${hopLevel}:\n${summary}\n\n` +
+    auditCriteria +
     `¿Esta evidencia ya es suficiente para responder completamente la pregunta, ` +
     `incluyendo CÓMO se relacionan los conceptos si la pregunta lo pide?\n` +
     `Responde SOLO con JSON: {"sufficient": true|false, "reason": "una frase breve"}`;
@@ -5747,6 +5772,7 @@ async function runDeepSearchPipeline(
   maxHops = 2,
   showRawPreview = true,
   userQuery?: string,
+  auditMode = false,
 ): Promise<AnnotatedFragment[]> {
   // Extract literal fragments — no AI, no interpretation
   const deepEvidence: AnnotatedFragment[] = [];
@@ -5963,7 +5989,7 @@ async function runDeepSearchPipeline(
         {
           const newFragmentsThisHop = deepEvidence.slice(hopStart);
           if (newFragmentsThisHop.length > 0 && userQuery) {
-            const conf = await evaluateSearchConfidence(userQuery, deepEvidence, hop + 1);
+            const conf = await evaluateSearchConfidence(userQuery, deepEvidence, hop + 1, auditMode);
             console.log(`[DEEP confidence] hop ${hop + 1}: sufficient=${conf.sufficient} — ${conf.reason}`);
             if (conf.sufficient) {
               console.log(`[DEEP confidence] deteniendo búsqueda temprano en hop ${hop + 1}/${maxHops}`);
@@ -6078,7 +6104,7 @@ async function runDeepSearchPipeline(
       {
         const newFragmentsThisHop = deepEvidence.slice(hopStart);
         if (newFragmentsThisHop.length > 0 && userQuery) {
-          const conf = await evaluateSearchConfidence(userQuery, deepEvidence, hop + 1);
+          const conf = await evaluateSearchConfidence(userQuery, deepEvidence, hop + 1, auditMode);
           console.log(`[DEEP confidence] hop ${hop + 1}: sufficient=${conf.sufficient} — ${conf.reason}`);
           if (conf.sufficient) {
             console.log(`[DEEP confidence] deteniendo búsqueda temprano en hop ${hop + 1}/${maxHops}`);
@@ -6202,6 +6228,7 @@ async function executeChatTool(
   repo: string,
   send: (event: string, data: Record<string, unknown>) => void,
   sessionId: string,
+  auditMode = false,
 ): Promise<string> {
   if (name === 'list_files') {
     return await listFilesFiltered(repo, input.path);
@@ -6305,7 +6332,7 @@ async function executeChatTool(
       if (prod.length === 0) {
         send('action', { text: '⚠️ deep_search — solo resultados de test/dev. Ampliando a todos los matches.' });
       }
-      return { matches: ranked, evidence: await runDeepSearchPipeline(ranked, terms, repo, send, determineMaxHops(query), false, query) };
+      return { matches: ranked, evidence: await runDeepSearchPipeline(ranked, terms, repo, send, determineMaxHops(query), false, query, auditMode) };
     };
 
     // ── Attempt 1 ────────────────────────────────────────────────────────────
@@ -6356,7 +6383,7 @@ async function executeChatTool(
     // Cambio 1 — propagate confidence signal so Haiku stops searching immediately
     // when deep_search internally evaluated the evidence as sufficient.
     try {
-      const conf = await evaluateSearchConfidence(query, evidence, 99);
+      const conf = await evaluateSearchConfidence(query, evidence, 99, auditMode);
       if (conf.sufficient) {
         return summary +
           `\n\n⚠️ SEÑAL DE CONFIANZA: La evidencia encontrada fue evaluada como SUFICIENTE ` +
@@ -6372,6 +6399,35 @@ async function executeChatTool(
 // ── runChatTurn ───────────────────────────────────────────────────────────────
 
 // System prompt for Haiku exploration tier — smart domain-aware search strategy
+/**
+ * Prepended to HAIKU_SEARCH_SYSTEM when isAuditQuery=true.
+ * OVERRIDES the "FORMATO POR DEFECTO" compression section completely —
+ * all other rules (búsqueda, anti-alucinación, dominio) siguen vigentes.
+ */
+const HAIKU_AUDIT_FORMAT_OVERRIDE = `[MODO AUDITORÍA — OVERRIDE DE FORMATO]
+El usuario hizo una consulta de verificación puntual (preguntas numeradas, "citando línea exacta", \
+"confirmá o corregí", etc.). Para ESTA respuesta, el FORMATO POR DEFECTO de más abajo (4-5 líneas, \
+sin headers, máx 2 citas) está SUSPENDIDO. Aplicá estas reglas en su lugar:
+
+1. Respondé CADA punto en el orden en que fue preguntado, con un header corto por punto \
+   (ej. **Punto 1 —** o **1.**). No colapses puntos distintos en un párrafo.
+2. Para cada afirmación, citá el fragmento de código real que la respalda: nombre de archivo, \
+   número de línea Y el texto exacto de esa línea tal como aparece en el código que leíste. \
+   Formato sugerido: \`archivo.ts:N → "texto de la línea"\`. Si el número de línea no aparece \
+   literalmente como prefijo en el fragmento que tenés delante, describí la ubicación por \
+   nombre de función/bloque SIN inventar un número.
+3. Si un punto no pudo confirmarse con evidencia directa del código (el símbolo no existe, \
+   el fragmento no cubre esa parte, la búsqueda no encontró resultados), marcalo \
+   explícitamente: "⚠️ No confirmado — [razón breve]".
+4. Si lo que encontraste DIFIERE de lo que preguntó el usuario, marcalo: \
+   "🔴 Discrepancia — el código muestra X, la pregunta asumía Y".
+5. Terminá con una sección \`**Conclusión:**\` de 1-3 oraciones resumiendo qué se confirmó, \
+   qué no se encontró y si hay discrepancias relevantes.
+6. NO agregues el hint "💬 Pedime 'más detalle'" al final — en modo auditoría ya estás \
+   dando el máximo detalle disponible.
+7. La regla <<SUGGEST_SONNET:...>> sigue vigente — usala solo si encontraste un problema \
+   concreto y verificado.`;
+
 const HAIKU_SEARCH_SYSTEM = `Eres un asistente de exploración y síntesis de código. \
 Tu objetivo principal es responder la pregunta del usuario de forma completa y eficiente.
 
@@ -6723,9 +6779,17 @@ async function runHaikuTier(
   sessionId: string,
   maxSteps = 12,
   allowPatch = true,
+  auditMode = false,
 ): Promise<{ resolved: boolean; messages: any[]; foundFiles: boolean; suggestion?: { reason: string } | null }> {
   send('action', { text: '⚡ Haiku 4.5 — exploración inteligente del codebase' });
   send('model_active', { model: 'Haiku 4.5', tier: 'balanced' });
+  // En modo auditoría, el FORMATO POR DEFECTO (compresión a 4-5 líneas, sin
+  // headers, máx 2 citas) se reemplaza por instrucciones de respuesta punto
+  // por punto con citas directas. HAIKU_AUDIT_FORMAT_OVERRIDE se prepone al
+  // sistema para que tome precedencia sobre la sección FORMATO POR DEFECTO.
+  const haikuSystem = auditMode
+    ? HAIKU_AUDIT_FORMAT_OVERRIDE + '\n\n' + HAIKU_SEARCH_SYSTEM
+    : HAIKU_SEARCH_SYSTEM;
 
   let foundFiles = false;
   let pendingSuggestion: { reason: string } | null = null;
@@ -6761,7 +6825,7 @@ async function runHaikuTier(
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 4096,
-        system: [{ type: 'text', text: HAIKU_SEARCH_SYSTEM, cache_control: { type: 'ephemeral' } }],
+        system: [{ type: 'text', text: haikuSystem, cache_control: { type: 'ephemeral' } }],
         tools: (allowPatch ? CHAT_TOOLS : CHAT_TOOLS.filter(t => t.name !== 'propose_patch' && t.name !== 'apply_patch')).map((t, i, arr) =>
           i === arr.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t
         ),
@@ -6801,7 +6865,7 @@ async function runHaikuTier(
     const toolExecutions = await Promise.all(
       toolUses.map(async (tool: any) => ({
         tool,
-        resultText: await executeChatTool(tool.name, tool.input, repo, send, sessionId),
+        resultText: await executeChatTool(tool.name, tool.input, repo, send, sessionId, auditMode),
       })),
     );
 
@@ -6870,7 +6934,7 @@ async function runHaikuTier(
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 2048,
-        system: [{ type: 'text', text: HAIKU_SEARCH_SYSTEM }],
+        system: [{ type: 'text', text: haikuSystem }],
         // No tools — force a text-only synthesis response.
         messages: compressOldToolResults(messages),
       }),
@@ -6921,6 +6985,14 @@ async function runChatTurn(
   }
 
   const history = await loadChatHistory(sessionId);
+
+  // Modo auditoría: preguntas numeradas o con frases de verificación puntual.
+  // Activa criterio de confianza más estricto en DEEP y formato de respuesta
+  // punto por punto en Haiku. No habilita ningún camino hacia Sonnet.
+  const auditMode = isAuditQuery(userMessage);
+  if (auditMode) {
+    console.log(`[runChatTurn] modo auditoría detectado: "${userMessage.slice(0, 80)}"`);
+  }
 
   // ── Detección de investigación profunda (multi-turn sobre el mismo concepto) ──
   // Si el usuario escribe /save, marca para guardarse explícitamente.
@@ -7381,7 +7453,7 @@ async function runChatTurn(
 
           const subProd = subResult.matches.filter((m) => !isTestMatch(m.path, m.text));
           const subRanked = subProd.length > 0 ? subProd : subResult.matches;
-          const subEvidence = await runDeepSearchPipeline(subRanked, allKws, repo, send, determineMaxHops(subQuery), false, subQuery);
+          const subEvidence = await runDeepSearchPipeline(subRanked, allKws, repo, send, determineMaxHops(subQuery), false, subQuery, auditMode);
 
           for (const ev of subEvidence) {
             const key = `${ev.path}:${ev.line}`;
@@ -7471,6 +7543,7 @@ async function runChatTurn(
       messages, repo, send, sessionId,
       12,                          // maxSteps
       false,                       // allowPatch: ALWAYS false — Haiku never proposes patches
+      auditMode,
     );
     // BUG FIX (handoff a Sonnet nunca se disparaba en intent='generate'):
     // haikuResult.resolved se vuelve true cada vez que Haiku responde con texto
