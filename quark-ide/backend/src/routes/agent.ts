@@ -2249,11 +2249,15 @@ número en vez de inventar uno.`;
                     : [];
 
                   if (deepEscEvidence.length > 0) {
-                    const deepEscContext = deepEscEvidence
-                      .map(e => `Evidencia (DEEP) — ${e.path} (líneas ${e.line}-${e.endLine}):\n${e.fragment}`)
-                      .join('\n\n');
-                    const combinedFollowUpContext =
-                      `Fragmento ya conocido — ${alreadyReadPath}:\n${cachedFragment}\n\n${deepEscContext}`;
+                    // ── Comprimir evidencia de DEEP antes de enviar a Groq/DeepSeek ──
+                    // Sin este paso, fragmentos de 300 líneas c/u + cachedFragment
+                    // superan los 28,000 chars y producen 413 (Groq) / 402 (DeepSeek).
+                    const { context: combinedFollowUpContext, originalChars: escOrigChars, compressedChars: escCmpChars } =
+                      compressDeepEvidenceForFast(deepEscEvidence, cachedFragment, alreadyReadPath ?? '');
+                    console.log(
+                      `[fast-deep-esc] evidencia comprimida: ${escOrigChars} chars → ${escCmpChars} chars ` +
+                      `(${deepEscEvidence.length} fragmento(s), cachedFragment cap=${FAST_CACHED_FRAGMENT_CAP})`,
+                    );
 
                     const fuAnalysis = await generateWithFallback(
                       `El usuario hace una pregunta de seguimiento: "${prompt}"\n\n${combinedFollowUpContext}`,
@@ -6134,6 +6138,83 @@ async function runDeepSearchPipeline(
   return deepEvidence;
 }
 
+// ── Fast-mode DEEP evidence compressor ───────────────────────────────────────
+// Applied exclusively in the FAST follow-up → DEEP escalation path before
+// passing evidence to generateWithFallback (Groq/DeepSeek). Haiku's own path
+// (runHaikuTier) receives evidence through the tool_result turn, which Claude
+// handles natively. This compressor prevents 413/402 from free-tier APIs.
+
+const FAST_DEEP_FRAGMENT_CAP  = 3_000; // chars per individual fragment
+const FAST_DEEP_EVIDENCE_CAP  = 8_000; // chars total for all DEEP fragments combined
+const FAST_CACHED_FRAGMENT_CAP = 4_000; // chars for the prior-turn cached fragment
+
+/**
+ * Compresses DEEP evidence for use in the FAST follow-up → DEEP escalation
+ * path, where evidence is sent to Groq/DeepSeek (free-tier, low char limits).
+ *
+ * Priority: DEFINITION > CALL_SITE (more signal per char). If total would
+ * exceed FAST_DEEP_EVIDENCE_CAP, CALL_SITE fragments are dropped first.
+ * Each fragment is hard-capped at FAST_DEEP_FRAGMENT_CAP chars.
+ *
+ * Returns { context, originalChars, compressedChars } for logging.
+ */
+function compressDeepEvidenceForFast(
+  evidence: AnnotatedFragment[],
+  cachedFragment: string,
+  alreadyReadPath: string,
+): { context: string; originalChars: number; compressedChars: number } {
+  const TRUNC_MARKER = '\n[... fragmento truncado por tamaño]';
+
+  // ── 1. Cap the cached fragment from the prior turn ─────────────────────────
+  const rawCached = cachedFragment;
+  const cappedCached = rawCached.length > FAST_CACHED_FRAGMENT_CAP
+    ? rawCached.slice(0, FAST_CACHED_FRAGMENT_CAP) + TRUNC_MARKER
+    : rawCached;
+
+  // ── 2. Sort DEFINITION before CALL_SITE (higher signal/char ratio) ─────────
+  const TYPE_PRIORITY: Record<string, number> = {
+    DEFINITION: 0, PATTERN: 1, INTERACTION: 2, CONFIG: 3, CALL_SITE: 4,
+  };
+  const sorted = [...evidence].sort(
+    (a, b) => (TYPE_PRIORITY[a.fragmentType] ?? 5) - (TYPE_PRIORITY[b.fragmentType] ?? 5),
+  );
+
+  // ── 3. Cap each fragment individually ─────────────────────────────────────
+  const capped = sorted.map(e => {
+    const raw = e.fragment;
+    const frag = raw.length > FAST_DEEP_FRAGMENT_CAP
+      ? raw.slice(0, FAST_DEEP_FRAGMENT_CAP) + TRUNC_MARKER
+      : raw;
+    return { ...e, fragment: frag };
+  });
+
+  // ── 4. Accumulate until total DEEP evidence cap is reached ─────────────────
+  const included: typeof capped = [];
+  let totalEvidenceChars = 0;
+  for (const e of capped) {
+    const fragChars = e.fragment.length + e.path.length + 60; // 60 = label overhead
+    if (totalEvidenceChars + fragChars > FAST_DEEP_EVIDENCE_CAP) break;
+    included.push(e);
+    totalEvidenceChars += fragChars;
+  }
+
+  // ── 5. Build the final context string ─────────────────────────────────────
+  const deepEscContext = included
+    .map(e => `Evidencia (DEEP, ${e.fragmentType}, hop ${e.hopLevel}) — ${e.path} (líneas ${e.line}-${e.endLine}):\n${e.fragment}`)
+    .join('\n\n');
+
+  const combinedContext =
+    `Fragmento ya conocido — ${alreadyReadPath}:\n${cappedCached}\n\n${deepEscContext}`;
+
+  // ── 6. Compute original size for logging ───────────────────────────────────
+  const originalChars =
+    rawCached.length +
+    evidence.map(e => e.fragment.length + e.path.length + 60).reduce((a, b) => a + b, 0);
+  const compressedChars = combinedContext.length;
+
+  return { context: combinedContext, originalChars, compressedChars };
+}
+
 // ── deep_search / DEEP pre-fetch helpers ─────────────────────────────────────
 
 /**
@@ -6814,6 +6895,14 @@ async function runHaikuTier(
       }
     }
 
+    // ── Prompt size monitoring (mirrors callGroqAgent promptLen pattern) ──────
+    {
+      const msgsPayload = compressOldToolResults(messages);
+      const approxChars =
+        haikuSystem.length +
+        JSON.stringify(msgsPayload).length;
+      console.log(`[runHaikuTier] step ${step}/${maxSteps} — prompt ~${approxChars} chars (~${Math.round(approxChars / 4)} tokens est.)`);
+    }
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -6924,6 +7013,12 @@ async function runHaikuTier(
     }],
   });
   try {
+    // ── Prompt size monitoring — forced synthesis call ────────────────────────
+    {
+      const msgsPayload = compressOldToolResults(messages);
+      const approxChars = haikuSystem.length + JSON.stringify(msgsPayload).length;
+      console.log(`[runHaikuTier] síntesis forzada — prompt ~${approxChars} chars (~${Math.round(approxChars / 4)} tokens est.)`);
+    }
     const synthRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
