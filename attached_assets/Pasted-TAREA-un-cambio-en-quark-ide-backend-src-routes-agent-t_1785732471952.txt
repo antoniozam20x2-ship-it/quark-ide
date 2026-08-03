@@ -1,0 +1,50 @@
+TAREA: un cambio en `quark-ide/backend/src/routes/agent.ts` — pero en el lugar CORRECTO esta vez. El fix anterior que te pasé apuntaba a `HAIKU_SEARCH_SYSTEM`, que es exclusivo del pipeline de Brous (`runHaikuTier`) y nunca corre en FAST mode. FAST mode no usa Haiku en absoluto — su síntesis corre con `generateWithFallback` (Groq/Gemini/DeepSeek) usando otro system prompt, embebido inline como `fuSystemPrompt`, que es justo el que generó la síntesis con los números de línea inventados en el caso real de hoy (la escalación FAST→DEEP que agregamos, dentro del `FAST FOLLOW-UP PATH`).
+
+UBICACIÓN: la constante `fuSystemPrompt`, dentro del bloque `FAST FOLLOW-UP PATH` (la misma zona donde agregamos la escalación a DEEP hace un rato).
+
+Buscá este fragmento exacto — el final de `fuSystemPrompt`, antes del cierre del template string:
+
+```
+ESTRUCTURA:
+Párrafo 1 — respuesta directa a la pregunta de seguimiento, referenciando lo ya discutido.
+Párrafo 2 — detalle adicional con valores y condiciones concretos en **negrita**.
+Párrafo 3 — contexto o restricciones relevantes (omitir si no agrega nada nuevo).
+
+REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está en el historial o el fragmento de código provisto. \
+Si no alcanza para responder, decilo en una oración y sugerí DEEP mode.`;
+```
+
+Reemplazalo por (agrega la regla de citas de línea justo antes del cierre, sin tocar nada de lo anterior):
+
+```
+ESTRUCTURA:
+Párrafo 1 — respuesta directa a la pregunta de seguimiento, referenciando lo ya discutido.
+Párrafo 2 — detalle adicional con valores y condiciones concretos en **negrita**.
+Párrafo 3 — contexto o restricciones relevantes (omitir si no agrega nada nuevo).
+
+REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está en el historial o el fragmento de código provisto. \
+Si no alcanza para responder, decilo en una oración y sugerí DEEP mode.
+
+REGLA DE CITAS DE LÍNEA: si mencionás un número de línea específico (ej. "línea 6814"), ese \
+número DEBE aparecer literalmente como prefijo en el fragmento de evidencia que tenés delante \
+(ej. el texto "6814: " al inicio de una línea del fragmento). Nunca inventes ni recuerdes de \
+memoria un número de línea — es especialmente riesgoso cuando el contexto incluye evidencia de \
+múltiples archivos (fragmento ya conocido + evidencia adicional de una búsqueda nueva), donde es \
+fácil confundir la numeración de uno con la del otro. Si sabés en qué función o bloque está algo \
+pero no tenés el número exacto en el fragmento que estás citando, describí la ubicación SIN \
+número en vez de inventar uno.`;
+```
+
+REGLA IMPORTANTE: verificá primero que `fuSystemPrompt` en el archivo real termine efectivamente así (con esa `REGLA ANTI-ALUCINACIÓN` como última línea antes del backtick de cierre) — si el contenido difiere de lo que tengo acá, ajustá el `old_str` contra el código real en vez de forzar el match.
+
+VALIDACIÓN:
+1. Repetí una pregunta de seguimiento que dispare la escalación FAST→DEEP con evidencia de múltiples archivos — idealmente el mismo caso de `runHaikuTier` de hoy. Confirmá que la síntesis ya no inventa números de línea específicos, o que si los cita, coinciden con lo que realmente aparece en el fragmento mostrado en el log.
+2. Control de regresión — una pregunta de seguimiento simple, de un solo fragmento, donde el número de línea SÍ está disponible (por ejemplo seguir preguntando sobre `classifyIntent` después de la pregunta inicial). Confirmá que sigue citando bien cuando genuinamente tiene el dato.
+3. Pegame ambos logs.
+
+NOTA PARA DESPUÉS: el prompt principal de síntesis de FAST mode (el que se usa en la primera búsqueda, no en el follow-up — el que tiene "REGLA DE VOCABULARIO", "REGLA DE FORMATO", "REGLA DE FIDELIDAD PARCIAL", etc.) es un system prompt DISTINTO, embebido inline más arriba en el mismo archivo. Probablemente convenga agregarle la misma regla ahí también, pero eso queda para un prompt aparte — no lo toques en este cambio.
+
+REGLAS ESTRICTAS:
+- No toques ninguna otra parte de `fuSystemPrompt` — todo el contenido anterior queda exactamente igual.
+- No toques `HAIKU_SEARCH_SYSTEM` — ese es de Brous, no de FAST mode, y no está relacionado con este caso.
+- Verificá que el `old_str` matchee exactamente contra el archivo real antes de aplicar.

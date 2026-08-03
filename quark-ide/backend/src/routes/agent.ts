@@ -2147,7 +2147,16 @@ Párrafo 2 — detalle adicional con valores y condiciones concretos en **negrit
 Párrafo 3 — contexto o restricciones relevantes (omitir si no agrega nada nuevo).
 
 REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está en el historial o el fragmento de código provisto. \
-Si no alcanza para responder, decilo en una oración y sugerí DEEP mode.`;
+Si no alcanza para responder, decilo en una oración y sugerí DEEP mode.
+
+REGLA DE CITAS DE LÍNEA: si mencionás un número de línea específico (ej. "línea 6814"), ese \
+número DEBE aparecer literalmente como prefijo en el fragmento de evidencia que tenés delante \
+(ej. el texto "6814: " al inicio de una línea del fragmento). Nunca inventes ni recuerdes de \
+memoria un número de línea — es especialmente riesgoso cuando el contexto incluye evidencia de \
+múltiples archivos (fragmento ya conocido + evidencia adicional de una búsqueda nueva), donde es \
+fácil confundir la numeración de uno con la del otro. Si sabés en qué función o bloque está algo \
+pero no tenés el número exacto en el fragmento que estás citando, describí la ubicación SIN \
+número en vez de inventar uno.`;
 
           if (fragmentCovers) {
             // ── Camino principal: fragmento cacheado cubre la pregunta ──────────
