@@ -5530,7 +5530,9 @@ async function evaluateSearchConfidence(
 
   try {
     const response = await callGroqAgent(prompt, SYSTEM_PROMPT_CONFIDENCE_CHECK, 150);
-    return JSON.parse(response.trim()) as { sufficient: boolean; reason: string };
+    return JSON.parse(
+      response.trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, ''),
+    ) as { sufficient: boolean; reason: string };
   } catch {
     // Fail-safe: prefer an extra hop over cutting information short
     return { sufficient: false, reason: 'fallback — no se pudo evaluar' };
@@ -5621,7 +5623,9 @@ async function readAndNarrowFragment(
 
     try {
       const raw = await callGroqAgent(prompt, NARROW_FRAGMENT_SYSTEM, 200);
-      const parsed = JSON.parse(raw.trim()) as GroqNarrow;
+      const parsed = JSON.parse(
+        raw.trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, ''),
+      ) as GroqNarrow;
       if (!parsed || typeof parsed.sufficient !== 'boolean') throw new Error('invalid shape');
       lastParsed = parsed;
       if (parsed.sufficient) break;
