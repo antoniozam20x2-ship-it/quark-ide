@@ -1,0 +1,37 @@
+Investigación pura primero — no toques nada hasta que confirme el plan. Dos bugs conocidos, ambos afectan Fast Mode porque comparte pipeline con Brous.
+
+═══════════════════════════════════
+BUG 1 — Símbolos genéricos en fuente=ripgrep-fallback strategy=2
+═══════════════════════════════════
+
+Ya arreglamos esto (FIX B) para la rama fuente=grafo strategy=2 — el regex de extracción de defSym ahora prioriza function NAME( / const NAME = (...) => sobre cualquier const/let/var genérico. Pero confirmaste hoy que la rama fuente=ripgrep-fallback strategy=2 usa el MISMO regex ya corregido, y aun así puede devolver símbolos inútiles como "result", "data", "config" porque el BUG-2 validation (línea ~6119: section.excerpt.includes(defSymLower)) no filtra palabras genéricas — cualquier fragmento TypeScript razonablemente complejo va a contener la palabra "result" en algún lado, así que la validación siempre pasa aunque el símbolo no sea útil.
+
+Necesito que:
+
+1. Confirmés la lista completa de call-sites donde se usa esta extracción de símbolo (grafo y ripgrep-fallback, todas las strategies) — dame línea exacta de cada uno.
+
+2. Agregués una lista de exclusión de nombres genéricos que NUNCA se acepten como símbolo válido de búsqueda, sin importar si "pasan" el regex de prioridad: result, data, config, response, error, value, item, res, req, err, params, options, temp, tmp, obj, arr, i, j, k (y cualquier otro que encuentres repetido en logs si tenés acceso). Si defSym cae en esa lista, tratalo como si no hubiera match (equivalente a defSym = null) y que el pipeline caiga al siguiente fallback disponible en vez de usar ese símbolo genérico para buscar callers en el grafo.
+
+3. Agregá un log cuando esto pase: console.log('[symbol-extraction] descartado símbolo genérico: ' + defSym + ' — usando fallback') para poder confirmar con qué frecuencia ocurre en producción.
+
+═══════════════════════════════════
+BUG 2 — extractKeywordsForSearch tokeniza texto crudo sin separar instrucciones de términos técnicos
+═══════════════════════════════════
+
+Esto ya está documentado como bug conocido: cuando el usuario escribe preguntas imperativas/conversacionales en español ("Mostrame...", "Buscá...", "Necesito que verifiques..."), esas palabras de instrucción terminan siendo tratadas como si fueran términos de búsqueda técnica, junto con los símbolos reales que sí importan (nombres de función, variables).
+
+Necesito que:
+
+1. Encuentres extractKeywordsForSearch (o la función equivalente que arma la lista de keywords antes de unifiedGrepSearch) — citá línea exacta.
+
+2. Confirmés si ya existe algún filtro de "palabras de instrucción en español" (verbos imperativos comunes: mostrame, buscá, necesito, decime, confirmá, verificá, encontrá, etc.) antes de pasar el texto a extracción de keywords, o si el texto completo del usuario se manda tal cual.
+
+3. Si no existe, agregá una lista de stopwords de instrucción en español (imperativos + conversacionales comunes en este contexto: mostrame, dame, buscá, necesito, decime, confirmá, verificá, encontrá, quiero, podés, dónde, cómo, qué, cuál, por favor) que se remueva del texto ANTES de mandarlo al extractor de keywords o al symbol_index lookup — para que solo queden los términos técnicos reales (nombres de función, archivos, conceptos del dominio).
+
+4. Importante: esto es distinto del fix de classifyIntent que ya hicimos hoy (ese es sobre INTENCIÓN, esto es sobre EXTRACCIÓN DE KEYWORDS PARA BÚSQUEDA — no mezclés ambas lógicas, son pasos distintos del pipeline).
+
+5. Agregá un log tipo console.log('[extractKeywords] texto original: "..." → keywords limpios: [...]') para poder confirmar el antes/después en producción.
+
+═══════════════════════════════════
+
+No apliques nada todavía — solo confirmá con evidencia de código (línea exacta) que ambos bugs existen como los describí, y proponeme el plan de fix para cada uno antes de tocar código. Priorizá Fast Mode en las pruebas después del fix (no solo Brous), ya que es donde más impacta la precisión de búsqueda sin escalar a DEEP innecesariamente.
