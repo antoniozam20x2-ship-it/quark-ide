@@ -187,11 +187,11 @@ async function saveAgentSession(content: string): Promise<void> {
   );
 }
 
-async function loadChatHistory(sessionId: string): Promise<any[]> {
+async function loadChatHistory(sessionId: string, repo: string): Promise<any[]> {
   try {
     const r = await pool.query<{ content: string }>(
       `SELECT content FROM memory_entries WHERE key = $1 AND namespace = $2 LIMIT 1`,
-      [`chat-${sessionId}`, AGENT_SESSION_NS],
+      [`chat-${sessionId}:${repo}`, AGENT_SESSION_NS],
     );
     return r.rows[0]?.content ? JSON.parse(r.rows[0].content) : [];
   } catch {
@@ -199,23 +199,23 @@ async function loadChatHistory(sessionId: string): Promise<any[]> {
   }
 }
 
-async function saveChatHistory(sessionId: string, messages: any[]): Promise<void> {
+async function saveChatHistory(sessionId: string, repo: string, messages: any[]): Promise<void> {
   await pool.query(
     `INSERT INTO memory_entries (key, content, namespace)
      VALUES ($1, $2, $3)
      ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
-    [`chat-${sessionId}`, JSON.stringify(messages.slice(-40)), AGENT_SESSION_NS],
+    [`chat-${sessionId}:${repo}`, JSON.stringify(messages.slice(-40)), AGENT_SESSION_NS],
   );
 }
 
 // ── FAST session history (namespace separado de CHAT para no mezclar) ────────
 const FAST_SESSION_NS = 'quark-fast-session';
 
-async function loadFastHistory(sessionId: string): Promise<any[]> {
+async function loadFastHistory(sessionId: string, repo: string): Promise<any[]> {
   try {
     const r = await pool.query<{ content: string }>(
       `SELECT content FROM memory_entries WHERE key = $1 AND namespace = $2 LIMIT 1`,
-      [`fast-${sessionId}`, FAST_SESSION_NS],
+      [`fast-${sessionId}:${repo}`, FAST_SESSION_NS],
     );
     return r.rows[0]?.content ? JSON.parse(r.rows[0].content) : [];
   } catch {
@@ -223,12 +223,12 @@ async function loadFastHistory(sessionId: string): Promise<any[]> {
   }
 }
 
-async function saveFastHistory(sessionId: string, messages: any[]): Promise<void> {
+async function saveFastHistory(sessionId: string, repo: string, messages: any[]): Promise<void> {
   await pool.query(
     `INSERT INTO memory_entries (key, content, namespace)
      VALUES ($1, $2, $3)
      ON CONFLICT (key, namespace) DO UPDATE SET content = EXCLUDED.content, timestamp = NOW()`,
-    [`fast-${sessionId}`, JSON.stringify(messages.slice(-6)), FAST_SESSION_NS], // últimos 3 turnos
+    [`fast-${sessionId}:${repo}`, JSON.stringify(messages.slice(-6)), FAST_SESSION_NS], // últimos 3 turnos
   );
 }
 
@@ -1945,7 +1945,7 @@ router.post('/generate', async (req, res) => {
     let _fastHistoryForClassify: any[] = [];
 
     if (!deepMode) {
-      _fastHistoryForClassify = sessionId ? await loadFastHistory(sessionId) : [];
+      _fastHistoryForClassify = sessionId ? await loadFastHistory(sessionId, repo) : [];
       const classification = await classifyAndRespondFast(prompt, _fastHistoryForClassify, repo);
       _fastClassification = classification;
 
@@ -1962,7 +1962,7 @@ router.post('/generate', async (req, res) => {
             { role: 'user', content: prompt, keywords: [] },
             { role: 'assistant', content: classification.answer },  // fragment omitido — no hubo lectura de código
           ];
-          await saveFastHistory(sessionId, updated).catch(() => {});
+          await saveFastHistory(sessionId, repo, updated).catch(() => {});
         }
 
         await new Promise(r => setTimeout(r, 100));
@@ -2183,7 +2183,7 @@ número en vez de inventar uno.`;
                 { role: 'user',      content: prompt,     keywords: fastKeywords },
                 { role: 'assistant', content: fuAnalysis, fragment: cachedFragment, path: _lastFastUser?.path },
               ];
-              await saveFastHistory(sessionId!, updatedFastHistory).catch(() => {});
+              await saveFastHistory(sessionId!, repo, updatedFastHistory).catch(() => {});
             } catch {
               send('action', { text: '⚠️ Análisis no disponible — intenta reformular la pregunta' });
             }
@@ -2229,7 +2229,7 @@ número en vez de inventar uno.`;
                   { role: 'user',      content: prompt,     keywords: fastKeywords },
                   { role: 'assistant', content: fuAnalysis, fragment: combinedFollowUpContext, path: fuNewMatch.path },
                 ];
-                await saveFastHistory(sessionId!, updatedFastHistory).catch(() => {});
+                await saveFastHistory(sessionId!, repo, updatedFastHistory).catch(() => {});
               } else {
                 // ── FAST→DEEP escalation ──────────────────────────────────────────
                 // La búsqueda liviana (symbol_index + ripgrep + "primer match nuevo")
@@ -2271,7 +2271,7 @@ número en vez de inventar uno.`;
                       { role: 'user',      content: prompt,     keywords: fastKeywords },
                       { role: 'assistant', content: fuAnalysis, fragment: combinedFollowUpContext, path: deepEscEvidence[0].path },
                     ];
-                    await saveFastHistory(sessionId!, updatedFastHistory).catch(() => {});
+                    await saveFastHistory(sessionId!, repo, updatedFastHistory).catch(() => {});
                   } else {
                     send('action', { text: '💡 Lo que ya vimos no cubre esa parte específica, y ni la búsqueda liviana ni DEEP encontraron más contexto. Reformulá con el nombre exacto de la función o variable.' });
                   }
@@ -2548,7 +2548,7 @@ que estás citando, describí la ubicación SIN número en vez de inventar uno.`
               { role: 'user',      content: prompt,       keywords: fastKeywords },
               { role: 'assistant', content: fastAnalysis,  fragment: combinedContext, path: best.path },
             ];
-            await saveFastHistory(sessionId, updatedFastHistory).catch(() => {});
+            await saveFastHistory(sessionId, repo, updatedFastHistory).catch(() => {});
           }
         } catch {
           send('action', { text: '⚠️ Análisis no disponible — intenta reformular la pregunta' });
@@ -7269,7 +7269,7 @@ async function runChatTurn(
   // que Haiku ya leyó) como punto de partida para Sonnet. `userMessage` acá lleva
   // el texto del "reason" de la sugerencia, no un mensaje tipeado por el usuario.
   if (triggerSonnet) {
-    const priorMessages = await loadChatHistory(sessionId);
+    const priorMessages = await loadChatHistory(sessionId, repo);
     const instruction =
       `[El usuario confirmó que querés que generes el patch para el hallazgo que sugeriste: ` +
       `"${userMessage}". Basate en la exploración y evidencia ya presentes en el historial de ` +
@@ -7279,7 +7279,7 @@ async function runChatTurn(
     return;
   }
 
-  const history = await loadChatHistory(sessionId);
+  const history = await loadChatHistory(sessionId, repo);
 
   // Modo auditoría: preguntas numeradas o con frases de verificación puntual.
   // Activa criterio de confianza más estricto en DEEP y formato de respuesta
@@ -7435,7 +7435,7 @@ async function runChatTurn(
       const trivialAnswer = await callGroqAgent(userMessage, trivialPrompt, 256, groqHistory);
       send('chat_message', { text: trivialAnswer });
       messages.push({ role: 'assistant', content: [{ type: 'text', text: trivialAnswer }] });
-      await saveChatHistory(sessionId, messages);
+      await saveChatHistory(sessionId, repo, messages);
       return;
     }
 
@@ -7478,7 +7478,7 @@ async function runChatTurn(
       if (!needsToolsMatch) {
         send('chat_message', { text: groqAnswer });
         messages.push({ role: 'assistant', content: [{ type: 'text', text: groqAnswer }] });
-        await saveChatHistory(sessionId, messages);
+        await saveChatHistory(sessionId, repo, messages);
         // Guardar resumen de la respuesta de Groq en contexto compartido
         const groqSharedSummary = await summarizeForSharedContext(groqAnswer);
         if (groqSharedSummary) {
@@ -7504,7 +7504,7 @@ async function runChatTurn(
       send('action', { text: `🔍 Búsqueda rápida — lookup directo (${groqReason.slice(0, 60)})` });
       let fastPathHandled = false;
       try {
-        const chatFastHistory = await loadFastHistory(sessionId!);
+        const chatFastHistory = await loadFastHistory(sessionId!, repo);
         const chatFastLastUser = chatFastHistory.slice().reverse().find((m: any) => m.role === 'user');
         const chatFastLastAss  = chatFastHistory.slice().reverse().find((m: any) => m.role === 'assistant');
 
@@ -7536,14 +7536,14 @@ async function runChatTurn(
               const _ccaWithPaths =
                 chatCachedAttempt + `\n\n<evidence_files>\n${chatFastLastUser?.path ?? ''}\n</evidence_files>`;
               messages.push({ role: 'assistant', content: [{ type: 'text', text: _ccaWithPaths }] });
-              await saveChatHistory(sessionId, messages);
+              await saveChatHistory(sessionId, repo, messages);
 
               const updatedChatFastHistoryFromCache = [
                 ...chatFastHistory,
                 { role: 'user',      content: userMessage,       keywords: [] },
                 { role: 'assistant', content: chatCachedAttempt, fragment: chatFastLastAss.fragment, path: chatFastLastUser?.path },
               ];
-              await saveFastHistory(sessionId!, updatedChatFastHistoryFromCache).catch(() => {});
+              await saveFastHistory(sessionId!, repo, updatedChatFastHistoryFromCache).catch(() => {});
 
               send('confidence', {
                 level: 'medium',
@@ -7583,13 +7583,13 @@ async function runChatTurn(
               const _ckAssistantWithPaths =
                 chatKnowledgeSynthesis + `\n\n<evidence_files>\n${_ckPaths}\n</evidence_files>`;
               messages.push({ role: 'assistant', content: [{ type: 'text', text: _ckAssistantWithPaths }] });
-              await saveChatHistory(sessionId, messages);
+              await saveChatHistory(sessionId, repo, messages);
               const updatedChatFastHistoryFromKnowledge = [
                 ...chatFastHistory,
                 { role: 'user',      content: userMessage,            keywords: chatFastTerms },
                 { role: 'assistant', content: chatKnowledgeSynthesis, fragment: chatFastKnowledge.summary, path: _ckPaths },
               ];
-              await saveFastHistory(sessionId!, updatedChatFastHistoryFromKnowledge).catch(() => {});
+              await saveFastHistory(sessionId!, repo, updatedChatFastHistoryFromKnowledge).catch(() => {});
               send('confidence', {
                 level: chatFastKnowledge.confidence === 'high' ? 'high' : 'medium',
                 reason: 'CHAT — ruta rápida: memoria persistente reutilizada, sin nueva búsqueda',
@@ -7631,7 +7631,7 @@ async function runChatTurn(
                   const _cfAssistantWithPaths =
                     chatFastSynthesis + `\n\n<evidence_files>\n${_cfPaths}\n</evidence_files>`;
                   messages.push({ role: 'assistant', content: [{ type: 'text', text: _cfAssistantWithPaths }] });
-                  await saveChatHistory(sessionId, messages);
+                  await saveChatHistory(sessionId, repo, messages);
                   send('confidence', {
                     level: 'medium',
                     reason: 'CHAT — ruta rápida: ripgrep + fragmento + Groq (lookup directo)',
@@ -7643,7 +7643,7 @@ async function runChatTurn(
                     { role: 'user',      content: userMessage,       keywords: chatFastTerms },
                     { role: 'assistant', content: chatFastSynthesis, fragment: chatFastFragment, path: chatFastBest.path },
                   ];
-                  await saveFastHistory(sessionId!, updatedChatFastHistory).catch(() => {});
+                  await saveFastHistory(sessionId!, repo, updatedChatFastHistory).catch(() => {});
                   // ── Guardar conocimiento nuevo para la próxima vez ──────────────────
                   if (chatFastTerms.length > 0) {
                     const chatFastConfidence = (chatFastBest.symbolType && !chatFastAllTest) ? 'high' : 'medium';
@@ -7847,7 +7847,7 @@ async function runChatTurn(
             const _assistantWithPaths =
               groqSynthesis + `\n\n<evidence_files>\n${_evPaths}\n</evidence_files>`;
             messages.push({ role: 'assistant', content: [{ type: 'text', text: _assistantWithPaths }] });
-            await saveChatHistory(sessionId, messages);
+            await saveChatHistory(sessionId, repo, messages);
             send('confidence', {
               level: 'medium',
               reason: 'CHAT — Groq interpretó 1 fragmento autocontenido de evidencia DEEP',
@@ -7909,7 +7909,7 @@ async function runChatTurn(
     // intent === 'explain'. Para 'generate', SIEMPRE seguimos hacia Sonnet,
     // sin importar si Haiku ya escribió una respuesta en texto.
     if (haikuResult.resolved && intent === 'explain') {
-      await saveChatHistory(sessionId, haikuResult.messages);
+      await saveChatHistory(sessionId, repo, haikuResult.messages);
       // Override any stale LOW-CONFIDENCE label from a preceding DEEP/FAST call.
       // Haiku resolved the question with live code reads — the result is real.
       send('confidence', {
@@ -7931,7 +7931,7 @@ async function runChatTurn(
         '- El nombre de la función o variable tal como aparece en el código.';
       send('chat_message', { text: noResultMsg });
       haikuResult.messages.push({ role: 'assistant', content: [{ type: 'text', text: noResultMsg }] });
-      await saveChatHistory(sessionId, haikuResult.messages);
+      await saveChatHistory(sessionId, repo, haikuResult.messages);
       return;
     }
 
@@ -7940,7 +7940,7 @@ async function runChatTurn(
       // the step limit before producing a final text answer — save and return.
       // The intermediate messages (streamed during exploration) are already visible
       // to the user; Sonnet must NOT be invoked for explanation queries.
-      await saveChatHistory(sessionId, haikuResult.messages);
+      await saveChatHistory(sessionId, repo, haikuResult.messages);
       return;
     }
 
@@ -7955,7 +7955,7 @@ async function runChatTurn(
     send('suggest_sonnet', {
       reason: 'Haiku encontró los archivos relevantes. ¿Querés que Sonnet 5 aplique el cambio?',
     });
-    await saveChatHistory(sessionId, haikuResult.messages);
+    await saveChatHistory(sessionId, repo, haikuResult.messages);
   }
 }
 
@@ -8062,7 +8062,7 @@ RESTRICCIÓN: NO uses grep_code, list_files ni read_file — el contexto ya est�
 
   // Persist compressed history — stale tool_result blocks don't need to be
   // reloaded verbatim in future sessions; summaries are sufficient context.
-  await saveChatHistory(sessionId, compressOldToolResults(messages));
+  await saveChatHistory(sessionId, repo, compressOldToolResults(messages));
 }
 
 // ── GET /chat/history/:sessionId ─────────────────────────────────────────────
@@ -8075,7 +8075,7 @@ router.post('/chat/close', async (req, res) => {
   const repo = bodyRepo ?? process.env.GITHUB_REPO ?? '';
   if (!sessionId) { res.status(400).json({ error: 'sessionId required' }); return; }
   try {
-    const messages = await loadChatHistory(sessionId);
+    const messages = await loadChatHistory(sessionId, repo);
     await saveInvestigationMemory(repo, messages, sessionInvestigationState);
     // Resetear state para el siguiente chat
     sessionInvestigationState = {
@@ -8093,9 +8093,10 @@ router.post('/chat/close', async (req, res) => {
 
 router.get('/chat/history/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
+  const repo = (req.query.repo as string | undefined) ?? process.env.GITHUB_REPO ?? '';
   if (!sessionId) { res.status(400).json({ error: 'sessionId required' }); return; }
   try {
-    const raw = await loadChatHistory(sessionId);
+    const raw = await loadChatHistory(sessionId, repo);
     // raw entries use the AI SDK format: { role, content: string | Array<{type,text}> }
     const messages = raw
       .filter((m: any) => m.role === 'user' || m.role === 'assistant')

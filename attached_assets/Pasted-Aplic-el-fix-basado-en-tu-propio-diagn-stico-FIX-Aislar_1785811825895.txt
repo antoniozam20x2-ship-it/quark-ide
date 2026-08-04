@@ -1,0 +1,18 @@
+Aplicá el fix basado en tu propio diagnóstico.
+
+FIX — Aislar historial de sesión por repo, no solo por sessionId
+
+Root cause confirmado: loadChatHistory(sessionId) y loadFastHistory(sessionId) usan claves 'chat-${sessionId}' y 'fast-${sessionId}' sin incluir el repo. Si la misma sesión cambia de repo (ej: Brous en quark-ide, después Fast Mode en Ahorar), el historial completo de la conversación anterior se filtra a planSearchSteps y contamina la extracción de keywords con símbolos del repo equivocado.
+
+Cambiá las claves de almacenamiento y lectura del historial de sesión para incluir el repo:
+
+- 'chat-${sessionId}' → 'chat-${sessionId}:${repo}'
+- 'fast-${sessionId}' → 'fast-${sessionId}:${repo}'
+
+Aplicá esto en TODOS los puntos donde se lee o escribe estas claves (loadChatHistory, saveChatHistory, loadFastHistory, saveFastHistory, y cualquier otro que uses el mismo patrón — buscalos todos antes de tocar, no asumas que son solo estos dos).
+
+IMPORTANTE — migración de datos existentes: las entradas viejas en memory_entries ya guardadas con la clave sin repo (formato antiguo 'chat-${sessionId}') van a quedar huérfanas — no rompas nada, simplemente el código nuevo no las va a encontrar (empieza historial fresco por combinación sessionId+repo). No hace falta migrar datos viejos, son solo cachés de conversación de 30 minutos, no información persistente crítica.
+
+Verificá también 'quark-fast-finding' (key: finding-${timestamp}-${random}) y 'quark-shared-context' (key: context-log:${repo}:${Date.now()}) — el segundo ya incluye repo correctamente, confirmá que el primero (finding) no necesita el mismo tratamiento (¿se usa cross-repo alguna vez, o siempre es de un único repo por diseño?).
+
+Corré tsc --noEmit, y probá replicando el caso real: en la misma sesión, primero una pregunta en Brous sobre quark-ide (algo que use términos específicos, ej. "runHaikuTier"), después sin esperar, una pregunta en Fast Mode sobre Ahorar (ej. "¿qué hace checkContextDeterioration?"). Pegame el log de la segunda pregunta — confirmá que los símbolos buscados esta vez NO incluyen términos de la primera pregunta sobre quark-ide.
