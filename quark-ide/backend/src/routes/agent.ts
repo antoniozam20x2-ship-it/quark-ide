@@ -695,6 +695,11 @@ const KEYWORD_STOPWORDS = new Set([
   'dentro', 'afuera', 'mostrar', 'define', 'definir', 'retorna', 'retornar',
   'devuelve', 'devolver', 'todos', 'todas', 'entre', 'para', 'este', 'esta',
   'desde', 'hasta', 'que', 'qué', 'cual', 'cuál', 'porque', 'porqué',
+  // Imperativos conversacionales faltantes
+  'dame', 'decime', 'confirmá', 'confirma', 'verificá', 'verifica', 'encontrá', 'encontra',
+  'quiero', 'podés', 'podes', 'necesito', 'favor', 'por', 'ese', 'eso', 'esa',
+  'hacé', 'hace', 'mirá', 'mira', 'fijate', 'fíjate', 'chequeá', 'chequea',
+  'decí', 'deci', 'contame', 'contá', 'cuenta',
   // Sustantivos genéricos de dominio UI — nombres de variable/prop comunísimos en
   // cualquier componente de frontend (historyLoading, savedSession, etc.). Sin esto,
   // una pregunta sobre una función de BACKEND que use estas palabras en lenguaje
@@ -703,6 +708,21 @@ const KEYWORD_STOPWORDS = new Set([
   'sesión', 'sesion', 'historial', 'mensaje', 'mensajes', 'usuario', 'usuarios',
   'pantalla', 'botón', 'boton',
 ]);
+
+/**
+ * Filtra palabras de instrucción en español del prompt antes de mandarlo al
+ * extractor de keywords — elimina imperativos y conversacionales comunes para
+ * que solo lleguen los términos técnicos reales (nombres de función, variables,
+ * conceptos del dominio). Distinto de classifyIntent: ese decide qué hacer con
+ * el mensaje; esto limpia el texto ANTES de extraer keywords de búsqueda.
+ */
+function stripInstructionWords(prompt: string): string {
+  return prompt
+    .split(/\s+/)
+    .filter(w => !KEYWORD_STOPWORDS.has(w.toLowerCase().replace(/[?.,;:!¿¡]+$/g, '')))
+    .join(' ')
+    .trim();
+}
 
 /**
  * Fallback local ÚNICO para extracción de keywords. Reemplaza las 3
@@ -1196,10 +1216,18 @@ async function extractKeywordsForSearch(
   repo: string = '',
   send: (event: string, data: Record<string, unknown>) => void = () => {},
 ): Promise<string[]> {
+  // Filtrar palabras de instrucción en español antes de extraer keywords —
+  // evita que "mostrame", "buscá", "necesito", etc. terminen como términos de búsqueda.
+  // getForcedDomainMatches sigue usando el prompt original (sus regex necesitan lenguaje natural).
+  const cleanedPrompt = stripInstructionWords(prompt);
+  if (cleanedPrompt !== prompt) {
+    console.log(`[extractKeywords] texto original: "${prompt.slice(0, 80)}" → keywords limpios: "${cleanedPrompt.slice(0, 80)}"`);
+  }
+
   const keys = getGroqKeys();
   if (keys.length === 0) {
-    console.warn(`[extractKeywordsForSearch] sin Groq keys — intentando memoria/semántica — query: "${prompt.slice(0, 80)}"`);
-    const fallbackTerms = await fallbackToMemoryOrSemantic(prompt, repo, send);
+    console.warn(`[extractKeywordsForSearch] sin Groq keys — intentando memoria/semántica — query: "${cleanedPrompt.slice(0, 80)}"`);
+    const fallbackTerms = await fallbackToMemoryOrSemantic(cleanedPrompt, repo, send);
     const forced = getForcedDomainMatches(prompt, repo);
     return [...new Set([...fallbackTerms, ...forced])];
   }
@@ -1227,7 +1255,7 @@ REGLAS:
           temperature: 0,
           messages: [
             { role: 'system', content: systemPrompt },
-            { role: 'user', content: prompt },
+            { role: 'user', content: cleanedPrompt },
           ],
         }),
       }).finally(() => clearTimeout(timer));
@@ -1273,8 +1301,8 @@ REGLAS:
     }
   }
 
-  console.warn(`[extractKeywordsForSearch] todas las keys fallaron — intentando memoria/semántica — query: "${prompt.slice(0, 80)}"`);
-  const fallbackTerms = await fallbackToMemoryOrSemantic(prompt, repo, send);
+  console.warn(`[extractKeywordsForSearch] todas las keys fallaron — intentando memoria/semántica — query: "${cleanedPrompt.slice(0, 80)}"`);
+  const fallbackTerms = await fallbackToMemoryOrSemantic(cleanedPrompt, repo, send);
   const forced = getForcedDomainMatches(prompt, repo);
   return [...new Set([...fallbackTerms, ...forced])];
 }
@@ -6100,7 +6128,10 @@ async function runDeepSearchPipeline(
           const defSym = defMFunc?.[1] ?? defMArrow?.[1] ?? defMVar?.[1] ?? null;
           if (!defSym) continue;
           const defSymLower = defSym.toLowerCase();
-          if (STRAT2_GENERIC_BLOCKLIST.has(defSymLower)) continue;
+          if (STRAT2_GENERIC_BLOCKLIST.has(defSymLower)) {
+            console.log(`[symbol-extraction] descartado símbolo genérico: "${defSym}" — usando fallback`);
+            continue;
+          }
           if (triedSymbols.has(defSymLower)) continue;
           triedSymbols.add(defSymLower);
 
