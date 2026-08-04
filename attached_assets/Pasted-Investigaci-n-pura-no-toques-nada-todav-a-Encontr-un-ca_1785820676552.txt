@@ -1,0 +1,30 @@
+Investigación pura, no toques nada todavía. Encontré un caso donde Fast Mode NO escaló a DEEP cuando debería haberlo hecho, y no encontró la respuesta correcta.
+
+Contexto importante: estoy usando APIs gratuitas/trial de Groq y Gemini — el costo de esos providers NO es una restricción real. Lo único que sí quiero seguir cuidando es el uso de Anthropic (Haiku en Brous), que es el único tramo pago. Esto significa que el criterio de "cuándo escalar a DEEP" en Fast Mode puede y debe ser más agresivo hacia la calidad — no hay motivo para cortar búsqueda temprano solo para ahorrar unos segundos de Groq/Gemini si el resultado es una respuesta incompleta o incorrecta.
+
+Pregunta real que reveló el problema: "Necesito que me confirmes dónde está definido el endpoint ml-predictions y qué función lo maneja" (repo Ahorar)
+
+Log observado (resumen de UI):
+- Búsqueda en índice de símbolos con keywords [ml-predictions, endpoint]
+- Encontró solo "GEMINI_ENDPOINT" en dailyReport.ts:8 — símbolo no relacionado con la pregunta real
+- Repitió la MISMA búsqueda una segunda vez con los MISMOS keywords, mismo resultado
+- Nunca escaló a DEEP/hops (a diferencia de otra consulta reciente sobre updateStreakAfterClose, que sí mostró "🔭 FAST — escalando al motor de DEEP")
+- Cerró con "✅ Análisis completado — HIGH CONFIDENCE" a pesar de admitir en el texto "no se encuentra una definición del endpoint ml-predictions en este fragmento"
+
+El endpoint real existe en artifacts/api-server/src/routes/autonomous.ts (líneas ~522-550) según mis notas — nunca lo encontró.
+
+Necesito que investigues, citando línea exacta:
+
+1. ¿Cuál es el criterio exacto que decide si Fast Mode escala a DEEP o se detiene con el resultado del symbol_index? ¿Qué diferencia técnica hubo con el caso de updateStreakAfterClose (que sí escaló)?
+
+2. ¿Por qué "ml-predictions" (con guion) hizo match con "GEMINI_ENDPOINT"? ¿Fuzzy match demasiado permisivo?
+
+3. ¿Existe alguna validación de que el símbolo encontrado REALMENTE responde a la pregunta antes de decidir "no escalar"? Si no existe, ¿dónde insertarla (similar a section.excerpt.includes(defSymLower) que ya existe en otra parte del pipeline)?
+
+4. ¿Por qué se etiquetó "HIGH CONFIDENCE" cuando el texto de la respuesta admite que no encontró lo pedido? ¿Es automático (símbolo en índice = alta confianza) sin considerar si la respuesta fue satisfactoria?
+
+5. Términos con guion tipo "ml-predictions" probablemente nunca matchean símbolos camelCase reales del código. ¿Valdría la pena normalizar también a camelCase (ml-predictions → mlPredictions) antes de buscar en el índice, sin descartar el término original?
+
+Con la respuesta a estas 5 preguntas, proponeme un plan de fix que haga el criterio de "cuándo escalar a DEEP" más agresivo por default en Fast Mode — priorizando encontrar la respuesta correcta sobre minimizar hops, ya que Groq/Gemini son gratis en mi caso. Lo único que debe seguir protegido es que esto nunca dispare una llamada a Anthropic/Haiku sin que el usuario lo pida (eso ya está resuelto por el gate de confirmación que armamos hoy en Brous, pero confirmá que Fast Mode tampoco tiene ningún camino directo a Sonnet sin ese gate).
+
+No apliques fix todavía — mostrame el diagnóstico y el plan antes de tocar código.
