@@ -1,0 +1,47 @@
+Tres cambios — dos fixes de backend y un indicador visual en frontend. Aplicalos en orden.
+
+═══════════════════════════════════
+FIX 1 — Regex de fence de markdown no cubre todos los formatos
+═══════════════════════════════════
+
+El fix anterior (.replace(/^```json\s*/i, '').replace(/```\s*$/i, '')) sigue fallando en algunos casos. Log real:
+
+[deep-dynamic-range] Groq falló en iteración 1: Unexpected token '`', "```
+{
+  "s"... is not valid JSON
+
+Esto sugiere un fence sin la palabra "json" (solo ``` seguido de salto de línea) u otra variación de espacios/saltos de línea que el regex actual no cubre.
+
+Necesito que:
+1. Leas el string crudo que Groq devolvió en este caso (podés buscar logs adicionales o replicar con un prompt de prueba) para confirmar el formato exacto.
+2. Hagas el regex más robusto — cubrí explícitamente: ``` solo (sin "json"), ```json, ```JSON, con o sin salto de línea inmediato después del fence de apertura, y espacios en blanco antes del fence de cierre. Considerá usar un regex tipo: raw.trim().replace(/^```[a-zA-Z]*\s*\n?/, '').replace(/\n?```\s*$/, '').trim()
+3. Aplicá el mismo fix en los DOS sitios (readAndNarrowFragment línea ~5624 y evaluateSearchConfidence línea ~5533) y en cualquier otro lugar del archivo que haga JSON.parse() sobre respuesta de Groq con el mismo patrón de comentario.
+4. Agregá un catch más informativo: si JSON.parse() sigue fallando después del strip, loggeá los primeros 100 chars del string crudo (console.warn('[deep-dynamic-range] JSON parse falló, raw: ' + raw.slice(0,100))) para poder diagnosticar formatos nuevos sin adivinar.
+
+═══════════════════════════════════
+FIX 2 — "All Groq keys failed" dentro del narrowing
+═══════════════════════════════════
+
+Log real:
+
+[deep-dynamic-range] Groq falló en iteración 1: All Groq keys failed — prompt total: ~9067 chars
+
+Esto es distinto al error de parseo JSON — acá las 3 keys de Groq (rotación) fallaron completamente para esa llamada específica del narrowing (rate limit, timeout, o similar). Ahora mismo cuando esto pasa, el narrowing simplemente sigue intentando en la siguiente iteración, lo cual puede repetir el mismo fallo 3 veces (una por iteración) antes de rendirse.
+
+Necesito que:
+1. Confirmes: cuando "All Groq keys failed" ocurre en la iteración 1 de readAndNarrowFragment, ¿reintenta en iteración 2 y 3, o corta inmediatamente? Si reintenta, probablemente vuelva a fallar (rate limit no se resuelve en milisegundos) — desperdiciando las 3 iteraciones sin ganar nada.
+2. Si "All Groq keys failed" es el error específico (no un error de parseo), cortá inmediatamente sin agotar las 3 iteraciones — andá directo al fallback (smartReadSection) en vez de reintentar contra el mismo problema de rate limit. Esto ahorra tiempo y no cambia el resultado final (igual termina en fallback), pero evita latencia innecesaria.
+3. Agregá un contador o log agregado al final de la consulta: cuántas veces se activó el fallback por "All Groq keys failed" vs por error de parseo vs por sufficient=false genuino — para que podamos ver con qué frecuencia cada causa ocurre en la práctica.
+
+═══════════════════════════════════
+CAMBIO 3 — Indicador visual en frontend cuando el narrowing dinámico está activo
+═══════════════════════════════════
+
+Necesito ver en Brous, en tiempo real, cuándo el pipeline está usando deep-dynamic-range — un ícono o badge que aparezca durante la investigación, similar a los que ya existen (⚡ Modo rápido, 🔭 DEEP, 🧠 Paso 1, etc.).
+
+1. Buscá cómo se emiten los eventos actuales de progreso al frontend (el mecanismo send('action', ...) o similar que ya produce los mensajes tipo "🔭 DEEP" y "📌 Evidencia leída").
+2. En readAndNarrowFragment, cuando el narrowing se complete exitosamente (con o sin recorte), emití un evento nuevo al frontend con el mismo mecanismo — por ejemplo send('narrow', { before: initialLineCount, after: finalLineCount, iterations: N }) — que el frontend pueda renderizar como algo tipo "🎯 Rango dinámico: 201→111 líneas".
+3. Si el narrowing falló y cayó a fallback, emití también un evento distinto (más discreto) tipo send('narrow_fallback', {...}) para diferenciar visualmente cuándo funcionó del pleno vs cuándo usó el camino de respaldo.
+4. Decime en qué archivo/componente del frontend (si está en este mismo repo) o si necesito indicarte el repo de Brous por separado para conectar la recepción de este evento y mostrar el ícono.
+
+Aplicá los 3 cambios, corré tsc --noEmit, y probá de nuevo la consulta de checkContextDeterioration/updateStreakAfterClose — pegame el log completo y, si el frontend está en este mismo repo, una captura o descripción de cómo se ve el nuevo indicador.

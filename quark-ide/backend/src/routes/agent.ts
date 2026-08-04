@@ -5530,12 +5530,16 @@ async function evaluateSearchConfidence(
 
   try {
     const response = await callGroqAgent(prompt, SYSTEM_PROMPT_CONFIDENCE_CHECK, 150);
-    return JSON.parse(
-      response.trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, ''),
-    ) as { sufficient: boolean; reason: string };
+    const cleaned = response.trim().replace(/^```[a-zA-Z]*\s*\n?/, '').replace(/\n?```\s*$/, '').trim();
+    try {
+      return JSON.parse(cleaned) as { sufficient: boolean; reason: string };
+    } catch {
+      console.warn('[evaluateSearchConfidence] JSON parse falló, raw: ' + response.slice(0, 100));
+      return { sufficient: false, reason: 'fallback — parse error' };
+    }
   } catch {
     // Fail-safe: prefer an extra hop over cutting information short
-    return { sufficient: false, reason: 'fallback — no se pudo evaluar' };
+    return { sufficient: false, reason: 'fallback — Groq API error' };
   }
 }
 
@@ -5623,10 +5627,15 @@ async function readAndNarrowFragment(
 
     try {
       const raw = await callGroqAgent(prompt, NARROW_FRAGMENT_SYSTEM, 200);
-      const parsed = JSON.parse(
-        raw.trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, ''),
-      ) as GroqNarrow;
-      if (!parsed || typeof parsed.sufficient !== 'boolean') throw new Error('invalid shape');
+      // Strip markdown fences in all variants: ```json, ```, ```JSON, with or without newline
+      const cleaned = raw.trim().replace(/^```[a-zA-Z]*\s*\n?/, '').replace(/\n?```\s*$/, '').trim();
+      let parsed: GroqNarrow | null = null;
+      try {
+        parsed = JSON.parse(cleaned) as GroqNarrow;
+      } catch {
+        console.warn(`[deep-dynamic-range] JSON parse falló en iteración ${iter + 1}, raw: ${raw.slice(0, 100)}`);
+      }
+      if (!parsed || typeof parsed.sufficient !== 'boolean') break;
       lastParsed = parsed;
       if (parsed.sufficient) break;
 
@@ -5634,11 +5643,10 @@ async function readAndNarrowFragment(
       if (dir === 'up'   || dir === 'both') winStart = Math.max(0, winStart - EXPANSION_STEP);
       if (dir === 'down' || dir === 'both') winEnd   = Math.min(totalFileLines - 1, winEnd + EXPANSION_STEP);
     } catch (groqErr) {
-      console.warn(
-        `[deep-dynamic-range] Groq falló en iteración ${iter + 1}: ` +
-        (groqErr instanceof Error ? groqErr.message : String(groqErr)),
-      );
-      break; // Groq failed — stop, fall through to old logic below
+      const errMsg = groqErr instanceof Error ? groqErr.message : String(groqErr);
+      const cause = errMsg.includes('All Groq keys failed') ? 'rate-limit/all-keys-failed' : 'API-error';
+      console.warn(`[deep-dynamic-range] ${cause} en iteración ${iter + 1}: ${errMsg.slice(0, 120)}`);
+      break; // exits immediately on first failure — no retry benefit for rate-limit errors
     }
   }
 
@@ -5933,6 +5941,7 @@ async function runDeepSearchPipeline(
       const narrowResult0 = match.line
         ? await readAndNarrowFragment(fc, match.line, userQuery ?? '', queryTerms)
         : null;
+      if (narrowResult0) send('action', { text: `🎯 Rango dinámico: ${narrowResult0.initialLineCount}→${narrowResult0.finalLineCount} líneas (${narrowResult0.iterations} iter)` });
       let section = narrowResult0
         ?? (match.line
           ? (smartReadSection(fc, match.line, 60) ?? readEnclosingFunction(fc, match.line))
@@ -6127,6 +6136,7 @@ async function runDeepSearchPipeline(
             const fc = await getFileContent(callerMatch.path, repo);
             // Dynamic range narrowing — Strategy 2 / CALL_SITE
             const narrowedS2 = await readAndNarrowFragment(fc, callerMatch.line, userQuery ?? '', [defSym]);
+            if (narrowedS2) send('action', { text: `🎯 Rango dinámico: ${narrowedS2.initialLineCount}→${narrowedS2.finalLineCount} líneas (${narrowedS2.iterations} iter)` });
             let section = narrowedS2
               ?? smartReadSection(fc, callerMatch.line, 60)
               ?? readEnclosingFunction(fc, callerMatch.line);
@@ -6207,6 +6217,7 @@ async function runDeepSearchPipeline(
             const fc = await getFileContent(g1hit.caller_file, repo);
             // Dynamic range narrowing — Strategy 1 / grafo / CALL_SITE
             const narrowedG1 = await readAndNarrowFragment(fc, g1hit.caller_line, userQuery ?? '', [bestSym]);
+            if (narrowedG1) send('action', { text: `🎯 Rango dinámico: ${narrowedG1.initialLineCount}→${narrowedG1.finalLineCount} líneas (${narrowedG1.iterations} iter)` });
             let section = narrowedG1
               ?? smartReadSection(fc, g1hit.caller_line, 60)
               ?? readEnclosingFunction(fc, g1hit.caller_line);
@@ -6250,6 +6261,7 @@ async function runDeepSearchPipeline(
             const narrowedRg = bestMatch.line
               ? await readAndNarrowFragment(fc, bestMatch.line, userQuery ?? '', [bestSym])
               : null;
+            if (narrowedRg) send('action', { text: `🎯 Rango dinámico: ${narrowedRg.initialLineCount}→${narrowedRg.finalLineCount} líneas (${narrowedRg.iterations} iter)` });
             let section = narrowedRg
               ?? (bestMatch.line
                 ? (smartReadSection(fc, bestMatch.line, 60) ?? readEnclosingFunction(fc, bestMatch.line))
