@@ -707,6 +707,10 @@ const KEYWORD_STOPWORDS = new Set([
   // no relacionados, contaminando la evidencia con matches de dominio equivocado.
   'sesión', 'sesion', 'historial', 'mensaje', 'mensajes', 'usuario', 'usuarios',
   'pantalla', 'botón', 'boton',
+  // Fix 4: términos técnicos genéricos de API/HTTP que aparecen en CUALQUIER repo
+  // con más de un endpoint (GEMINI_ENDPOINT, AUTH_ENDPOINT, etc.) y producen falsos
+  // positivos cuando el usuario pregunta por un endpoint concreto por nombre de ruta.
+  'endpoint', 'endpoints',
 ]);
 
 /**
@@ -2117,6 +2121,18 @@ router.post('/generate', async (req, res) => {
           ? SIGNAL_OS_TRANSLATIONS.filter(t => t.triggers.some(re => re.test(prompt))).map(t => t.term)
           : [];
         const fastKeywords = [...new Set([...fastKeywordsRaw, ...fastDomainMatches])];
+        // Fix 3: keywords con guion (ej. "ml-predictions") → también variante camelCase
+        // (ej. "mlPredictions") para que symbol_index encuentre nombres de función.
+        // El original se mantiene: ripgrep buscará la string de ruta '/ml-predictions'.
+        for (const kw of [...fastKeywords]) {
+          if (kw.includes('-')) {
+            const camel = kw.replace(/-([a-z])/g, (_: string, c: string) => c.toUpperCase());
+            if (!fastKeywords.includes(camel)) {
+              fastKeywords.push(camel);
+              console.log(`[fast/camel-expand] "${kw}" → también buscando "${camel}"`);
+            }
+          }
+        }
         const fastPattern = fastKeywords.length > 0
           ? fastKeywords.join('|')
           : prompt.split(/\s+/).filter(w => w.length > 4).slice(0, 3).join('|');
@@ -2342,6 +2358,123 @@ número en vez de inventar uno.`;
         }
         send('action', { text: `📍 Símbolo encontrado: ${best.path}${best.line ? `:${best.line}` : ''}` });
 
+        // Fix 1+2: pre-computar términos normalizados reutilizados en el gate y en la asignación
+        // de confianza. Normalización: lowercase + quitar guiones/espacios/underscores.
+        const _normKws = fastKeywords.map(k => normalizeForMatch(k)).filter(k => k.length >= 3);
+        const _normBestFilename = normalizeForMatch(
+          best.path.split('/').pop()?.replace(/\.[^.]+$/, '') ?? '',
+        );
+        const _normBestText = normalizeForMatch(best.text ?? '');
+        // Un match es relevante si algún keyword normalizado aparece en el nombre del archivo
+        // (sin extensión) o en el texto del match (best.text = línea que ripgrep retornó).
+        const _bestIsRelevant = _normKws.some(k =>
+          _normBestFilename.includes(k) || _normBestText.includes(k),
+        );
+
+        // Fix 1 — Relevance gate: si ningún keyword tiene relación con el match encontrado,
+        // escalar automáticamente al motor DEEP (máx 2 hops) en vez de comprometerse con
+        // un fragmento incorrecto. Previene el patrón "endpoint" → GEMINI_ENDPOINT →
+        // HIGH CONFIDENCE falso cuando el endpoint real está en otro archivo.
+        if (!_bestIsRelevant) {
+          send('action', {
+            text: `⚠️ Match "${best.path.split('/').pop()}" no es relevante a [${fastKeywords.join(', ')}] — escalando a DEEP automáticamente...`,
+          });
+          console.log(
+            `[fast/relevance-gate] descartado "${best.path}" — ` +
+            `ningún keyword [${fastKeywords.join(', ')}] en nombre "${_normBestFilename}" ni en texto del match`,
+          );
+          try {
+            const _gateEscProd = fastMatches.filter(m => !isTestMatch(m.path, m.text ?? ''));
+            const _gateEscRanked = _gateEscProd.length > 0 ? _gateEscProd : fastMatches;
+            const _gateEscEvidence = _gateEscRanked.length > 0
+              ? await runDeepSearchPipeline(_gateEscRanked, fastKeywords, repo, send, 2, false, prompt)
+              : [];
+
+            if (_gateEscEvidence.length > 0) {
+              const { context: _gateEscContext, originalChars: _gateOrigChars, compressedChars: _gateCmpChars } =
+                compressDeepEvidenceForFast(_gateEscEvidence, '', '');
+              console.log(
+                `[fast/relevance-gate-esc] evidencia DEEP comprimida: ${_gateOrigChars} → ${_gateCmpChars} chars ` +
+                `(${_gateEscEvidence.length} fragmento(s))`,
+              );
+              // Eliminar el encabezado vacío que compressDeepEvidenceForFast añade cuando
+              // no hay fragmento cacheado previo.
+              const _gateEscContextClean = _gateEscContext.replace(/^Fragmento ya conocido — :\n+/, '');
+
+              const _gateEscAnalysis = await generateWithFallback(
+                `El usuario pregunta: "${prompt}"\n\n${_gateEscContextClean}`,
+                `Eres un experto analista de código respondiendo en FAST mode (escalado automático a DEEP).
+
+REGLA DE VOCABULARIO — obligatoria:
+Usá los términos técnicos de trading tal como los usa un trader profesional, en inglés cuando corresponda: \
+**FVG**, **EMA**, **SMA**, **RSI**, **ADX**, **ATR**, **SuperTrend**, **VWAP**, **RVOL**, **Score**, etc. \
+NUNCA los parafrasees con descripciones genéricas.
+
+REGLA DE FORMATO — sin excepciones:
+- Escribí en párrafos de prosa conectada (NO bullets sueltos, NO listas).
+- Aplicá **negrita** a cada término técnico de trading y a cada valor numérico clave.
+- PROHIBIDO: bloques de código con triple backtick, líneas de código sueltas, expresiones con operadores crudos.
+- Máximo 3 párrafos cortos (2-3 oraciones cada uno).
+
+ESTRUCTURA:
+Párrafo 1 — qué hace / cuál es el propósito de la función o endpoint.
+Párrafo 2 — cómo funciona: condiciones, parámetros y valores concretos con negrita.
+Párrafo 3 — cuándo se activa / restricciones o contexto de uso.
+
+REGLA ANTI-ALUCINACIÓN: Solo afirmá lo que está explícitamente en la evidencia provista. \
+Si no alcanza para responder, decilo en una oración y sugerí DEEP mode completo (4 hops).
+
+REGLA DE CITAS DE LÍNEA: si mencionás un número de línea específico, ese número DEBE aparecer \
+literalmente como prefijo en la evidencia que tenés delante. Nunca inventes números de línea.`,
+              );
+
+              const _gateEscLines = _gateEscAnalysis.split('\n').map((l: string) => l.trim()).filter(Boolean);
+              for (const line of _gateEscLines) send('action', { text: `💡 ${line}` });
+
+              const _gateEscFindingId = await saveInvestigationFinding({
+                repo,
+                files: _gateEscEvidence.map(e => ({ path: e.path, lineRanges: [] })),
+                diagnosis: _gateEscAnalysis,
+                confidence: 'medium',
+              }).catch(() => null);
+
+              send('confidence', {
+                level: 'medium',
+                reason: 'FAST mode — escalado automático a DEEP (match inicial no era relevante para los términos buscados)',
+                suggestedAction: 'deep',
+                files: _gateEscEvidence.map(e => e.path),
+                diagnosis: _gateEscAnalysis,
+                findingId: _gateEscFindingId ?? undefined,
+              });
+
+              if (sessionId) {
+                const _gateHistory = [
+                  ...fastHistory,
+                  { role: 'user',      content: prompt,            keywords: fastKeywords },
+                  { role: 'assistant', content: _gateEscAnalysis,  fragment: _gateEscContextClean, path: _gateEscEvidence[0].path },
+                ];
+                await saveFastHistory(sessionId, repo, _gateHistory).catch(() => {});
+              }
+            } else {
+              send('action', {
+                text: '❌ No encontré referencias directas ni en búsqueda extendida. Reformulá con el nombre exacto de la función o probá DEEP mode.',
+              });
+            }
+          } catch (gateEscErr) {
+            console.warn(
+              '[fast/relevance-gate-escalation] escalación a DEEP falló:',
+              gateEscErr instanceof Error ? gateEscErr.message : gateEscErr,
+            );
+            send('action', {
+              text: '❌ No encontré referencias directas. Reformulá con el nombre exacto de la función o probá DEEP mode para una búsqueda extensiva.',
+            });
+          }
+          send('done', { files: [], commitMessage: '', mainComponent: fastMatches[0]?.path ?? '', mainContent: '', repo, branch });
+          await new Promise(r => setTimeout(r, 100));
+          res.end();
+          return;
+        }
+
         // Cambio 3: si el hit viene de ripgrep (sin symbolType), intentar resolver
         // la definición real del símbolo en symbol_index antes de leer el fragmento.
         // Evita que readEnclosingFunction lea la función LLAMADORA en vez del cuerpo
@@ -2539,15 +2672,21 @@ que estás citando, describí la ubicación SIN número en vez de inventar uno.`
           }
 
           // BUG 5 fix: confidence level derives from match origin, not hardcoded 'medium'.
-          // symbol_index hit (symbolType set) = exact lookup → HIGH.
+          // symbol_index hit (symbolType set) = exact lookup → HIGH, ONLY if the filename
+          // itself contains at least one search keyword (Fix 2: prevents HIGH confidence
+          // when a generic keyword like "endpoint" matched an unrelated symbol).
           // fuzzy-match / ripgrep hit = approximate location → MEDIUM.
           // Test match: cap at 'medium' regardless of lookup method (not production code).
-          const fastConfidence: 'high' | 'medium' = (best.symbolType && !bestIsTest) ? 'high' : 'medium';
+          const _filenameHasKeyword = _normKws.some(k => _normBestFilename.includes(k));
+          const fastConfidence: 'high' | 'medium' =
+            (best.symbolType && !bestIsTest && _filenameHasKeyword) ? 'high' : 'medium';
           const fastConfidenceReason = bestIsTest
             ? 'FAST mode — resultado de test/dev, no de producción. Reformulá con el nombre exacto de la función de producción o usá DEEP mode.'
             : fastConfidence === 'high'
-              ? 'FAST mode — símbolo ubicado por symbol_index (lookup exacto)'
-              : 'FAST mode — símbolo ubicado por fuzzy-match/ripgrep (posición aproximada)';
+              ? 'FAST mode — símbolo ubicado por symbol_index (lookup exacto, nombre relevante)'
+              : !_filenameHasKeyword && best.symbolType
+                ? 'FAST mode — símbolo en symbol_index pero el nombre del archivo no contiene los términos buscados (match por keyword genérico)'
+                : 'FAST mode — símbolo ubicado por fuzzy-match/ripgrep (posición aproximada)';
 
           const fastFindingId = await saveInvestigationFinding({
             repo,
