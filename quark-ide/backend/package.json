@@ -18,6 +18,7 @@
     "diff": "^9.0.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "http-proxy-middleware": "3.0.5",
     "pg": "^8.21.0",
     "typescript": "^5.0.0"
   },

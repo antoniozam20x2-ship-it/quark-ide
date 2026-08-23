@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import express from 'express';
 import cors from 'cors';
 import chatRouter from './routes/chat.js';
@@ -12,7 +12,8 @@ import agentRouter, { invalidateRepoKnowledge, generateChangelogSummary } from '
 import { getCosts } from './services/costTracker.js';
 import { initDb } from './services/db.js';
 import { seedOnce } from './services/rufloMemory.js';
-import { syncRepo } from './services/localRepos.js';
+import { REPOS_DIR, syncRepo } from './services/localRepos.js';
+import { createProxyMiddleware } from 'http-proxy-middleware';
 import { getFileTree, getFileContent, createOrUpdateFile, deleteFile, commitMultipleFiles } from './services/github.js';
 import { runDebugger } from './services/debugger.js';
 import previewRouter from './routes/preview.js';
@@ -37,6 +38,63 @@ app.use(cors({
 app.use('/api/webhooks/github', webhooksRouter);
 
 app.use(express.json({ limit: '2mb' }));
+
+const OPENCODE_PORT = 3000;
+const opencodePath = (url: string | undefined) => {
+  const pathname = (url ?? '').split('?')[0];
+  return pathname === '/opencode' || pathname.startsWith('/opencode/');
+};
+
+const opencodeProxy = createProxyMiddleware({
+  target: 'http://127.0.0.1:' + OPENCODE_PORT,
+  changeOrigin: true,
+  ws: true,
+  pathRewrite: (requestPath) =>
+    requestPath.startsWith('/opencode')
+      ? requestPath
+      : '/opencode' + (requestPath === '/' ? '/' : requestPath),
+});
+
+app.use('/opencode', opencodeProxy);
+
+let opencodeChild: ReturnType<typeof spawn> | undefined;
+let opencodeStopping = false;
+let opencodeRestartDelay = 1000;
+let opencodeRestartTimer: NodeJS.Timeout | undefined;
+
+function scheduleOpenCodeRestart() {
+  if (opencodeStopping || opencodeRestartTimer) return;
+  const delay = opencodeRestartDelay;
+  opencodeRestartDelay = Math.min(opencodeRestartDelay * 2, 30_000);
+  opencodeRestartTimer = setTimeout(() => {
+    opencodeRestartTimer = undefined;
+    startOpenCode();
+  }, delay);
+  console.warn('[opencode] restarting in ' + delay + 'ms');
+}
+
+function startOpenCode() {
+  fs.mkdirSync(REPOS_DIR, { recursive: true });
+  opencodeChild = spawn('opencode', [
+    'serve', '--host', '0.0.0.0', '--port', String(OPENCODE_PORT),
+    '--base-path', '/opencode',
+  ], { cwd: REPOS_DIR, env: { ...process.env }, stdio: 'inherit' });
+
+  opencodeChild.once('spawn', () => {
+    opencodeRestartDelay = 1000;
+    console.log('[opencode] started on internal port ' + OPENCODE_PORT + ', cwd=' + REPOS_DIR);
+  });
+  opencodeChild.once('error', (err) => {
+    console.error('[opencode] failed to start:', err.message);
+    opencodeChild = undefined;
+    scheduleOpenCodeRestart();
+  });
+  opencodeChild.once('exit', (code, signal) => {
+    console.warn('[opencode] exited code=' + (code ?? 'null') + ' signal=' + (signal ?? 'null'));
+    opencodeChild = undefined;
+    scheduleOpenCodeRestart();
+  });
+}
 
 app.get('/health', (_req, res) => {
   res.status(200).json({
@@ -232,6 +290,20 @@ process.on('unhandledRejection', (reason) => {
   console.error('[QUARK] unhandledRejection — proceso continuando:', msg);
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`⚛ QUARK backend running on port ${PORT}`);
+  startOpenCode();
 });
+
+server.on('upgrade', (req, socket, head) => {
+  if (!opencodePath(req.url)) return;
+  opencodeProxy.upgrade(req, socket, head);
+});
+
+const stopOpenCode = () => {
+  opencodeStopping = true;
+  if (opencodeRestartTimer) clearTimeout(opencodeRestartTimer);
+  opencodeChild?.kill('SIGTERM');
+};
+process.once('SIGTERM', stopOpenCode);
+process.once('SIGINT', stopOpenCode);
