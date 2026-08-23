@@ -1,32 +1,26 @@
 {
-  "name": "backend",
+  "name": "opencode-service",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc && shx mkdir -p dist/lib && shx cp src/lib/designRules.json dist/lib/designRules.json",
+    "build": "tsc",
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.209",
-    "@google/genai": "^0.7.0",
-    "@octokit/rest": "^22.0.1",
-    "@types/diff": "^7.0.2",
-    "@types/pg": "^8.20.0",
     "cors": "^2.8.5",
-    "diff": "^9.0.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "pg": "^8.21.0",
-    "typescript": "^5.0.0"
+    "http-proxy-middleware": "3.0.5",
+    "opencode-ai": "1.18.20"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/node": "^20.0.0",
-    "shx": "^0.4.0",
-    "tsx": "^4.21.0"
+    "tsx": "^4.21.0",
+    "typescript": "^5.0.0"
   },
   "engines": {
     "node": ">=20.0.0"
