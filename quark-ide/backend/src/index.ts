@@ -42,6 +42,7 @@ app.use('/api/webhooks/github', webhooksRouter);
 app.use(express.json({ limit: '2mb' }));
 
 const OPENCODE_PORT = 3000;
+const OPENCODE_BIN = path.join(process.cwd(), 'node_modules', '.bin', 'opencode');
 
 const OPENCODE_COOKIE = 'quark_opencode_session';
 const OPENCODE_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
@@ -166,7 +167,7 @@ function scheduleOpenCodeRestart() {
 
 function startOpenCode() {
   fs.mkdirSync(REPOS_DIR, { recursive: true });
-  opencodeChild = spawn('opencode', [
+  opencodeChild = spawn(OPENCODE_BIN, [
     'serve', '--hostname', '0.0.0.0', '--port', String(OPENCODE_PORT),
   ], { cwd: REPOS_DIR, env: { ...process.env }, stdio: 'inherit' });
 
