@@ -1,7 +1,9 @@
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
+import { createHmac, timingSafeEqual } from 'crypto';
+import type { Socket } from 'net';
 import express from 'express';
 import cors from 'cors';
 import chatRouter from './routes/chat.js';
@@ -12,7 +14,8 @@ import agentRouter, { invalidateRepoKnowledge, generateChangelogSummary } from '
 import { getCosts } from './services/costTracker.js';
 import { initDb } from './services/db.js';
 import { seedOnce } from './services/rufloMemory.js';
-import { syncRepo } from './services/localRepos.js';
+import { REPOS_DIR, syncRepo } from './services/localRepos.js';
+import { createProxyMiddleware } from 'http-proxy-middleware';
 import { getFileTree, getFileContent, createOrUpdateFile, deleteFile, commitMultipleFiles } from './services/github.js';
 import { runDebugger } from './services/debugger.js';
 import previewRouter from './routes/preview.js';
@@ -37,6 +40,149 @@ app.use(cors({
 app.use('/api/webhooks/github', webhooksRouter);
 
 app.use(express.json({ limit: '2mb' }));
+
+const OPENCODE_PORT = 3000;
+
+const OPENCODE_COOKIE = 'quark_opencode_session';
+const OPENCODE_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const OPENCODE_SESSION_SECRET = 'quark-opencode-session-v1';
+const authAttempts = new Map<string, { failures: number; blockedUntil: number }>();
+const AUTH_WINDOW_MS = 5 * 60 * 1000;
+const MAX_AUTH_FAILURES = 5;
+
+function constantTimeStringEqual(actual: string, expected: string) {
+  const actualBuffer = Buffer.from(actual);
+  const expectedBuffer = Buffer.from(expected);
+  const length = Math.max(actualBuffer.length, expectedBuffer.length);
+  const paddedActual = Buffer.alloc(length);
+  const paddedExpected = Buffer.alloc(length);
+  actualBuffer.copy(paddedActual);
+  expectedBuffer.copy(paddedExpected);
+  const contentsMatch = timingSafeEqual(paddedActual, paddedExpected);
+  return actualBuffer.length === expectedBuffer.length && contentsMatch;
+}
+
+function sessionToken(expiresAt: number, password: string) {
+  const payload = String(expiresAt);
+  const signature = createHmac('sha256', password)
+    .update(OPENCODE_SESSION_SECRET + ':' + payload)
+    .digest('hex');
+  return payload + '.' + signature;
+}
+
+function validSession(cookieHeader: string | undefined) {
+  const password = process.env.OPENCODE_PASSWORD;
+  const prefix = OPENCODE_COOKIE + '=';
+  const raw = cookieHeader?.split(';').map((part) => part.trim())
+    .find((part) => part.startsWith(prefix))?.slice(prefix.length);
+  if (!password || !raw) return false;
+  const [expiresText, signature] = raw.split('.');
+  const expiresAt = Number(expiresText);
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() || !signature) return false;
+  const expected = Buffer.from(sessionToken(expiresAt, password).split('.')[1]);
+  const received = Buffer.from(signature);
+  return expected.length === received.length && timingSafeEqual(expected, received);
+}
+
+function clientKey(req: express.Request) {
+  return String(req.headers['x-forwarded-for'] ?? req.ip ?? 'unknown').split(',')[0].trim();
+}
+
+function passwordForm(res: express.Response, status = 401) {
+  res.status(status).type('html').send(
+    '<!doctype html><html><body><h1>Quark IDE — OpenCode</h1>' +
+    '<form method="post"><label>Password <input name="password" type="password" autofocus></label>' +
+    '<button type="submit">Entrar</button></form></body></html>',
+  );
+}
+
+function opencodeAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const password = process.env.OPENCODE_PASSWORD;
+  if (!password) { res.status(503).send('OPENCODE_PASSWORD is not configured'); return; }
+  const key = clientKey(req);
+  const attempt = authAttempts.get(key);
+  if (attempt && attempt.blockedUntil > Date.now()) {
+    res.setHeader('Retry-After', Math.ceil((attempt.blockedUntil - Date.now()) / 1000));
+    res.status(429).send('Too many failed attempts');
+    return;
+  }
+  if (attempt && attempt.blockedUntil <= Date.now()) authAttempts.delete(key);
+  if (validSession(req.headers.cookie)) { next(); return; }
+  if (req.method === 'POST') {
+    const supplied = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (constantTimeStringEqual(supplied, password)) {
+      authAttempts.delete(key);
+      const expiresAt = Date.now() + OPENCODE_SESSION_TTL_MS;
+      const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+      res.setHeader('Set-Cookie', OPENCODE_COOKIE + '=' + sessionToken(expiresAt, password) +
+        '; Path=/opencode; HttpOnly; SameSite=Lax; Max-Age=' +
+        Math.floor(OPENCODE_SESSION_TTL_MS / 1000) + '; Expires=' + new Date(expiresAt).toUTCString() +
+        (secure ? '; Secure' : ''));
+      res.redirect('/opencode/'); return;
+    }
+    const failures = (attempt?.failures ?? 0) + 1;
+    authAttempts.set(key, { failures, blockedUntil: failures >= MAX_AUTH_FAILURES ? Date.now() + AUTH_WINDOW_MS : 0 });
+  }
+  passwordForm(res);
+}
+
+
+const opencodePath = (url: string | undefined) => {
+  const pathname = (url ?? '').split('?')[0];
+  return pathname === '/opencode' || pathname.startsWith('/opencode/');
+};
+
+const opencodeProxy = createProxyMiddleware({
+  target: 'http://127.0.0.1:' + OPENCODE_PORT,
+  changeOrigin: true,
+  ws: true,
+  pathRewrite: (requestPath) =>
+    requestPath.startsWith('/opencode')
+      ? requestPath
+      : '/opencode' + (requestPath === '/' ? '/' : requestPath),
+});
+
+// Auth is applied only to /opencode; existing routes remain unchanged.
+app.use('/opencode', express.urlencoded({ extended: false }), opencodeAuth, opencodeProxy);
+
+let opencodeChild: ReturnType<typeof spawn> | undefined;
+let opencodeStopping = false;
+let opencodeRestartDelay = 1000;
+let opencodeRestartTimer: NodeJS.Timeout | undefined;
+
+function scheduleOpenCodeRestart() {
+  if (opencodeStopping || opencodeRestartTimer) return;
+  const delay = opencodeRestartDelay;
+  opencodeRestartDelay = Math.min(opencodeRestartDelay * 2, 30_000);
+  opencodeRestartTimer = setTimeout(() => {
+    opencodeRestartTimer = undefined;
+    startOpenCode();
+  }, delay);
+  console.warn('[opencode] restarting in ' + delay + 'ms');
+}
+
+function startOpenCode() {
+  fs.mkdirSync(REPOS_DIR, { recursive: true });
+  opencodeChild = spawn('opencode', [
+    'serve', '--host', '0.0.0.0', '--port', String(OPENCODE_PORT),
+    '--base-path', '/opencode',
+  ], { cwd: REPOS_DIR, env: { ...process.env }, stdio: 'inherit' });
+
+  opencodeChild.once('spawn', () => {
+    opencodeRestartDelay = 1000;
+    console.log('[opencode] started on internal port ' + OPENCODE_PORT + ', cwd=' + REPOS_DIR);
+  });
+  opencodeChild.once('error', (err) => {
+    console.error('[opencode] failed to start:', err.message);
+    opencodeChild = undefined;
+    scheduleOpenCodeRestart();
+  });
+  opencodeChild.once('exit', (code, signal) => {
+    console.warn('[opencode] exited code=' + (code ?? 'null') + ' signal=' + (signal ?? 'null'));
+    opencodeChild = undefined;
+    scheduleOpenCodeRestart();
+  });
+}
 
 app.get('/health', (_req, res) => {
   res.status(200).json({
@@ -232,6 +378,21 @@ process.on('unhandledRejection', (reason) => {
   console.error('[QUARK] unhandledRejection — proceso continuando:', msg);
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`⚛ QUARK backend running on port ${PORT}`);
+  startOpenCode();
 });
+
+server.on('upgrade', (req, socket, head) => {
+  if (!opencodePath(req.url)) return;
+  if (!validSession(req.headers.cookie)) { socket.destroy(); return; }
+  opencodeProxy.upgrade(req, socket as Socket, head);
+});
+
+const stopOpenCode = () => {
+  opencodeStopping = true;
+  if (opencodeRestartTimer) clearTimeout(opencodeRestartTimer);
+  opencodeChild?.kill('SIGTERM');
+};
+process.once('SIGTERM', stopOpenCode);
+process.once('SIGINT', stopOpenCode);
