@@ -2,6 +2,8 @@ import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import { execSync, spawn } from 'child_process';
+import { createHmac, timingSafeEqual } from 'crypto';
+import type { Socket } from 'net';
 import express from 'express';
 import cors from 'cors';
 import chatRouter from './routes/chat.js';
@@ -40,6 +42,91 @@ app.use('/api/webhooks/github', webhooksRouter);
 app.use(express.json({ limit: '2mb' }));
 
 const OPENCODE_PORT = 3000;
+
+const OPENCODE_COOKIE = 'quark_opencode_session';
+const OPENCODE_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const OPENCODE_SESSION_SECRET = 'quark-opencode-session-v1';
+const authAttempts = new Map<string, { failures: number; blockedUntil: number }>();
+const AUTH_WINDOW_MS = 5 * 60 * 1000;
+const MAX_AUTH_FAILURES = 5;
+
+function constantTimeStringEqual(actual: string, expected: string) {
+  const actualBuffer = Buffer.from(actual);
+  const expectedBuffer = Buffer.from(expected);
+  const length = Math.max(actualBuffer.length, expectedBuffer.length);
+  const paddedActual = Buffer.alloc(length);
+  const paddedExpected = Buffer.alloc(length);
+  actualBuffer.copy(paddedActual);
+  expectedBuffer.copy(paddedExpected);
+  const contentsMatch = timingSafeEqual(paddedActual, paddedExpected);
+  return actualBuffer.length === expectedBuffer.length && contentsMatch;
+}
+
+function sessionToken(expiresAt: number, password: string) {
+  const payload = String(expiresAt);
+  const signature = createHmac('sha256', password)
+    .update(OPENCODE_SESSION_SECRET + ':' + payload)
+    .digest('hex');
+  return payload + '.' + signature;
+}
+
+function validSession(cookieHeader: string | undefined) {
+  const password = process.env.OPENCODE_PASSWORD;
+  const prefix = OPENCODE_COOKIE + '=';
+  const raw = cookieHeader?.split(';').map((part) => part.trim())
+    .find((part) => part.startsWith(prefix))?.slice(prefix.length);
+  if (!password || !raw) return false;
+  const [expiresText, signature] = raw.split('.');
+  const expiresAt = Number(expiresText);
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() || !signature) return false;
+  const expected = Buffer.from(sessionToken(expiresAt, password).split('.')[1]);
+  const received = Buffer.from(signature);
+  return expected.length === received.length && timingSafeEqual(expected, received);
+}
+
+function clientKey(req: express.Request) {
+  return String(req.headers['x-forwarded-for'] ?? req.ip ?? 'unknown').split(',')[0].trim();
+}
+
+function passwordForm(res: express.Response, status = 401) {
+  res.status(status).type('html').send(
+    '<!doctype html><html><body><h1>Quark IDE — OpenCode</h1>' +
+    '<form method="post"><label>Password <input name="password" type="password" autofocus></label>' +
+    '<button type="submit">Entrar</button></form></body></html>',
+  );
+}
+
+function opencodeAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const password = process.env.OPENCODE_PASSWORD;
+  if (!password) { res.status(503).send('OPENCODE_PASSWORD is not configured'); return; }
+  const key = clientKey(req);
+  const attempt = authAttempts.get(key);
+  if (attempt && attempt.blockedUntil > Date.now()) {
+    res.setHeader('Retry-After', Math.ceil((attempt.blockedUntil - Date.now()) / 1000));
+    res.status(429).send('Too many failed attempts');
+    return;
+  }
+  if (attempt && attempt.blockedUntil <= Date.now()) authAttempts.delete(key);
+  if (validSession(req.headers.cookie)) { next(); return; }
+  if (req.method === 'POST') {
+    const supplied = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (constantTimeStringEqual(supplied, password)) {
+      authAttempts.delete(key);
+      const expiresAt = Date.now() + OPENCODE_SESSION_TTL_MS;
+      const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+      res.setHeader('Set-Cookie', OPENCODE_COOKIE + '=' + sessionToken(expiresAt, password) +
+        '; Path=/opencode; HttpOnly; SameSite=Lax; Max-Age=' +
+        Math.floor(OPENCODE_SESSION_TTL_MS / 1000) + '; Expires=' + new Date(expiresAt).toUTCString() +
+        (secure ? '; Secure' : ''));
+      res.redirect('/opencode/'); return;
+    }
+    const failures = (attempt?.failures ?? 0) + 1;
+    authAttempts.set(key, { failures, blockedUntil: failures >= MAX_AUTH_FAILURES ? Date.now() + AUTH_WINDOW_MS : 0 });
+  }
+  passwordForm(res);
+}
+
+
 const opencodePath = (url: string | undefined) => {
   const pathname = (url ?? '').split('?')[0];
   return pathname === '/opencode' || pathname.startsWith('/opencode/');
@@ -55,7 +142,8 @@ const opencodeProxy = createProxyMiddleware({
       : '/opencode' + (requestPath === '/' ? '/' : requestPath),
 });
 
-app.use('/opencode', opencodeProxy);
+// Auth is applied only to /opencode; existing routes remain unchanged.
+app.use('/opencode', express.urlencoded({ extended: false }), opencodeAuth, opencodeProxy);
 
 let opencodeChild: ReturnType<typeof spawn> | undefined;
 let opencodeStopping = false;
@@ -297,7 +385,8 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 
 server.on('upgrade', (req, socket, head) => {
   if (!opencodePath(req.url)) return;
-  opencodeProxy.upgrade(req, socket, head);
+  if (!validSession(req.headers.cookie)) { socket.destroy(); return; }
+  opencodeProxy.upgrade(req, socket as Socket, head);
 });
 
 const stopOpenCode = () => {
