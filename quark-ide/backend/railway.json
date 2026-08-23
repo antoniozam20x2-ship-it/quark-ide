@@ -1,7 +1,7 @@
 {
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "NODE_ENV=development npm install && npm run build"
+    "buildCommand": "npm install -g opencode-ai@1.18.20 && NODE_ENV=development npm install && npm run build"
   },
   "deploy": {
     "startCommand": "npm run start",
