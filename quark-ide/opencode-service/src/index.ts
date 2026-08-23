@@ -14,7 +14,7 @@ const execFileAsync = promisify(execFile);
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3000);
-const OPENCODE_PORT = 3000;
+const OPENCODE_PORT = 3100;
 const OPENCODE_BIN = path.join(process.cwd(), 'node_modules', '.bin', 'opencode');
 const REPOS_DIR = process.env.REPOS_DIR ?? '/tmp/opencode-repos';
 const GITHUB_OWNER = process.env.GITHUB_OWNER ?? '';
