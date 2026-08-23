@@ -136,10 +136,13 @@ const opencodeProxy = createProxyMiddleware({
   target: 'http://127.0.0.1:' + OPENCODE_PORT,
   changeOrigin: true,
   ws: true,
-  pathRewrite: (requestPath) =>
-    requestPath.startsWith('/opencode')
-      ? requestPath
-      : '/opencode' + (requestPath === '/' ? '/' : requestPath),
+  pathRewrite: (requestPath) => {
+    const pathname = requestPath.split('?')[0];
+    const query = requestPath.slice(pathname.length);
+    if (pathname === '/opencode') return '/' + query;
+    if (pathname.startsWith('/opencode/')) return pathname.slice('/opencode'.length) + query;
+    return requestPath;
+  },
 });
 
 // Auth is applied only to /opencode; existing routes remain unchanged.
@@ -164,8 +167,7 @@ function scheduleOpenCodeRestart() {
 function startOpenCode() {
   fs.mkdirSync(REPOS_DIR, { recursive: true });
   opencodeChild = spawn('opencode', [
-    'serve', '--host', '0.0.0.0', '--port', String(OPENCODE_PORT),
-    '--base-path', '/opencode',
+    'serve', '--hostname', '0.0.0.0', '--port', String(OPENCODE_PORT),
   ], { cwd: REPOS_DIR, env: { ...process.env }, stdio: 'inherit' });
 
   opencodeChild.once('spawn', () => {
