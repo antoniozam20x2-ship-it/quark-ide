@@ -14,7 +14,7 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "http-proxy-middleware": "3.0.5",
-    "opencode-ai": "1.18.20"
+    "opencode-ai": "1.18.21"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
