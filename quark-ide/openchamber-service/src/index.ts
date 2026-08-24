@@ -216,7 +216,11 @@ function startOpenChamber() {
     'serve', '--foreground', '--host', '0.0.0.0', '--port', String(OPENCHAMBER_PORT),
   ], {
     cwd: REPOS_DIR,
-    env: { ...process.env, OPENCODE_BINARY: OPENCODE_BIN },
+    env: {
+      ...process.env,
+      OPENCODE_BINARY: OPENCODE_BIN,
+      OPENCHAMBER_UI_PASSWORD: process.env.OPENCODE_PASSWORD,
+    },
     stdio: 'inherit',
   });
 
