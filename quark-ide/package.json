@@ -4,7 +4,8 @@
   "workspaces": [
     "frontend",
     "backend",
-    "opencode-service"
+    "opencode-service",
+    "openchamber-service"
   ],
   "scripts": {
     "dev": "concurrently \"npm run dev --workspace=backend\" \"npm run dev --workspace=frontend\"",
