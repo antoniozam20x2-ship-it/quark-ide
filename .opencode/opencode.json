@@ -1,0 +1,6 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "opendesign@git+https://github.com/manalkaff/opendesign.git#v0.3.1"
+  ]
+}
