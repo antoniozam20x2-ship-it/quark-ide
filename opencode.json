@@ -42,9 +42,15 @@
       "enabled": true
     },
     "vercel": {
-      "type": "remote",
-      "url": "https://mcp.vercel.com",
-      "enabled": true
+      "type": "local",
+      "command": [
+        "node",
+        "mcp-servers/vercel-token/server.mjs"
+      ],
+      "enabled": true,
+      "environment": {
+        "VERCEL_API_KEY": "{env:VERCEL_API_KEY}"
+      }
     }
   },
   "permission": {
