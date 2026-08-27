@@ -640,9 +640,10 @@ enabled = true
 
 Cada vez que termines de construir o modificar una página y vayas a mostrarla como lista, seguí este flujo antes de darla por buena:
 
-1. Deployá con `deploy_to_vercel`, `target: "preview"` (nunca `"production"` salvo pedido explícito). Guardá la URL que devuelve la respuesta.
-2. El build de Vercel sigue en background después de que el tool responde: antes de visitar la URL, confirmá con `get_deployment` (o `list_deployments` si no tenés el id) que el estado sea `READY`, esperando hasta ~2 minutos.
+1. Deployá con `deploy_to_vercel`, `target: "preview"` (nunca `"production"` salvo pedido explícito). Si Vercel MCP está caído (503), usá fallback operativo (Netlify / Cloudflare Pages / GitHub Pages) y guardá la URL pública real que devuelve el deploy. Nunca entregues `localhost`.
+2. El build sigue en background después de que el deploy responde: antes de visitar la URL, confirmá que el estado sea `READY`/`built` (`get_deployment` o `list_deployments` en Vercel; o `200 OK` + `status: built` en GitHub Pages), esperando hasta ~2 minutos.
 3. Navegá a esa URL con el servidor Playwright `playwright-mobile` (motor WebKit/Safari, viewport 430x932 — resolución lógica de iPhone 16 Pro Max).
-4. Tomá una captura de pantalla (`browser_take_screenshot`) en ese viewport como evidencia.
+4. Tomá una captura de pantalla (`browser_take_screenshot`) en ese viewport como evidencia. **No la guardes solo como archivo en el filesystem del contenedor** (se pierde y aparece como "Preview unavailable" en el chat). **Adjuntá la imagen directo en tu respuesta del chat** para que se renderice inline sin depender de que el archivo quede accesible después.
 5. Revisá los mensajes de consola de esa página (`browser_console_messages`); si hay errores, no la des por buena — corregí y repetí el flujo desde el paso 1.
-6. Tu respuesta final siempre debe incluir la URL de preview como link clicable (para abrir en Safari del celular) y la captura como evidencia visual. Nunca digas "listo" sin mostrar ambas cosas.
+6. Si el proyecto se commitea a GitHub, subí también las capturas al repo como respaldo adicional (por ejemplo en carpeta `/evidence` o `/evidence/<fecha>/`) y commitealas junto al código.
+7. Tu respuesta final siempre debe incluir la URL de preview/deploy como link clicable (para abrir en Safari del celular) **y la captura adjunta inline** como evidencia visual. Nunca digas "listo" sin mostrar ambas cosas.
