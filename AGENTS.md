@@ -632,3 +632,17 @@ enabled = true
 - Issues: https://github.com/ruvnet/claude-flow/issues
 
 **Remember: Codex executes, claude-flow orchestrates!**
+
+
+---
+
+## 🖼️ Preview y verificación visual tras cada build/deploy
+
+Cada vez que termines de construir o modificar una página y vayas a mostrarla como lista, seguí este flujo antes de darla por buena:
+
+1. Deployá con `deploy_to_vercel`, `target: "preview"` (nunca `"production"` salvo pedido explícito). Guardá la URL que devuelve la respuesta.
+2. El build de Vercel sigue en background después de que el tool responde: antes de visitar la URL, confirmá con `get_deployment` (o `list_deployments` si no tenés el id) que el estado sea `READY`, esperando hasta ~2 minutos.
+3. Navegá a esa URL con el servidor Playwright `playwright-mobile` (motor WebKit/Safari, viewport 430x932 — resolución lógica de iPhone 16 Pro Max).
+4. Tomá una captura de pantalla (`browser_take_screenshot`) en ese viewport como evidencia.
+5. Revisá los mensajes de consola de esa página (`browser_console_messages`); si hay errores, no la des por buena — corregí y repetí el flujo desde el paso 1.
+6. Tu respuesta final siempre debe incluir la URL de preview como link clicable (para abrir en Safari del celular) y la captura como evidencia visual. Nunca digas "listo" sin mostrar ambas cosas.
