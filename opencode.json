@@ -44,7 +44,11 @@
     "vercel": {
       "type": "remote",
       "url": "https://mcp.vercel.com",
-      "enabled": true
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer {env:VERCEL_API_KEY}"
+      }
     }
   },
   "permission": {
