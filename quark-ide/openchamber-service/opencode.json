@@ -4,7 +4,8 @@
     "firecrawl": {
       "type": "remote",
       "url": "https://mcp.firecrawl.dev/v2/mcp",
-      "enabled": true
+      "enabled": true,
+      "headers": { "Authorization": "Bearer {env:FIRECRAWL_API_KEY}" }
     }
   },
   "plugin": [
