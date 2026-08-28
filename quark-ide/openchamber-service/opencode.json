@@ -8,6 +8,7 @@
     }
   },
   "plugin": [
-    "superpowers@git+https://github.com/obra/superpowers.git#v6.3.0"
+    "superpowers@git+https://github.com/obra/superpowers.git#v6.3.0",
+    "@arkfactory/opencode-checkpoint@1.0.4"
   ]
 }
