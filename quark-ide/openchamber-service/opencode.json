@@ -6,5 +6,8 @@
       "url": "https://mcp.firecrawl.dev/v2/mcp",
       "enabled": true
     }
-  }
+  },
+  "plugin": [
+    "superpowers@git+https://github.com/obra/superpowers.git#v6.3.0"
+  ]
 }
