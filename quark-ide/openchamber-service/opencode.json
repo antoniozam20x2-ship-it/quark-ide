@@ -1,11 +1,60 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer {env:CONTEXT7_API_KEY}"
+      }
+    },
+    "github": {
+      "type": "remote",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer {env:GITHUB_TOKEN}"
+      }
+    },
     "firecrawl": {
       "type": "remote",
       "url": "https://mcp.firecrawl.dev/v2/mcp",
       "enabled": true,
       "headers": { "Authorization": "Bearer {env:FIRECRAWL_API_KEY}" }
+    },
+    "playwright": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@playwright/mcp@latest",
+        "--headless"
+      ],
+      "enabled": true
+    },
+    "playwright-mobile": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@playwright/mcp@latest",
+        "--headless",
+        "--browser=webkit",
+        "--viewport-size=430x932"
+      ],
+      "enabled": true
+    },
+    "vercel": {
+      "type": "remote",
+      "url": "https://mcp.vercel.com",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer {env:VERCEL_API_KEY}"
+      }
     },
     "railway": {
       "type": "remote",
@@ -28,7 +77,10 @@
     "@arkfactory/opencode-checkpoint@1.0.4"
   ],
   "permission": {
+    "railway_*": "ask",
     "sentry_*": "ask",
-    "railway_*": "ask"
+    "vercel_*": "ask",
+    "vercel_deploy_to_vercel": "ask",
+    "github_*": "ask"
   }
 }
