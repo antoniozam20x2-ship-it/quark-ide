@@ -6,10 +6,22 @@
       "url": "https://mcp.firecrawl.dev/v2/mcp",
       "enabled": true,
       "headers": { "Authorization": "Bearer {env:FIRECRAWL_API_KEY}" }
+    },
+    "sentry": {
+      "type": "local",
+      "command": ["npx", "-y", "@sentry/mcp-server@0.39.0", "--access-token", "{env:SENTRY_AUTH_TOKEN}"],
+      "enabled": true,
+      "environment": {
+        "SENTRY_ACCESS_TOKEN": "{env:SENTRY_AUTH_TOKEN}",
+        "SENTRY_AUTH_TOKEN": "{env:SENTRY_AUTH_TOKEN}"
+      }
     }
   },
   "plugin": [
     "superpowers@git+https://github.com/obra/superpowers.git#v6.3.0",
     "@arkfactory/opencode-checkpoint@1.0.4"
-  ]
+  ],
+  "permission": {
+    "sentry_*": "ask"
+  }
 }
