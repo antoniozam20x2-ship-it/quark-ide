@@ -70,6 +70,11 @@
         "SENTRY_ACCESS_TOKEN": "{env:SENTRY_AUTH_TOKEN}",
         "SENTRY_AUTH_TOKEN": "{env:SENTRY_AUTH_TOKEN}"
       }
+    },
+    "postgres-ahorar": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-postgres", "{env:AHORAR_DB_READONLY_URL}"],
+      "enabled": true
     }
   },
   "plugin": [
