@@ -64,7 +64,7 @@
     },
     "sentry": {
       "type": "local",
-      "command": ["node", "./node_modules/@sentry/mcp-server/dist/index.js", "--access-token", "{env:SENTRY_AUTH_TOKEN}"],
+      "command": ["npx", "-y", "@sentry/mcp-server@0.39.0", "--access-token", "{env:SENTRY_AUTH_TOKEN}"],
       "enabled": true,
       "environment": {
         "SENTRY_ACCESS_TOKEN": "{env:SENTRY_AUTH_TOKEN}",
