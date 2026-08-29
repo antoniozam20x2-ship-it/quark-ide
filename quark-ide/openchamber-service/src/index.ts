@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import * as Sentry from '@sentry/node';
 import fs from 'fs';
 import path from 'path';
 import { execFile, spawn } from 'child_process';
@@ -20,6 +21,15 @@ const REPOS_DIR = process.env.REPOS_DIR ?? '/tmp/openchamber-repos';
 const GITHUB_OWNER = process.env.GITHUB_OWNER ?? '';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? '';
 const REPOSITORIES = ['quark-ide', 'Ahorar', 'Trade-SnipeOS', 'NEXUS-OS-app', 'Code-Coretest'];
+
+// Sentry — only enabled when SENTRY_DSN is set (configure via Railway env)
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.SENTRY_ENVIRONMENT ?? process.env.NODE_ENV ?? 'production',
+    tracesSampleRate: 0.1,
+  });
+}
 
 const OPENCHAMBER_COOKIE = 'quark_openchamber_session';
 const OPENCHAMBER_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
@@ -137,6 +147,11 @@ const openchamberProxy = createProxyMiddleware({
 
 // OpenChamber is the only application behind this service: protect every route.
 app.use(openchamberAuth, openchamberProxy);
+
+// Sentry Express error handler (must be after routes, before other error middleware)
+if (process.env.SENTRY_DSN) {
+  Sentry.setupExpressErrorHandler(app);
+}
 
 function gitEnvironment() {
   if (!GITHUB_TOKEN) return process.env;

@@ -7,6 +7,12 @@
       "enabled": true,
       "headers": { "Authorization": "Bearer {env:FIRECRAWL_API_KEY}" }
     },
+    "railway": {
+      "type": "remote",
+      "url": "https://mcp.railway.com",
+      "enabled": true,
+      "headers": { "Authorization": "Bearer {env:RAILWAY_API_TOKEN}" }
+    },
     "sentry": {
       "type": "local",
       "command": ["npx", "-y", "@sentry/mcp-server@0.39.0", "--access-token", "{env:SENTRY_AUTH_TOKEN}"],
@@ -22,6 +28,7 @@
     "@arkfactory/opencode-checkpoint@1.0.4"
   ],
   "permission": {
-    "sentry_*": "ask"
+    "sentry_*": "ask",
+    "railway_*": "ask"
   }
 }
