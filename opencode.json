@@ -55,9 +55,38 @@
       "headers": {
         "Authorization": "Bearer {env:VERCEL_API_KEY}"
       }
+    },
+    "railway": {
+      "type": "remote",
+      "url": "https://mcp.railway.com",
+      "enabled": true,
+      "headers": { "Authorization": "Bearer {env:RAILWAY_API_TOKEN}" }
+    },
+    "sentry": {
+      "type": "local",
+      "command": ["node", "./node_modules/@sentry/mcp-server/dist/index.js", "--access-token", "{env:SENTRY_AUTH_TOKEN}"],
+      "enabled": true,
+      "environment": {
+        "SENTRY_ACCESS_TOKEN": "{env:SENTRY_AUTH_TOKEN}",
+        "SENTRY_AUTH_TOKEN": "{env:SENTRY_AUTH_TOKEN}"
+      }
+    },
+    "postgres-ahorar": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-postgres", "{env:AHORAR_DB_READONLY_URL}"],
+      "enabled": true
     }
   },
+  "plugin": [
+    "superpowers@git+https://github.com/obra/superpowers.git#v6.3.0",
+    "@arkfactory/opencode-checkpoint@1.0.4",
+    "opendesign@git+https://github.com/manalkaff/opendesign.git#v0.3.1"
+  ],
   "permission": {
-    "vercel_deploy_to_vercel": "ask"
+    "railway_*": "ask",
+    "sentry_*": "ask",
+    "vercel_*": "ask",
+    "vercel_deploy_to_vercel": "ask",
+    "github_*": "ask"
   }
-} 
+}
