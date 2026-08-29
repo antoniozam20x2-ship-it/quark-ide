@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@arkfactory/opencode-checkpoint": "1.0.4",
-    "@openchamber/web": "1.20.0",
+    "@openchamber/web": "1.21.0",
     "@sentry/mcp-server": "0.39.0",
     "@sentry/node": "10.72.0",
     "cors": "^2.8.5",
