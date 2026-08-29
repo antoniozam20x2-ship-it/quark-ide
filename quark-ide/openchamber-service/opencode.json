@@ -6,10 +6,19 @@
       "url": "https://mcp.firecrawl.dev/v2/mcp",
       "enabled": true,
       "headers": { "Authorization": "Bearer {env:FIRECRAWL_API_KEY}" }
+    },
+    "railway": {
+      "type": "remote",
+      "url": "https://mcp.railway.com",
+      "enabled": true,
+      "headers": { "Authorization": "Bearer {env:RAILWAY_API_TOKEN}" }
     }
   },
   "plugin": [
     "superpowers@git+https://github.com/obra/superpowers.git#v6.3.0",
     "@arkfactory/opencode-checkpoint@1.0.4"
-  ]
+  ],
+  "permission": {
+    "railway_*": "ask"
+  }
 }
