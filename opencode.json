@@ -87,6 +87,10 @@
     "sentry_*": "ask",
     "vercel_*": "ask",
     "vercel_deploy_to_vercel": "ask",
-    "github_*": "ask"
+    "github_*": "ask",
+    "external_directory": {
+      "*": "deny",
+      "/tmp/opencode/**": "allow"
+    }
   }
 }
