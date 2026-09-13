@@ -10,14 +10,14 @@
   },
   "dependencies": {
     "@arkfactory/opencode-checkpoint": "1.0.4",
-    "@openchamber/web": "1.22.2",
+    "@openchamber/web": "1.23.1",
     "@sentry/mcp-server": "0.39.0",
     "@sentry/node": "10.72.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "http-proxy-middleware": "3.0.5",
-    "opencode-ai": "1.18.29"
+    "opencode-ai": "1.18.30"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
