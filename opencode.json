@@ -33,7 +33,7 @@
         "@playwright/mcp@latest",
         "--headless"
       ],
-      "enabled": true
+      "enabled": false
     },
     "playwright-mobile": {
       "type": "local",
@@ -65,7 +65,7 @@
     "sentry": {
       "type": "local",
       "command": ["npx", "-y", "@sentry/mcp-server@0.39.0", "--access-token", "{env:SENTRY_AUTH_TOKEN}", "--host", "de.sentry.io"],
-      "enabled": true,
+      "enabled": false,
       "environment": {
         "SENTRY_ACCESS_TOKEN": "{env:SENTRY_AUTH_TOKEN}",
         "SENTRY_AUTH_TOKEN": "{env:SENTRY_AUTH_TOKEN}"
