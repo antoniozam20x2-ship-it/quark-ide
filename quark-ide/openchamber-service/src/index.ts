@@ -33,6 +33,26 @@ const GITHUB_OWNER = process.env.GITHUB_OWNER ?? '';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? '';
 const REPOSITORIES = ['quark-ide', 'Ahorar', 'Trade-SnipeOS', 'NEXUS-OS-app', 'Code-Coretest'];
 
+// OpenChamber env defaults. Set BEFORE spawning so the child inherits them.
+// - OPENCHAMBER_DATA_DIR: settings.json, jwt-secret, relay signing/encryption keys.
+//   MUST live on a persistent Railway volume, otherwise every redeploy regenerates
+//   the JWT secret + relay identity and orphans all paired devices / browser sessions.
+// - OPENCHAMBER_OPENCODE_CWD: working dir of the managed OpenCode server.
+//   OpenChamber defaults to os.homedir() (/root on Railway) when unset — the wrong
+//   dir makes OpenCode scan /root and boot past the health-check timeout.
+// - OPENCHAMBER_OPENCODE_HEALTH_TIMEOUT_MS: per-probe timeout for GET /api/info
+//   (upstream default 5000ms is too tight for Railway cold starts).
+if (!process.env.OPENCHAMBER_DATA_DIR) {
+  process.env.OPENCHAMBER_DATA_DIR = '/data/openchamber-data';
+}
+if (!process.env.OPENCHAMBER_OPENCODE_CWD) {
+  process.env.OPENCHAMBER_OPENCODE_CWD = REPOS_DIR;
+}
+if (!process.env.OPENCHAMBER_OPENCODE_HEALTH_TIMEOUT_MS) {
+  process.env.OPENCHAMBER_OPENCODE_HEALTH_TIMEOUT_MS = '30000';
+}
+const OPENCHAMBER_DATA_DIR = process.env.OPENCHAMBER_DATA_DIR;
+
 // Sentry — only enabled when SENTRY_DSN is set (configure via Railway env)
 if (process.env.SENTRY_DSN) {
   Sentry.init({
@@ -105,6 +125,18 @@ function passwordForm(res: express.Response, status = 401) {
   );
 }
 
+function isNativeApiRequest(req: express.Request) {
+  // Endpoints the native mobile/desktop apps and paired devices use with
+  // per-device client tokens (Authorization: Bearer ...) or UI session cookies:
+  // session verification, password/passkey login, and the JSON/SSE/WS API.
+  // Browser page navigations (HTML) still go through the outer cookie gate.
+  const urlPath = req.path;
+  return urlPath === '/health'
+    || urlPath === '/auth/session'
+    || urlPath.startsWith('/auth/')
+    || urlPath.startsWith('/api/');
+}
+
 function openchamberAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
   const password = process.env.OPENCODE_PASSWORD;
   if (!password) {
@@ -120,6 +152,17 @@ function openchamberAuth(req: express.Request, res: express.Response, next: expr
     return;
   }
   if (attempt && attempt.blockedUntil <= Date.now()) authAttempts.delete(key);
+
+  // Native clients (iOS/Android/desktop apps, paired devices) authenticate to
+  // OpenChamber itself with per-device Bearer client tokens on the auth/API
+  // routes. They never see our outer HTML login form, so let OpenChamber
+  // validate those credentials itself instead of demanding the outer cookie.
+  // Unauthenticated calls still get OpenChamber's own JSON 401 — and the outer
+  // and inner passwords are the same value, so this does not weaken auth.
+  if (isNativeApiRequest(req)) {
+    next();
+    return;
+  }
 
   if (validSession(req.headers.cookie)) {
     next();
@@ -238,6 +281,11 @@ function scheduleOpenChamberRestart() {
 
 function startOpenChamber() {
   fs.mkdirSync(REPOS_DIR, { recursive: true });
+  fs.mkdirSync(OPENCHAMBER_DATA_DIR, { recursive: true });
+  console.log('[openchamber] DATA_DIR=' + OPENCHAMBER_DATA_DIR +
+    ' (mount a persistent Railway volume here or JWT/relay keys regenerate on every deploy)');
+  console.log('[openchamber] OPENCODE_CWD=' + process.env.OPENCHAMBER_OPENCODE_CWD +
+    ' OPENCODE_HEALTH_TIMEOUT_MS=' + process.env.OPENCHAMBER_OPENCODE_HEALTH_TIMEOUT_MS);
   // Best-effort version check: @openchamber/web 2.x requires OpenCode v2.
   // opencode-ai (npm) only publishes v1; v2 ships as @opencode/cli.
   execFile(OPENCODE_BIN, ['--version'], { timeout: 15_000 }, (_err, stdout, stderr) => {
@@ -263,6 +311,7 @@ function startOpenChamber() {
     env: {
       ...process.env,
       OPENCODE_BINARY: OPENCODE_BIN,
+      OPENCHAMBER_DATA_DIR,
       OPENCHAMBER_UI_PASSWORD: process.env.OPENCODE_PASSWORD,
     },
     stdio: 'inherit',
@@ -289,7 +338,12 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 });
 
 server.on('upgrade', (req, socket, head) => {
-  if (!validSession(req.headers.cookie)) {
+  // Same split as HTTP: native /api/* and /auth/* upgrades (live chat, terminal,
+  // event streams from paired apps) go through for OpenChamber itself to
+  // authenticate; everything else still needs the outer browser cookie.
+  const urlPath = String(req.url ?? '').split('?')[0];
+  const isNative = urlPath.startsWith('/api/') || urlPath.startsWith('/auth/');
+  if (!isNative && !validSession(req.headers.cookie)) {
     socket.destroy();
     return;
   }
