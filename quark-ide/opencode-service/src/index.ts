@@ -15,7 +15,15 @@ const execFileAsync = promisify(execFile);
 const app = express();
 const PORT = Number(process.env.PORT ?? 3000);
 const OPENCODE_PORT = 3100;
-const OPENCODE_BIN = path.join(process.cwd(), 'node_modules', '.bin', 'opencode');
+function resolveOpenCodeBin() {
+  if (process.env.OPENCODE_BINARY && fs.existsSync(process.env.OPENCODE_BINARY)) {
+    return process.env.OPENCODE_BINARY;
+  }
+  const bundled = path.join(process.cwd(), 'node_modules', '.bin', 'opencode');
+  if (fs.existsSync(bundled)) return bundled;
+  return 'opencode';
+}
+const OPENCODE_BIN = resolveOpenCodeBin();
 const REPOS_DIR = process.env.REPOS_DIR ?? '/tmp/opencode-repos';
 const GITHUB_OWNER = process.env.GITHUB_OWNER ?? '';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? '';
@@ -212,6 +220,18 @@ function scheduleOpenCodeRestart() {
 
 function startOpenCode() {
   fs.mkdirSync(REPOS_DIR, { recursive: true });
+  execFile(OPENCODE_BIN, ['--version'], { timeout: 15_000 }, (_err, stdout, stderr) => {
+    const output = String(stdout ?? '') + String(stderr ?? '');
+    const match = /(\d+)\.(\d+)\.(\d+)/.exec(output);
+    if (match) {
+      console.log('[opencode] detected version ' + match[0] + ' via ' + OPENCODE_BIN);
+      if (match[1] !== '2') {
+        console.error(
+          '[opencode] INCOMPATIBLE: se esperaba OpenCode v2, pero se detectó v' + match[0],
+        );
+      }
+    }
+  });
   opencodeChild = spawn(OPENCODE_BIN, [
     'serve', '--hostname', '0.0.0.0', '--port', String(OPENCODE_PORT),
   ], {

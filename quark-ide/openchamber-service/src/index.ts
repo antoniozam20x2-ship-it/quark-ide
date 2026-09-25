@@ -16,7 +16,18 @@ const app = express();
 const PORT = Number(process.env.PORT ?? 3000);
 const OPENCHAMBER_PORT = 3200;
 const OPENCHAMBER_BIN = path.join(process.cwd(), 'node_modules', '.bin', 'openchamber');
-const OPENCODE_BIN = path.join(process.cwd(), 'node_modules', '.bin', 'opencode');
+function resolveOpenCodeBin() {
+  // 1. Explicit override (Railway env, manual v2 installer, etc.)
+  if (process.env.OPENCODE_BINARY && fs.existsSync(process.env.OPENCODE_BINARY)) {
+    return process.env.OPENCODE_BINARY;
+  }
+  // 2. Bundled v2 binary from @opencode/cli (npm postinstall downloads native bin)
+  const bundled = path.join(process.cwd(), 'node_modules', '.bin', 'opencode');
+  if (fs.existsSync(bundled)) return bundled;
+  // 3. System-wide v2 install (curl https://opencode.ai/v2/install | bash)
+  return 'opencode';
+}
+const OPENCODE_BIN = resolveOpenCodeBin();
 const REPOS_DIR = process.env.REPOS_DIR ?? '/tmp/openchamber-repos';
 const GITHUB_OWNER = process.env.GITHUB_OWNER ?? '';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? '';
@@ -227,6 +238,24 @@ function scheduleOpenChamberRestart() {
 
 function startOpenChamber() {
   fs.mkdirSync(REPOS_DIR, { recursive: true });
+  // Best-effort version check: @openchamber/web 2.x requires OpenCode v2.
+  // opencode-ai (npm) only publishes v1; v2 ships as @opencode/cli.
+  execFile(OPENCODE_BIN, ['--version'], { timeout: 15_000 }, (_err, stdout, stderr) => {
+    const output = String(stdout ?? '') + String(stderr ?? '');
+    const match = /(\d+)\.(\d+)\.(\d+)/.exec(output);
+    if (match) {
+      console.log('[opencode] detected version ' + match[0] + ' via ' + OPENCODE_BIN);
+      if (match[1] !== '2') {
+        console.error(
+          '[opencode] INCOMPATIBLE: OpenChamber 2.x requires OpenCode v2, ' +
+          'pero se detectó v' + match[0] + '. Instala v2: npm i -g @opencode/cli ' +
+          'o curl -fsSL https://opencode.ai/v2/install | bash',
+        );
+      }
+    } else {
+      console.warn('[opencode] no se pudo detectar versión con ' + OPENCODE_BIN + ': ' + output.trim());
+    }
+  });
   openchamberChild = spawn(OPENCHAMBER_BIN, [
     'serve', '--foreground', '--host', '0.0.0.0', '--port', String(OPENCHAMBER_PORT),
   ], {
