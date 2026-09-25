@@ -220,14 +220,18 @@ function scheduleOpenCodeRestart() {
 
 function startOpenCode() {
   fs.mkdirSync(REPOS_DIR, { recursive: true });
+  // PINNED TO v1 (2026-09-25 revert): opencode-ai 1.18.32 (última de la línea v1).
+  // Ver openchamber-service/src/index.ts para el motivo del bloqueo de v2
+  // (health-check timeout del managed OpenCode en Railway, no falta de soporte).
   execFile(OPENCODE_BIN, ['--version'], { timeout: 15_000 }, (_err, stdout, stderr) => {
     const output = String(stdout ?? '') + String(stderr ?? '');
     const match = /(\d+)\.(\d+)\.(\d+)/.exec(output);
     if (match) {
       console.log('[opencode] detected version ' + match[0] + ' via ' + OPENCODE_BIN);
-      if (match[1] !== '2') {
+      if (match[1] !== '1') {
         console.error(
-          '[opencode] INCOMPATIBLE: se esperaba OpenCode v2, pero se detectó v' + match[0],
+          '[opencode] UNEXPECTED: this service is pinned to OpenCode v1 ' +
+          '(opencode-ai 1.18.32), pero se detectó v' + match[0] + '.',
         );
       }
     }
