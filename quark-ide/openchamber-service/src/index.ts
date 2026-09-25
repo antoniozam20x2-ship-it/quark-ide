@@ -21,10 +21,10 @@ function resolveOpenCodeBin() {
   if (process.env.OPENCODE_BINARY && fs.existsSync(process.env.OPENCODE_BINARY)) {
     return process.env.OPENCODE_BINARY;
   }
-  // 2. Bundled v2 binary from @opencode/cli (npm postinstall downloads native bin)
+  // 2. Bundled v1 binary from opencode-ai (npm postinstall downloads native bin)
   const bundled = path.join(process.cwd(), 'node_modules', '.bin', 'opencode');
   if (fs.existsSync(bundled)) return bundled;
-  // 3. System-wide v2 install (curl https://opencode.ai/v2/install | bash)
+  // 3. System-wide v1 install (npm i -g opencode-ai)
   return 'opencode';
 }
 const OPENCODE_BIN = resolveOpenCodeBin();
@@ -286,18 +286,25 @@ function startOpenChamber() {
     ' (mount a persistent Railway volume here or JWT/relay keys regenerate on every deploy)');
   console.log('[openchamber] OPENCODE_CWD=' + process.env.OPENCHAMBER_OPENCODE_CWD +
     ' OPENCODE_HEALTH_TIMEOUT_MS=' + process.env.OPENCHAMBER_OPENCODE_HEALTH_TIMEOUT_MS);
-  // Best-effort version check: @openchamber/web 2.x requires OpenCode v2.
+  // PINNED TO v1 (2026-09-25 revert): @openchamber/web 1.24.2 + opencode-ai 1.18.30.
+  // v2 UPGRADE BLOCKED — not for lack of web support (v2.0.0/v2.0.1 declare
+  // "Requires OpenCode 2.0.15+", pin @opencode/client 2.0.16), but because the
+  // correctly-paired v2 stack (web 2.0.1 + cli 2.0.16) never passed OpenChamber's
+  // managed-OpenCode health check on Railway ("Server started but health check
+  // failed (timeout)", deploys d9e63282/abb04a93), even with OPENCODE_CWD +
+  // 30s timeout + persistent DATA_DIR. Also missing: a Railway volume mounted
+  // at /data/openchamber-data (JWT/relay keys regenerate every redeploy).
+  // Re-attempt v2 only on a preview branch after those two are resolved.
   // opencode-ai (npm) only publishes v1; v2 ships as @opencode/cli.
   execFile(OPENCODE_BIN, ['--version'], { timeout: 15_000 }, (_err, stdout, stderr) => {
     const output = String(stdout ?? '') + String(stderr ?? '');
     const match = /(\d+)\.(\d+)\.(\d+)/.exec(output);
     if (match) {
       console.log('[opencode] detected version ' + match[0] + ' via ' + OPENCODE_BIN);
-      if (match[1] !== '2') {
+      if (match[1] !== '1') {
         console.error(
-          '[opencode] INCOMPATIBLE: OpenChamber 2.x requires OpenCode v2, ' +
-          'pero se detectó v' + match[0] + '. Instala v2: npm i -g @opencode/cli ' +
-          'o curl -fsSL https://opencode.ai/v2/install | bash',
+          '[opencode] UNEXPECTED: this service is pinned to OpenCode v1 ' +
+          '(web 1.24.2 + opencode-ai 1.18.30), pero se detectó v' + match[0] + '.',
         );
       }
     } else {
